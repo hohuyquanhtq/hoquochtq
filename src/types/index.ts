@@ -88,6 +88,8 @@ export interface Question {
   // Trạng thái kiểm tra (cho parser)
   parseStatus?: 'verified' | 'needs_review' | 'error';
   parseWarning?: string;
+  teacherVerified?: boolean;
+  recognitionSource?: 'answer_table' | 'question_content' | 'detailed_solution' | 'manual';
 }
 
 export interface Folder {
@@ -219,6 +221,25 @@ export interface ExamStatistics {
   }[];
 }
 
+export type RecognitionStatus = 'verified' | 'needs_review' | 'not_found' | 'conflicted';
+export type RecognitionSource = 'answer_table' | 'question_content' | 'detailed_solution' | 'manual';
+
+export interface AnswerRecognitionItem {
+  id: string; // e.g. "I.1", "II.1a", "III.1"
+  questionId: string;
+  section: 'part1' | 'part2' | 'part3';
+  questionNumber: number;
+  subQuestion?: 'a' | 'b' | 'c' | 'd';
+  answerType: 'choice' | 'true_false' | 'short_answer';
+  correctAnswer: string;
+  acceptedAnswers?: string[];
+  tolerance?: number;
+  recognitionStatus: RecognitionStatus;
+  recognitionSource: RecognitionSource;
+  teacherVerified: boolean;
+  notes?: string;
+}
+
 export interface ParsedExamResult {
   title: string;
   grade?: ChemGrade;
@@ -231,4 +252,14 @@ export interface ParsedExamResult {
   questionsWithWarnings: number;
   questions: Question[];
   rawTextPreview?: string;
+  
+  // Dedicated Answer Recognition Breakdown (Sections V, VI, VIII)
+  answerItems: AnswerRecognitionItem[];
+  part1FoundCount: number;
+  part1TotalCount: number;
+  part2StatementsFoundCount: number;
+  part2StatementsTotalCount: number;
+  part3FoundCount: number;
+  part3TotalCount: number;
+  allAnswersVerified: boolean;
 }

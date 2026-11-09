@@ -118,9 +118,49 @@ Môn Hóa học THPT (đặc biệt là khối 10, 11, 12, các lớp chuyên H�
 - `tab_switches_count`: INTEGER (Cảnh báo gian lận)
 - `status`: ENUM ('completed', 'in_progress', 'timed_out')
 
+### 3.6. Entity: `exam_answer_keys` (Bảng Nhận dạng Đáp án Tự động – Mục VI)
+- `id`: VARCHAR(50) (Khóa chính, VD: `I.1`, `II.1a`, `III.1`)
+- `exam_id`: UUID (Khóa ngoại `exams.id`)
+- `question_id`: UUID (Khóa ngoại `questions.id`)
+- `section`: ENUM ('part1', 'part2', 'part3')
+- `question_number`: INTEGER
+- `sub_question`: ENUM ('a', 'b', 'c', 'd') (Đối với Phần II)
+- `answer_type`: ENUM ('choice', 'true_false', 'short_answer')
+- `correct_answer`: VARCHAR(255) (Đáp án chuẩn: 'B', 'Đúng'/'Sai', '58,4')
+- `accepted_answers`: JSONB (`['58,4', '58.4']`)
+- `tolerance`: FLOAT (Sai số cho phép: 0.05 đối với số thập phân)
+- `recognition_status`: ENUM ('verified', 'needs_review', 'not_found', 'conflicted')
+- `recognition_source`: ENUM ('answer_table', 'question_content', 'detailed_solution', 'manual')
+- `teacher_verified`: BOOLEAN (Giáo viên đã rà soát và xác nhận)
+- `notes`: TEXT (Ghi chú nguồn trích xuất)
+
 ---
 
-## 4. BẢO MẬT VÀ TOÀN VẸN DỮ LIỆU
+## 4. BỘ MÁY TỰ ĐỘNG NHẬN DẠNG ĐÁP ÁN (ANSWER RECOGNITION ENGINE)
+
+1. **Phần I – Trắc nghiệm 4 lựa chọn**:
+   - Tự động nhận dạng cấu trúc bảng 2 dòng: Dòng số câu `Câu 1 2 3 ...` và dòng phương án `Đáp án B A C ...`.
+   - Hỗ trợ định dạng dấu chấm phẩy `1.B; 2.A; 3.C` và dạng gạch nối `1-B, 2-A`.
+   - Ghép chính xác từng phương án vào phương án đúng của câu hỏi.
+
+2. **Phần II – Trắc nghiệm Đúng/Sai (Hỗ trợ Bảng Ma Trận Hoán Vị)**:
+   - Nhận dạng chính xác bảng chuyển vị: Dòng là ý `a), b), c), d)` và cột là số thứ tự câu hỏi `1, 2, 3, 4`.
+   - Xử lý các ký hiệu viết tắt `Đ/S` và `Đúng/Sai`.
+   - Lưu trữ từng ý thành một bản ghi đáp án độc lập (`II.1a`, `II.1b`, `II.1c`, `II.1d`), không bị nhầm lẫn giữa hàng và cột.
+
+3. **Phần III – Trắc nghiệm Trả lời ngắn**:
+   - Nhận dạng số nguyên, số thập phân có dấu phẩy (`58,4`) hoặc dấu chấm (`58.4`), số âm.
+   - Tự động đồng bộ mảng `acceptedAnswers` gồm cả dạng dấu phẩy và dấu chấm mà không làm tròn số.
+   - Bóc tách kết luận cuối cùng từ phần **"HƯỚNG DẪN GIẢI CHI TIẾT"** khi đề thi không có bảng đáp án riêng.
+
+4. **Giao diện Đối chiếu & Rà soát (Reconciliation Dashboard)**:
+   - Thống kê 4 thẻ số: Đã nhận dạng, Cần kiểm tra, Chưa tìm thấy, % Thành công.
+   - Bảng đối chiếu chi tiết cho phép chỉnh sửa trực tiếp (inline edit): nút chọn nhanh A/B/C/D cho Phần I, nút toggle Đúng/Sai cho Phần II, ô nhập số cho Phần III.
+   - Nút "Nhận dạng lại đáp án" và "Xác nhận toàn bộ".
+
+---
+
+## 5. BẢO MẬT VÀ TOÀN VẸN DỮ LIỆU
 1. **Bảo mật đề thi trực tuyến**:
    - Khi học sinh đang làm bài, các thuộc tính `correctOptionId`, `correctAnswer`, `acceptableAnswers` và `explanation` được bóc tách và ẩn hoàn toàn khỏi state làm bài của client, ngăn chặn việc inspect mã nguồn để gian lận.
 2. **Chống mất bài khi đứt mạng**:
