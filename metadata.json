@@ -1,0 +1,6 @@
+{
+  "name": "CHEM TEST - Ngân Hàng Đề Thi & Thi Trắc Nghiệm Hóa Học",
+  "description": "Hệ thống ngân hàng câu hỏi, tạo đề thi thông minh từ file và tổ chức thi trắc nghiệm trực tuyến môn Hóa học cho giáo viên và học sinh THPT.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
