@@ -16,6 +16,7 @@ import {
   School
 } from 'lucide-react';
 import { StorageService, DEFAULT_USERS } from '../../services/storage';
+import { APP_CONFIG } from '../../constants/brand';
 
 interface AdminDashboardProps {
   questions: Question[];
@@ -47,7 +48,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `CHEMTEST_BACKUP_${new Date().toISOString().slice(0, 10)}.json`;
+    a.download = `${APP_CONFIG.APP_NAME}_BACKUP_${new Date().toISOString().slice(0, 10)}.json`;
     a.click();
     URL.revokeObjectURL(url);
     showStatus('Đã tải xuống file sao lưu hệ thống thành công!');
@@ -99,7 +100,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <span>Phân quyền Quản trị viên (Super Admin)</span>
           </div>
           <h1 className="text-xl md:text-2xl font-extrabold text-slate-900 mt-1">
-            Trung Tâm Quản Trị Hệ Thống CHEM TEST
+            Trung Tâm Quản Trị Hệ Thống {APP_CONFIG.APP_NAME}
           </h1>
           <p className="text-xs md:text-sm text-slate-500 mt-1">
             Quản lý tài khoản giáo viên, học sinh, sao lưu & khôi phục toàn bộ cơ sở dữ liệu.

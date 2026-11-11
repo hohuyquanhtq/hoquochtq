@@ -1,6 +1,6 @@
 /**
- * CHEM TEST - Type Definitions
- * Hệ thống ngân hàng câu hỏi, tạo đề và thi trắc nghiệm trực tuyến môn Hóa học
+ * HQTest - Type Definitions
+ * Hệ thống ngân hàng câu hỏi, tạo đề và thi trắc nghiệm online
  */
 
 export type UserRole = 'admin' | 'teacher' | 'student';

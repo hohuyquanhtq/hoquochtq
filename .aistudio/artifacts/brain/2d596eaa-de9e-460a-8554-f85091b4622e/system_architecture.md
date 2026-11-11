@@ -1,6 +1,7 @@
-# CHEM TEST – HỒ SƠ THIẾT KẾ KIẾN TRÚC & KỸ THUẬT HỆ THỐNG
+# HQTest – HỒ SƠ THIẾT KẾ KIẾN TRÚC & KỸ THUẬT HỆ THỐNG
 
-**Hệ thống Ngân hàng câu hỏi, Tạo đề và Thi trắc nghiệm trực tuyến môn Hóa học THPT & Chuyên**
+**Ngân hàng câu hỏi & Thi trắc nghiệm online**  
+*Tác giả: Hồ Ngọc Quốc – Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng*
 
 ---
 
@@ -153,7 +154,15 @@ Môn Hóa học THPT (đặc biệt là khối 10, 11, 12, các lớp chuyên H�
    - Tự động đồng bộ mảng `acceptedAnswers` gồm cả dạng dấu phẩy và dấu chấm mà không làm tròn số.
    - Bóc tách kết luận cuối cùng từ phần **"HƯỚNG DẪN GIẢI CHI TIẾT"** khi đề thi không có bảng đáp án riêng.
 
-4. **Giao diện Đối chiếu & Rà soát (Reconciliation Dashboard)**:
+4. **Nhận dạng theo Mẫu File Đính Kèm (Đề Kiểm Tra Giữa Kì 1 Hóa 12 - Đề Số 5)**:
+   - File nguồn: `/public/assets/aistudio/20._____N_T_P_T_T_NGHI_P_THPT_5d90abb8.pdf` (12 trang).
+   - Phần I (12 câu): Bóc tách bảng đáp án 12 câu `1: A, 2: B, 3: A, 4: A, 5: B, 6: B, 7: A, 8: A, 9: A, 10: A, 11: A, 12: A`.
+   - Phần II (2 câu, 8 ý): Bóc tách bảng chuyển vị hàng dọc/ngang: Câu 1 (a-Đ, b-Đ, c-Đ, d-Đ) và Câu 2 (a-Đ, b-Đ, c-Đ, d-S).
+   - Phần III (7 câu): Bóc tách bảng trả lời ngắn số thập phân: `Câu 1: 6; Câu 2: 188,0; Câu 3: 0,4; Câu 4: 14,7; Câu 5: 3,2; Câu 6: 31,1; Câu 7: 0,3`.
+   - Bóc tách toàn bộ phần Hướng dẫn giải chi tiết cho cả 3 phần.
+   - Tỉ lệ đối soát tự động: 27/27 mục đáp án (100% verified).
+
+5. **Giao diện Đối chiếu & Rà soát (Reconciliation Dashboard)**:
    - Thống kê 4 thẻ số: Đã nhận dạng, Cần kiểm tra, Chưa tìm thấy, % Thành công.
    - Bảng đối chiếu chi tiết cho phép chỉnh sửa trực tiếp (inline edit): nút chọn nhanh A/B/C/D cho Phần I, nút toggle Đúng/Sai cho Phần II, ô nhập số cho Phần III.
    - Nút "Nhận dạng lại đáp án" và "Xác nhận toàn bộ".

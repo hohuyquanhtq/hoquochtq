@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { X, Layers, Database, GitBranch, Cpu, Shield, CheckCircle2, FileText, FlaskConical, ExternalLink } from 'lucide-react';
+import { APP_CONFIG } from '../../constants/brand';
 
 interface SystemDesignModalProps {
   isOpen: boolean;
@@ -22,8 +23,8 @@ export const SystemDesignModal: React.FC<SystemDesignModalProps> = ({ isOpen, on
               <FlaskConical className="w-5 h-5 text-white" />
             </div>
             <div>
-              <h2 className="text-lg font-bold">Hồ Sơ Thiết Kế Kỹ Thuật & Kiến Trúc Hệ Thống CHEM TEST</h2>
-              <p className="text-xs text-slate-300">Nền tảng Ngân hàng câu hỏi, Tạo đề thông minh & Thi trắc nghiệm trực tuyến Hóa học THPT</p>
+              <h2 className="text-lg font-bold">Hồ Sơ Thiết Kế Kỹ Thuật &amp; Kiến Trúc Hệ Thống {APP_CONFIG.APP_NAME}</h2>
+              <p className="text-xs text-slate-300">{APP_CONFIG.APP_DESCRIPTION} • Tác giả: {APP_CONFIG.APP_AUTHOR} – {APP_CONFIG.APP_SCHOOL}</p>
             </div>
           </div>
           <button 
@@ -328,8 +329,10 @@ export const SystemDesignModal: React.FC<SystemDesignModalProps> = ({ isOpen, on
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-3 bg-slate-100 border-t border-slate-200 flex items-center justify-between">
-          <span className="text-xs text-slate-500">CHEM TEST Engine v2.0 - Phục vụ giảng dạy & thi trắc nghiệm Hóa học</span>
+        <div className="px-6 py-3 bg-slate-100 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2">
+          <span className="text-xs text-slate-600">
+            {APP_CONFIG.APP_NAME} v{APP_CONFIG.APP_VERSION} – Tác giả: <strong className="text-slate-800">{APP_CONFIG.APP_AUTHOR}</strong> ({APP_CONFIG.APP_SCHOOL})
+          </span>
           <button
             onClick={onClose}
             className="px-4 py-2 bg-blue-600 text-white font-bold text-xs rounded-xl hover:bg-blue-700 transition-colors"

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { User, Exam, StudentSubmission } from '../../types';
 import { 
   GraduationCap, 
@@ -12,6 +12,7 @@ import {
   FlaskConical,
   Search
 } from 'lucide-react';
+import { getUserGreeting, APP_CONFIG } from '../../constants/brand';
 
 interface StudentHomeProps {
   currentUser: User;
@@ -29,9 +30,14 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
   onReviewSubmission,
 }) => {
   const [examCode, setExamCode] = useState('');
-  const [name, setName] = useState(currentUser.name || 'Trần Minh Khang');
-  const [className, setClassName] = useState(currentUser.className || '12 Hóa 1');
+  const [name, setName] = useState(currentUser.name || '');
+  const [className, setClassName] = useState(currentUser.className || '');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    setName(currentUser.name || '');
+    setClassName(currentUser.className || '');
+  }, [currentUser]);
 
   const activeExams = exams.filter(e => e.isPublished);
   const mySubmissions = submissions.filter(s => s.studentName === name || s.studentId === currentUser.id);
@@ -69,10 +75,10 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
           <div>
             <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 text-blue-200 text-xs font-semibold mb-3">
               <FlaskConical className="w-3.5 h-3.5" />
-              <span>Phòng Thi Trắc Nghiệm Hóa Học Trực Tuyến</span>
+              <span>{APP_CONFIG.APP_NAME} – Phòng Thi Trắc Nghiệm Trực Tuyến</span>
             </div>
             <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
-              Chào mừng, {name}!
+              {getUserGreeting(currentUser, name)}
             </h1>
             <p className="mt-2 text-sm text-blue-100 max-w-xl leading-relaxed">
               Nhập mã bài thi do giáo viên cung cấp để tham gia làm bài, hoặc chọn từ danh sách các bài kiểm tra đang mở dưới đây.

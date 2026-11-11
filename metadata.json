@@ -1,6 +1,6 @@
 {
-  "name": "CHEM TEST - Ngân Hàng Đề Thi & Thi Trắc Nghiệm Hóa Học",
-  "description": "Hệ thống ngân hàng câu hỏi, tạo đề thi thông minh từ file và tổ chức thi trắc nghiệm trực tuyến môn Hóa học cho giáo viên và học sinh THPT.",
+  "name": "HQTest - Ngân hàng câu hỏi & Thi trắc nghiệm online",
+  "description": "HQTest – Ngân hàng câu hỏi & Thi trắc nghiệm online. Tác giả: Hồ Ngọc Quốc, Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -17,6 +17,7 @@ import {
   Share2
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
+import { APP_CONFIG } from '../../constants/brand';
 
 interface ExamCreatorProps {
   initialTitle?: string;
@@ -36,7 +37,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   onCancel,
 }) => {
   const [title, setTitle] = useState(initialTitle);
-  const [code, setCode] = useState(`CHEM${Math.floor(10 + Math.random() * 90)}`);
+  const [code, setCode] = useState(`HQ${Math.floor(10 + Math.random() * 90)}`);
   const [grade, setGrade] = useState<ChemGrade>(initialGrade);
   const [topic, setTopic] = useState<ChemTopic>('hoa_huu_co');
   const [durationMinutes, setDurationMinutes] = useState(45);
@@ -159,7 +160,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       showSolutionsAfterSubmit,
       allowReviewLater: true,
       authorId: 'teacher_1',
-      authorName: 'ThS. Nguyễn Hoàng Long',
+      authorName: APP_CONFIG.APP_AUTHOR,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };

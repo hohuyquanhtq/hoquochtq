@@ -8,6 +8,7 @@ import { User, UserRole, Question, Exam, Folder, StudentSubmission, ChemGrade } 
 import { StorageService, DEFAULT_USERS } from './services/storage';
 import { Header } from './components/common/Header';
 import { SystemDesignModal } from './components/docs/SystemDesignModal';
+import { APP_CONFIG } from './constants/brand';
 
 // Teacher Components
 import { TeacherDashboard } from './components/teacher/TeacherDashboard';
@@ -141,6 +142,11 @@ export default function App() {
     setActiveExamForTaking(exam);
     setActiveStudentName(name);
     setActiveStudentClass(cls);
+    if (currentUser.role === 'student' && name.trim() && name.trim() !== currentUser.name) {
+      const updated = { ...currentUser, name: name.trim(), className: cls.trim() };
+      setCurrentUser(updated);
+      StorageService.setCurrentUser(updated);
+    }
     setActiveTab('take_exam');
   };
 
@@ -156,6 +162,11 @@ export default function App() {
     setActiveTab('review_submission');
   };
 
+  const handleUpdateCurrentUser = (updatedUser: User) => {
+    setCurrentUser(updatedUser);
+    StorageService.setCurrentUser(updatedUser);
+  };
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       
@@ -167,6 +178,7 @@ export default function App() {
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
+          onUpdateUser={handleUpdateCurrentUser}
         />
       )}
 
@@ -300,22 +312,29 @@ export default function App() {
 
       {/* Footer */}
       {activeTab !== 'take_exam' && (
-        <footer className="border-t border-slate-200 bg-white py-6 text-center text-xs text-slate-500">
-          <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <p className="font-semibold text-slate-700">
-              CHEM TEST © 2025 – Nền tảng Ngân hàng câu hỏi, tạo đề và thi trắc nghiệm trực tuyến môn Hóa học
-            </p>
-            <div className="flex items-center gap-4 text-slate-500">
+        <footer className="border-t border-slate-200 bg-white py-6 text-xs text-slate-600">
+          <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="text-center md:text-left space-y-1">
+              <p className="font-bold text-slate-800 text-sm">
+                {APP_CONFIG.APP_NAME} – {APP_CONFIG.APP_DESCRIPTION}
+              </p>
+              <p className="text-slate-500 flex flex-wrap items-center justify-center md:justify-start gap-2">
+                <span>Tác giả: <strong className="text-slate-700 font-semibold">{APP_CONFIG.APP_AUTHOR}</strong></span>
+                <span className="hidden sm:inline">•</span>
+                <span>{APP_CONFIG.APP_SCHOOL}</span>
+              </p>
+            </div>
+            <div className="flex items-center gap-3 text-slate-500 text-xs shrink-0">
               <button 
                 onClick={() => setIsSystemDocsOpen(true)}
-                className="hover:text-blue-600 transition-colors"
+                className="hover:text-blue-600 font-medium transition-colors"
               >
-                Hồ sơ kiến trúc kỹ thuật
+                Hồ sơ kiến trúc &amp; Giới thiệu
               </button>
               <span>•</span>
-              <span>Chuẩn Bộ GD&ĐT 2025</span>
+              <span>Phiên bản {APP_CONFIG.APP_VERSION}</span>
               <span>•</span>
-              <span>Hỗ trợ KaTeX & DOCX</span>
+              <span>Bộ GD&amp;ĐT</span>
             </div>
           </div>
         </footer>

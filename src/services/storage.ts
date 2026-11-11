@@ -1,4 +1,5 @@
 import { User, Question, Exam, Folder, StudentSubmission } from '../types';
+import { parseExamContent, SAMPLE_CHEMISTRY_EXAMS } from '../utils/docxParser';
 
 const STORAGE_KEYS = {
   CURRENT_USER: 'chemtest_current_user',
@@ -13,10 +14,10 @@ const STORAGE_KEYS = {
 export const DEFAULT_USERS: User[] = [
   {
     id: 'teacher_1',
-    name: 'ThS. Nguyễn Hoàng Long',
-    email: 'long.nh@chuyenhoa.edu.vn',
+    name: 'Hồ Ngọc Quốc',
+    email: 'quochn@chuyennguyenbinhkhiem.edu.vn',
     role: 'teacher',
-    school: 'THPT Chuyên Lê Hồng Phong',
+    school: 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng',
     createdAt: new Date().toISOString(),
   },
   {
@@ -25,15 +26,15 @@ export const DEFAULT_USERS: User[] = [
     email: 'khang.tm@student.edu.vn',
     role: 'student',
     className: '12 Hóa 1',
-    school: 'THPT Chuyên Lê Hồng Phong',
+    school: 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng',
     createdAt: new Date().toISOString(),
   },
   {
     id: 'admin_1',
     name: 'Ban Giám Hiệu & Quản Trị Hệ Thống',
-    email: 'admin@chemtest.edu.vn',
+    email: 'admin@hqtest.edu.vn',
     role: 'admin',
-    school: 'Sở Giáo Dục & Đào Tạo',
+    school: 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng',
     createdAt: new Date().toISOString(),
   },
 ];
@@ -285,8 +286,44 @@ export const DEFAULT_QUESTIONS: Question[] = [
   },
 ];
 
+// Parse the attached sample exam (Đề số 5 - Mẫu PDF đính kèm)
+const de5Sample = SAMPLE_CHEMISTRY_EXAMS.find(s => s.id === 'sample_attached_exam_de5') || SAMPLE_CHEMISTRY_EXAMS[0];
+const parsedDe5 = parseExamContent(de5Sample.content, '12');
+
+export const ATTACHED_EXAM_DE5: Exam = {
+  id: 'exam_de5_attached',
+  title: 'Đề kiểm tra Giữa kì 1 Hóa 12 (Đề số 5 - Mẫu PDF đính kèm)',
+  code: 'HOA12-DE5',
+  folderId: 'f_midterm',
+  grade: '12',
+  topic: 'hoa_huu_co',
+  durationMinutes: 45,
+  totalQuestions: parsedDe5.questions.length, // 21
+  totalScore: 10.0,
+  questions: parsedDe5.questions,
+  rules: {
+    part1ScorePerQuestion: 0.25,
+    part2GradingModel: 'standard_moet',
+    part3ScorePerQuestion: 0.714,
+    totalTargetScore: 10.0,
+  },
+  shuffleQuestions: false,
+  shuffleOptions: false,
+  isPublished: true,
+  maxAttempts: 3,
+  showScoreAfterSubmit: true,
+  showAnswersAfterSubmit: true,
+  showSolutionsAfterSubmit: true,
+  allowReviewLater: true,
+  authorId: 'teacher_1',
+  authorName: 'Hồ Ngọc Quốc',
+  createdAt: new Date(Date.now() - 1 * 86400000).toISOString(),
+  updatedAt: new Date().toISOString(),
+};
+
 // Initial Exams
 export const DEFAULT_EXAMS: Exam[] = [
+  ATTACHED_EXAM_DE5,
   {
     id: 'exam_chem12_01',
     title: 'Đề kiểm tra Hóa học 12 - Chuyên đề Amine, Amino Acid & Pin Điện Hóa',
@@ -323,7 +360,7 @@ export const DEFAULT_EXAMS: Exam[] = [
     showSolutionsAfterSubmit: true,
     allowReviewLater: true,
     authorId: 'teacher_1',
-    authorName: 'ThS. Nguyễn Hoàng Long',
+    authorName: 'Hồ Ngọc Quốc',
     createdAt: new Date(Date.now() - 3 * 86400000).toISOString(),
     updatedAt: new Date().toISOString(),
   },
@@ -359,7 +396,7 @@ export const DEFAULT_EXAMS: Exam[] = [
     showSolutionsAfterSubmit: false,
     allowReviewLater: false,
     authorId: 'teacher_1',
-    authorName: 'ThS. Nguyễn Hoàng Long',
+    authorName: 'Hồ Ngọc Quốc',
     createdAt: new Date(Date.now() - 5 * 86400000).toISOString(),
     updatedAt: new Date().toISOString(),
   },
@@ -471,7 +508,14 @@ export const StorageService = {
     const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const u: User = JSON.parse(saved);
+        if (u.name && u.name.includes('Nguyễn Hoàng Long')) {
+          u.name = 'Hồ Ngọc Quốc';
+          u.school = 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng';
+          u.email = 'quochn@chuyennguyenbinhkhiem.edu.vn';
+          this.setCurrentUser(u);
+        }
+        return u;
       } catch {
         // fallback
       }
@@ -487,11 +531,18 @@ export const StorageService = {
     const saved = localStorage.getItem(STORAGE_KEYS.QUESTIONS);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const list: Question[] = JSON.parse(saved);
+        if (!list.some(q => q.code?.includes('P1_C1') || q.content?.includes('methyl salicylate'))) {
+          const merged = [...parsedDe5.questions, ...list];
+          this.saveQuestions(merged);
+          return merged;
+        }
+        return list;
       } catch {}
     }
-    this.saveQuestions(DEFAULT_QUESTIONS);
-    return DEFAULT_QUESTIONS;
+    const initialList = [...parsedDe5.questions, ...DEFAULT_QUESTIONS];
+    this.saveQuestions(initialList);
+    return initialList;
   },
 
   saveQuestions(questions: Question[]): void {
@@ -537,7 +588,22 @@ export const StorageService = {
     const saved = localStorage.getItem(STORAGE_KEYS.EXAMS);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const list: Exam[] = JSON.parse(saved);
+        let changed = false;
+        if (!list.some(e => e.id === 'exam_de5_attached')) {
+          list.unshift(ATTACHED_EXAM_DE5);
+          changed = true;
+        }
+        list.forEach(e => {
+          if (e.authorName && e.authorName.includes('Nguyễn Hoàng Long')) {
+            e.authorName = 'Hồ Ngọc Quốc';
+            changed = true;
+          }
+        });
+        if (changed) {
+          this.saveExams(list);
+        }
+        return list;
       } catch {}
     }
     this.saveExams(DEFAULT_EXAMS);

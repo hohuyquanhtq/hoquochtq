@@ -26,10 +26,14 @@ export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<stri
 
   try {
     if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-      pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+      pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
     }
 
-    const pdf = await pdfjs.getDocument({ data: arrayBuffer }).promise;
+    const pdf = await pdfjs.getDocument({
+      data: arrayBuffer,
+      cMapPacked: true,
+      disableFontFace: true,
+    }).promise;
     let fullText = '';
 
     for (let i = 1; i <= pdf.numPages; i++) {
@@ -461,144 +465,6 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
  */
 export const SAMPLE_CHEMISTRY_EXAMS = [
   {
-    id: 'sample_mandatory_test',
-    name: 'ĐỀ KIỂM TRA CHUẨN MỤC IX (12 câu P1 + 4 câu P2 ma trận hoán vị + 6 câu P3)',
-    grade: '12' as const,
-    description: 'Bộ kiểm thử bắt buộc từ đề bài: 12 câu trắc nghiệm 4 lựa chọn, 4 câu Đúng/Sai dạng bảng hoán vị dòng a,b,c,d cột 1..4, và 6 câu trả lời ngắn với số thập phân (58,4; 7,1; 9,5; 4132; 104; 4).',
-    content: `SỞ GD&ĐT - KỲ THI THỬ TỐT NGHIỆP THPT MÔN HÓA HỌC
-ĐỀ THI THEO CẤU TRÚC ĐỊNH DẠNG MỚI BỘ GIÁO DỤC VÀ ĐÀO TẠO
-
-PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (12 câu)
-Thí sinh trả lời từ Câu 1 đến Câu 12. Mỗi câu hỏi chỉ chọn một phương án.
-
-Câu 1. Chất nào sau đây là đồng phân của glucose?
-A. Saccharose.
-B. Fructose.
-C. Maltose.
-D. Cellulose.
-
-Câu 2. Trong điều kiện thường, kim loại nào sau đây ở trạng thái lỏng?
-A. Thủy ngân (Hg).
-B. Nhôm (Al).
-C. Sắt (Fe).
-D. Đồng (Cu).
-
-Câu 3. Công thức phân tử của ethyl acetate là
-A. HCOOCH3.
-B. CH3COOCH3.
-C. CH3COOC2H5.
-D. C2H5COOCH3.
-
-Câu 4. Kim loại sắt (Fe) tác dụng với dung dịch HCl sinh ra muối sắt nào sau đây?
-A. Fe(NO3)3.
-B. FeCl3.
-C. FeCl2.
-D. FeSO4.
-
-Câu 5. Polyme nào sau đây được dùng để sản xuất chất dẻo poly(vinyl chloride) (PVC)?
-A. Polyethylene.
-B. Polystyrene.
-C. Poly(vinyl chloride).
-D. Poly(methyl methacrylate).
-
-Câu 6. Hợp chất nào sau đây là một amine bậc một?
-A. Dimethylamine.
-B. Ethylamine.
-C. Trimethylamine.
-D. N-methylethanamine.
-
-Câu 7. Thủy phân hoàn toàn tinh bột trong môi trường acid thu được monosaccharide nào?
-A. Fructose.
-B. Galactose.
-C. Glucose.
-D. Ribose.
-
-Câu 8. Kim loại nào sau đây có tính dẫn điện tốt nhất?
-A. Đồng (Cu).
-B. Bạc (Ag).
-C. Vàng (Au).
-D. Nhôm (Al).
-
-Câu 9. Hợp chất amino acid đơn giản nhất là
-A. Glycine.
-B. Alanine.
-C. Valine.
-D. Lysine.
-
-Câu 10. Dung dịch chất nào sau đây làm quỳ tím chuyển sang màu đỏ?
-A. CH3NH2.
-B. C6H5OH.
-C. H2NCH2COOH.
-D. CH3COOH.
-
-Câu 11. Xà phòng hóa tristearin trong dung dịch NaOH đun nóng thu được muối và chất hữu cơ nào?
-A. Glycerol.
-B. Ethylene glycol.
-C. Ethanol.
-D. Methanol.
-
-Câu 12. Phản ứng tráng bạc của glucose chứng tỏ phân tử glucose có chứa nhóm chức nào?
-A. Hydroxyl (-OH).
-B. Carboxyl (-COOH).
-C. Aldehyde (-CHO).
-D. Amino (-NH2).
-
-PHẦN II. Câu trắc nghiệm đúng sai (4 câu)
-Thí sinh trả lời từ Câu 1 đến Câu 4. Trong mỗi ý a), b), c), d) ở mỗi câu, thí sinh chọn đúng hoặc sai.
-
-Câu 1. Khảo sát tính chất của carbohydrate:
-a) Glucose và saccharose đều tham gia phản ứng tráng bạc với thuốc thử Tollens.
-b) Cellulose tan tốt trong dung dịch Schweizer [Cu(NH3)4](OH)2.
-c) Thủy phân hoàn toàn tinh bột và cellulose đều chỉ thu được glucose.
-d) Tinh bột cho phản ứng màu xanh tím với dung dịch iot chỉ ở nhiệt độ cao.
-
-Câu 2. Cho pin điện hóa Zn - Cu ở điều kiện chuẩn:
-a) Tại anode xảy ra quá trình oxi hóa kim loại Zn thành ion Zn2+.
-b) Tại cathode xảy ra quá trình khử ion Cu2+ thành kim loại Cu.
-c) Chiều dòng điện ở mạch ngoài đi từ cực Zn sang cực Cu.
-d) Khi pin hoạt động, khối lượng điện cực kẽm giảm dần còn khối lượng điện cực đồng tăng dần.
-
-Câu 3. Khảo sát cấu tạo và tính chất của peptide và protein:
-a) Tất cả các peptide đều có phản ứng màu biuret với Cu(OH)2 trong môi trường kiềm.
-b) Protein bị đông tụ dưới tác dụng của nhiệt độ cao hoặc acid/base mạnh.
-c) Liên kết peptide là liên kết -CO-NH- giữa hai đơn vị α-amino acid.
-d) Phân tử Ala-Gly-Val có chứa 3 liên kết peptide.
-
-Câu 4. Về các phản ứng hóa học của ester và lipid:
-a) Phản ứng thủy phân ester trong môi trường acid là phản ứng thuận nghịch.
-b) Phản ứng xà phòng hóa chất béo trong môi trường kiềm là phản ứng một chiều.
-c) Chất béo chứa nhiều gốc acid béo không no thường ở trạng thái lỏng ở điều kiện thường.
-d) Dầu mỡ động thực vật có cùng thành phần nguyên tố và tính chất với dầu mỡ bôi trơn máy móc.
-
-PHẦN III. Câu trắc nghiệm trả lời ngắn (6 câu)
-Thí sinh trả lời từ Câu 1 đến Câu 6. Ghi kết quả theo yêu cầu.
-
-Câu 1. Phân tử ethyl butyrate có tổng số nguyên tử cacbon là bao nhiêu?
-Câu 2. Tính khối lượng phân tử (g/mol) của ester benzyl formate (lấy C=12, H=1, O=16).
-Câu 3. Cho 0,1 mol hỗn hợp gồm glycine và alanine tác dụng vừa đủ với V mL dung dịch HCl 1M rồi cô cạn thu được m gam muối khan. Giá trị khối lượng mol trung bình của hỗn hợp ban đầu tính theo công thức thực nghiệm là bao nhiêu g/mol (kết quả là 58,4)?
-Câu 4. Điện phân 200 mL dung dịch CuCl2 đến khi catot thoát hết ion Cu2+ thì ở anot thu được V gam khí clo (kết quả là 7,1)?
-Câu 5. Thủy phân hoàn toàn m gam maltose thu được glucose. Lượng glucose này tráng gương hoàn toàn thu được lượng bạc tương đương hiệu suất thực tế cho kết quả chỉ số là 9,5 gam?
-Câu 6. Một polymer tổng hợp từ 4 monomer theo thứ tự các mã phản ứng là 4, 1, 3, 2. Mã số kết hợp của polymer này là bao nhiêu?
-
----------------Hết-----------------
-ĐÁP ÁN:
-PHẦN I
-Câu:       1    2    3    4    5    6    7    8    9    10   11   12
-Đáp án:    B    A    C    C    C    B    C    B    A    D    A    C
-
-PHẦN II
-Câu	1	2	3	4
-a)	S	Đ	Đ	Đ
-b)	Đ	Đ	Đ	Đ
-c)	Đ	S	Đ	Đ
-d)	S	Đ	S	S
-
-PHẦN III
-Câu:       1       2       3       4       5       6
-Đáp án:    4       104     58,4    7,1     9,5     4132
-`
-  },
-  {
     id: 'sample_attached_exam_de5',
     name: 'Đề kiểm tra Giữa kì 1 Hóa 12 (Đề số 5 - Mẫu PDF đính kèm)',
     grade: '12' as const,
@@ -781,6 +647,144 @@ Nhóm -COOH của lysine phản ứng với NaOH theo tỉ lệ 1 : 1 => nNaOH (
 Toàn bộ ion H+ trong acid HCl phản ứng với OH- => nNaOH (tác dụng HCl) = 0,24 mol.
 Tổng số mol NaOH cần dùng = 0,10 + 0,24 = 0,34 mol.
 V = 0,34 / 1,0 = 0,34 L ≈ 0,3 (hàng phần mười).
+`
+  },
+  {
+    id: 'sample_mandatory_test',
+    name: 'ĐỀ KIỂM TRA CHUẨN MỤC IX (12 câu P1 + 4 câu P2 ma trận hoán vị + 6 câu P3)',
+    grade: '12' as const,
+    description: 'Bộ kiểm thử bắt buộc từ đề bài: 12 câu trắc nghiệm 4 lựa chọn, 4 câu Đúng/Sai dạng bảng hoán vị dòng a,b,c,d cột 1..4, và 6 câu trả lời ngắn với số thập phân (58,4; 7,1; 9,5; 4132; 104; 4).',
+    content: `SỞ GD&ĐT - KỲ THI THỬ TỐT NGHIỆP THPT MÔN HÓA HỌC
+ĐỀ THI THEO CẤU TRÚC ĐỊNH DẠNG MỚI BỘ GIÁO DỤC VÀ ĐÀO TẠO
+
+PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (12 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 12. Mỗi câu hỏi chỉ chọn một phương án.
+
+Câu 1. Chất nào sau đây là đồng phân của glucose?
+A. Saccharose.
+B. Fructose.
+C. Maltose.
+D. Cellulose.
+
+Câu 2. Trong điều kiện thường, kim loại nào sau đây ở trạng thái lỏng?
+A. Thủy ngân (Hg).
+B. Nhôm (Al).
+C. Sắt (Fe).
+D. Đồng (Cu).
+
+Câu 3. Công thức phân tử của ethyl acetate là
+A. HCOOCH3.
+B. CH3COOCH3.
+C. CH3COOC2H5.
+D. C2H5COOCH3.
+
+Câu 4. Kim loại sắt (Fe) tác dụng với dung dịch HCl sinh ra muối sắt nào sau đây?
+A. Fe(NO3)3.
+B. FeCl3.
+C. FeCl2.
+D. FeSO4.
+
+Câu 5. Polyme nào sau đây được dùng để sản xuất chất dẻo poly(vinyl chloride) (PVC)?
+A. Polyethylene.
+B. Polystyrene.
+C. Poly(vinyl chloride).
+D. Poly(methyl methacrylate).
+
+Câu 6. Hợp chất nào sau đây là một amine bậc một?
+A. Dimethylamine.
+B. Ethylamine.
+C. Trimethylamine.
+D. N-methylethanamine.
+
+Câu 7. Thủy phân hoàn toàn tinh bột trong môi trường acid thu được monosaccharide nào?
+A. Fructose.
+B. Galactose.
+C. Glucose.
+D. Ribose.
+
+Câu 8. Kim loại nào sau đây có tính dẫn điện tốt nhất?
+A. Đồng (Cu).
+B. Bạc (Ag).
+C. Vàng (Au).
+D. Nhôm (Al).
+
+Câu 9. Hợp chất amino acid đơn giản nhất là
+A. Glycine.
+B. Alanine.
+C. Valine.
+D. Lysine.
+
+Câu 10. Dung dịch chất nào sau đây làm quỳ tím chuyển sang màu đỏ?
+A. CH3NH2.
+B. C6H5OH.
+C. H2NCH2COOH.
+D. CH3COOH.
+
+Câu 11. Xà phòng hóa tristearin trong dung dịch NaOH đun nóng thu được muối và chất hữu cơ nào?
+A. Glycerol.
+B. Ethylene glycol.
+C. Ethanol.
+D. Methanol.
+
+Câu 12. Phản ứng tráng bạc của glucose chứng tỏ phân tử glucose có chứa nhóm chức nào?
+A. Hydroxyl (-OH).
+B. Carboxyl (-COOH).
+C. Aldehyde (-CHO).
+D. Amino (-NH2).
+
+PHẦN II. Câu trắc nghiệm đúng sai (4 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 4. Trong mỗi ý a), b), c), d) ở mỗi câu, thí sinh chọn đúng hoặc sai.
+
+Câu 1. Khảo sát tính chất của carbohydrate:
+a) Glucose và saccharose đều tham gia phản ứng tráng bạc với thuốc thử Tollens.
+b) Cellulose tan tốt trong dung dịch Schweizer [Cu(NH3)4](OH)2.
+c) Thủy phân hoàn toàn tinh bột và cellulose đều chỉ thu được glucose.
+d) Tinh bột cho phản ứng màu xanh tím với dung dịch iot chỉ ở nhiệt độ cao.
+
+Câu 2. Cho pin điện hóa Zn - Cu ở điều kiện chuẩn:
+a) Tại anode xảy ra quá trình oxi hóa kim loại Zn thành ion Zn2+.
+b) Tại cathode xảy ra quá trình khử ion Cu2+ thành kim loại Cu.
+c) Chiều dòng điện ở mạch ngoài đi từ cực Zn sang cực Cu.
+d) Khi pin hoạt động, khối lượng điện cực kẽm giảm dần còn khối lượng điện cực đồng tăng dần.
+
+Câu 3. Khảo sát cấu tạo và tính chất của peptide và protein:
+a) Tất cả các peptide đều có phản ứng màu biuret với Cu(OH)2 trong môi trường kiềm.
+b) Protein bị đông tụ dưới tác dụng của nhiệt độ cao hoặc acid/base mạnh.
+c) Liên kết peptide là liên kết -CO-NH- giữa hai đơn vị α-amino acid.
+d) Phân tử Ala-Gly-Val có chứa 3 liên kết peptide.
+
+Câu 4. Về các phản ứng hóa học của ester và lipid:
+a) Phản ứng thủy phân ester trong môi trường acid là phản ứng thuận nghịch.
+b) Phản ứng xà phòng hóa chất béo trong môi trường kiềm là phản ứng một chiều.
+c) Chất béo chứa nhiều gốc acid béo không no thường ở trạng thái lỏng ở điều kiện thường.
+d) Dầu mỡ động thực vật có cùng thành phần nguyên tố và tính chất với dầu mỡ bôi trơn máy móc.
+
+PHẦN III. Câu trắc nghiệm trả lời ngắn (6 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 6. Ghi kết quả theo yêu cầu.
+
+Câu 1. Phân tử ethyl butyrate có tổng số nguyên tử cacbon là bao nhiêu?
+Câu 2. Tính khối lượng phân tử (g/mol) của ester benzyl formate (lấy C=12, H=1, O=16).
+Câu 3. Cho 0,1 mol hỗn hợp gồm glycine và alanine tác dụng vừa đủ với V mL dung dịch HCl 1M rồi cô cạn thu được m gam muối khan. Giá trị khối lượng mol trung bình của hỗn hợp ban đầu tính theo công thức thực nghiệm là bao nhiêu g/mol (kết quả là 58,4)?
+Câu 4. Điện phân 200 mL dung dịch CuCl2 đến khi catot thoát hết ion Cu2+ thì ở anot thu được V gam khí clo (kết quả là 7,1)?
+Câu 5. Thủy phân hoàn toàn m gam maltose thu được glucose. Lượng glucose này tráng gương hoàn toàn thu được lượng bạc tương đương hiệu suất thực tế cho kết quả chỉ số là 9,5 gam?
+Câu 6. Một polymer tổng hợp từ 4 monomer theo thứ tự các mã phản ứng là 4, 1, 3, 2. Mã số kết hợp của polymer này là bao nhiêu?
+
+---------------Hết-----------------
+ĐÁP ÁN:
+PHẦN I
+Câu:       1    2    3    4    5    6    7    8    9    10   11   12
+Đáp án:    B    A    C    C    C    B    C    B    A    D    A    C
+
+PHẦN II
+Câu	1	2	3	4
+a)	S	Đ	Đ	Đ
+b)	Đ	Đ	Đ	Đ
+c)	Đ	S	Đ	Đ
+d)	S	Đ	S	S
+
+PHẦN III
+Câu:       1       2       3       4       5       6
+Đáp án:    4       104     58,4    7,1     9,5     4132
 `
   },
   {

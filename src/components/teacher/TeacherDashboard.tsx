@@ -15,6 +15,7 @@ import {
   TrendingUp,
   FlaskConical
 } from 'lucide-react';
+import { getUserGreeting, APP_CONFIG } from '../../constants/brand';
 
 interface TeacherDashboardProps {
   currentUser: User;
@@ -56,10 +57,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         <div className="relative z-10 max-w-2xl">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/20 border border-blue-400/30 text-blue-200 text-xs font-semibold mb-3">
             <Sparkles className="w-3.5 h-3.5 text-blue-300" />
-            <span>Nền tảng Hóa học THPT & Chuyên 2025</span>
+            <span>{APP_CONFIG.APP_NAME} – {APP_CONFIG.APP_DESCRIPTION}</span>
           </div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
-            Xin chào, {currentUser.name}!
+            {getUserGreeting(currentUser)}
           </h1>
           <p className="mt-2 text-sm md:text-base text-blue-100/90 leading-relaxed">
             Hệ thống nhận dạng đề thi thông minh từ file Word/PDF, hỗ trợ chuẩn 3 phần cấu trúc mới của Bộ GD&ĐT và công thức hóa học tự động.
