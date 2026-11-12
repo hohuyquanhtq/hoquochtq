@@ -215,6 +215,30 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     }
   };
 
+  const loadTest3PartsDocxDirectly = async () => {
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/assets/test_chem_3parts.docx');
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        const text = await extractTextFromDocx(buffer);
+        if (text && text.trim().length > 20) {
+          setInputText(text);
+          const result = parseExamContent(text, '12');
+          setParsedResult(result);
+          showToast('Đã đọc và nhận dạng file Word test_chem_3parts.docx (Chuẩn 3 Phần GDPT 2018)!');
+          return;
+        }
+      }
+      loadSample('sample_section_ix_3parts_mandatory');
+    } catch (err) {
+      console.warn('DOCX 3 parts direct load fallback:', err);
+      loadSample('sample_section_ix_3parts_mandatory');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleDeepScan = async () => {
     if (!inputText.trim()) {
       alert('Không có nội dung để quét.');
@@ -573,6 +597,24 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               </button>
 
               <button
+                onClick={() => loadSample('sample_section_ix_3parts_mandatory')}
+                className="px-3 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1"
+                title="7. 🧪 Bộ kiểm thử chuẩn 3 Phần GDPT 2018 theo Mục IX: P1 (3 câu), P2 (2 câu/8 ý), P3 (6 câu)"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-amber-200" />
+                <span>7. 🧪 Kiểm thử 3 Phần (Mục IX)</span>
+              </button>
+
+              <button
+                onClick={loadTest3PartsDocxDirectly}
+                className="px-3 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-100 text-teal-900 text-xs font-bold transition-colors border border-teal-300 flex items-center gap-1"
+                title="Đọc trực tiếp file binary test_chem_3parts.docx chứa 3 Phần GDPT 2018"
+              >
+                <FileUp className="w-3.5 h-3.5 text-teal-600" />
+                <span>Nạp DOCX 3 Phần (Mục IX)</span>
+              </button>
+
+              <button
                 onClick={loadTestDocxDirectly}
                 className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-bold transition-colors border border-indigo-300 flex items-center gap-1"
                 title="Đọc trực tiếp file binary test_chem_equations.docx chứa Word Insert -> Equation OMML"
@@ -751,6 +793,77 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
           {/* List of Questions with Interactive Verification & Edit */}
           {activeMainTab === 'questions_list' && (
             <div className="space-y-3">
+              {/* Filter Buttons for Part I, II, III (Section VII.1) */}
+              <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-white border border-slate-200 rounded-xl">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-xs font-bold text-slate-500 mr-1 flex items-center gap-1">
+                    <ListChecks className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Lọc xem theo phần:</span>
+                  </span>
+
+                  <button
+                    onClick={() => setFilterType('all')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      filterType === 'all'
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                    }`}
+                  >
+                    Tất cả ({parsedResult.totalQuestions} câu)
+                  </button>
+
+                  <button
+                    onClick={() => setFilterType('part1')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      filterType === 'part1'
+                        ? 'bg-blue-600 text-white shadow-xs'
+                        : 'bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200'
+                    }`}
+                  >
+                    Phần I: 4 Lựa chọn ({parsedResult.part1Count} câu)
+                  </button>
+
+                  <button
+                    onClick={() => setFilterType('part2')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      filterType === 'part2'
+                        ? 'bg-indigo-600 text-white shadow-xs'
+                        : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200'
+                    }`}
+                  >
+                    Phần II: Đúng/Sai ({parsedResult.part2Count} câu - {parsedResult.part2Count * 4} ý)
+                  </button>
+
+                  <button
+                    onClick={() => setFilterType('part3')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                      filterType === 'part3'
+                        ? 'bg-purple-600 text-white shadow-xs'
+                        : 'bg-purple-50 hover:bg-purple-100 text-purple-800 border border-purple-200'
+                    }`}
+                  >
+                    Phần III: Trả lời ngắn ({parsedResult.part3Count} câu)
+                  </button>
+
+                  {parsedResult.questionsWithWarnings > 0 && (
+                    <button
+                      onClick={() => setFilterType('warnings')}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                        filterType === 'warnings'
+                          ? 'bg-amber-600 text-white shadow-xs'
+                          : 'bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-300'
+                      }`}
+                    >
+                      Cần chú ý ({parsedResult.questionsWithWarnings})
+                    </button>
+                  )}
+                </div>
+
+                <div className="text-[11px] text-slate-500 font-medium">
+                  Đang hiển thị {filteredQuestions.length}/{parsedResult.totalQuestions} câu hỏi
+                </div>
+              </div>
+
               {filteredQuestions.map((q, index) => (
                 <div 
                   key={q.id}

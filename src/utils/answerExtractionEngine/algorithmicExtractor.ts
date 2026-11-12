@@ -512,10 +512,11 @@ function parsePart2InlineString(
   part2Map: Map<string, ExtractedAnswerItem>,
   source: 'table' | 'text'
 ) {
-  const matches = [...text.matchAll(/([a-d])\s*[:.\-–)]\s*([ĐS]|Đúng|Sai|True|False)/gi)];
+  // Matches "a) Đúng", "a) Đ", "a. S", "a - Đ", "a: Sai", "a Đ", "(a) Đúng"
+  const matches = [...text.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)\b/gi)];
   for (const m of matches) {
-    const sub = m[1].toLowerCase() as 'a' | 'b' | 'c' | 'd';
-    const val = normalizeTrueFalse(m[2]);
+    const sub = (m[1] || m[2]).toLowerCase() as 'a' | 'b' | 'c' | 'd';
+    const val = normalizeTrueFalse(m[3]);
     if (val) {
       const key = `${qNum}-${sub}`;
       if (!part2Map.has(key) || part2Map.get(key)!.confidence < 0.90) {
@@ -528,7 +529,7 @@ function parsePart2InlineString(
           correctAnswer: val,
           acceptedAnswers: [val, val === 'Đ' ? 'Đúng' : 'Sai'],
           source: source,
-          confidence: source === 'table' ? 0.95 : 0.88,
+          confidence: source === 'table' ? 0.95 : 0.90,
           sourceSnippet: `Câu ${qNum} [${sub}] -> ${val}`,
           validationStatus: 'verified',
           teacherVerified: false,
@@ -548,9 +549,9 @@ function processTextLists(
   part3Map: Map<number, ExtractedAnswerItem>
 ) {
   // Split into sections if markers exist
-  const p1Block = extractSectionSubstring(text, ['PHẦN I', 'PHẦN 1', 'TRẮC NGHIỆM 4'], ['PHẦN II', 'PHẦN 2']);
-  const p2Block = extractSectionSubstring(text, ['PHẦN II', 'PHẦN 2', 'ĐÚNG/SAI', 'ĐÚNG SAI'], ['PHẦN III', 'PHẦN 3']);
-  const p3Block = extractSectionSubstring(text, ['PHẦN III', 'PHẦN 3', 'TRẢ LỜI NGẮN'], ['HƯỚNG DẪN', 'LỜI GIẢI']);
+  const p1Block = extractSectionSubstring(text, ['PHẦN I', 'PHẦN 1', 'TRẮC NGHIỆM 4', 'TRẮC NGHIỆM NHIỀU'], ['PHẦN II', 'PHẦN 2']);
+  const p2Block = extractSectionSubstring(text, ['PHẦN II', 'PHẦN 2', 'ĐÚNG/SAI', 'ĐÚNG SAI', 'ĐÚNG - SAI'], ['PHẦN III', 'PHẦN 3']);
+  const p3Block = extractSectionSubstring(text, ['PHẦN III', 'PHẦN 3', 'TRẢ LỜI NGẮN'], ['HƯỚNG DẪN', 'LỜI GIẢI', 'HƯỚNG DẪN GIẢI']);
 
   // --- Part 1 inline regex ---
   const p1Text = p1Block || text;
@@ -577,8 +578,8 @@ function processTextLists(
 
   // --- Part 2 inline regex ---
   const p2Text = p2Block || text;
-  // Patterns like: "Câu 1: a - Đ, b - S, c - Đ, d - Đ" or "Câu 1. a) Đ; b) S..."
-  const p2QuestionBlocks = [...p2Text.matchAll(/Câu\s*(\d+)[\s.:\-–]+([\s\S]*?)(?=(?:Câu\s*\d+|$|PHẦN))/gi)];
+  // Patterns like: "Câu 1: a - Đ, b - S, c - Đ, d - Đ" or "Câu 1. a) Đ; b) S..." or multiline
+  const p2QuestionBlocks = [...p2Text.matchAll(/(?:^|\n|[,;])\s*(?:Câu\s*)?(\d+)[\s.:\-–]+([\s\S]*?)(?=(?:(?:^|\n|[,;])\s*(?:Câu\s*)?\d+[\s.:\-–]+)|$|PHẦN|HƯỚNG\s*DẪN)/gi)];
   for (const qBlock of p2QuestionBlocks) {
     const qNum = parseInt(qBlock[1], 10);
     const body = qBlock[2];
@@ -586,9 +587,9 @@ function processTextLists(
   }
 
   // --- Part 3 inline regex ---
-  const p3Text = p3Block || '';
+  const p3Text = p3Block || text;
   if (p3Text) {
-    const p3Matches = [...p3Text.matchAll(/(?:^|\s|[,;|])(?:Câu\s*)?(\d+)\s*[:.\-–]\s*([-+]?\d+(?:[,.]\d+)?(?:\s*[a-zA-Z%]+)?)/gi)];
+    const p3Matches = [...p3Text.matchAll(/(?:^|\n|[,;|])\s*(?:Câu\s*)?(\d+)\s*[:.\-–=]\s*([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]+)?)/gi)];
     for (const m of p3Matches) {
       const qNum = parseInt(m[1], 10);
       const valStr = m[2];
@@ -604,7 +605,7 @@ function processTextLists(
           numericValue: parsed.numericVal,
           tolerance: 0.05,
           source: 'text',
-          confidence: 0.88,
+          confidence: 0.90,
           sourceSnippet: m[0].trim(),
           validationStatus: 'verified',
           teacherVerified: false,

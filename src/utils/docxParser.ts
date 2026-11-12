@@ -1,110 +1,271 @@
 import mammoth from 'mammoth';
 import { Question, QuestionType, ParsedExamResult, MultipleChoiceOption, TrueFalseStatement } from '../types';
 import { extractComprehensiveAnswerKeys, buildAnswerRecognitionItems } from './answerRecognizer';
-import { readDocxStructure } from './answerExtractionEngine/documentTableReader';
+import { isolateAnswerBlock, readDocxStructure } from './answerExtractionEngine/documentTableReader';
+import { parseDocxWithEquations } from './docxEquationParser';
 
 /**
- * Extracts structured Markdown text with preserved table grids from DOCX ArrayBuffer
+ * Extracts rich markdown text from a DOCX ArrayBuffer,
+ * preserving Office Math (OMML), chemical formulas, subscripts, equations, and tables.
  */
 export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
-    const { fullMarkdownText } = await readDocxStructure(arrayBuffer);
-    if (fullMarkdownText && fullMarkdownText.trim().length > 0) {
-      return fullMarkdownText;
+    const res = await parseDocxWithEquations(arrayBuffer);
+    if (res && res.fullMarkdownText && res.fullMarkdownText.trim().length > 20) {
+      return res.fullMarkdownText;
     }
-    const result = await mammoth.extractRawText({ arrayBuffer });
-    return result.value || '';
   } catch (err) {
-    console.error('Error extracting text from DOCX:', err);
-    throw new Error('Không thể đọc nội dung file DOCX. Vui lòng kiểm tra định dạng file.');
+    console.warn('parseDocxWithEquations fallback to mammoth:', err);
+  }
+
+  try {
+    const result = await mammoth.extractRawText({ arrayBuffer });
+    return result.value;
+  } catch (err) {
+    console.error('Mammoth docx extraction error:', err);
+    throw new Error('Không thể đọc nội dung file Word (.docx). Vui lòng thử lại.');
   }
 }
 
 /**
- * Extracts text from PDF using PDF.js
+ * Extracts text from a PDF ArrayBuffer using pdfjs-dist
  */
 export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<string> {
-  const pdfjs = (window as any).pdfjsLib;
-  if (!pdfjs) {
-    throw new Error('Thư viện xử lý PDF đang tải hoặc chưa sẵn sàng. Vui lòng thử lại sau vài giây hoặc dán nội dung văn bản.');
-  }
-
   try {
-    if (!pdfjs.GlobalWorkerOptions.workerSrc) {
-      pdfjs.GlobalWorkerOptions.workerSrc = '/pdf.worker.min.js';
-    }
-
-    const pdf = await pdfjs.getDocument({
-      data: arrayBuffer,
-      cMapPacked: true,
-      disableFontFace: true,
-    }).promise;
+    const pdfjsLib = await import('pdfjs-dist');
+    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
+    const pdf = await loadingTask.promise;
     let fullText = '';
-
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
-      const content = await page.getTextContent();
-      
-      // Group items by line according to their vertical Y coordinate
-      const lineMap = new Map<number, { x: number; text: string }[]>();
-      
-      content.items.forEach((item: any) => {
-        if (!item.str) return;
-        const y = Math.round(item.transform[5]); // Y coordinate
-        const x = item.transform[4];            // X coordinate
-        
-        // Find existing close Y (within 4 pixels tolerance)
-        let matchedY = y;
-        for (const existingY of lineMap.keys()) {
-          if (Math.abs(existingY - y) <= 4) {
-            matchedY = existingY;
-            break;
-          }
-        }
-
-        if (!lineMap.has(matchedY)) {
-          lineMap.set(matchedY, []);
-        }
-        lineMap.get(matchedY)!.push({ x, text: item.str });
-      });
-
-      // Sort Y descending (top of page to bottom)
-      const sortedY = Array.from(lineMap.keys()).sort((a, b) => b - a);
-
-      sortedY.forEach(y => {
-        const lineItems = lineMap.get(y)!;
-        // Sort X ascending (left to right)
-        lineItems.sort((a, b) => a.x - b.x);
-        const lineStr = lineItems.map(it => it.text).join(' ').trim();
-        if (lineStr) {
-          fullText += lineStr + '\n';
-        }
-      });
-
-      fullText += '\n';
+      const textContent = await page.getTextContent();
+      const pageText = textContent.items
+        .map((item: any) => item.str || '')
+        .join(' ');
+      fullText += pageText + '\n\n';
     }
-
     return fullText;
-  } catch (err: any) {
-    console.error('Error extracting PDF:', err);
-    throw new Error('Lỗi khi đọc file PDF: ' + (err.message || 'File có thể bị mã hóa hoặc lỗi định dạng.'));
+  } catch (err) {
+    console.warn('PDF extraction warning:', err);
+    return '';
   }
 }
 
-interface SectionAnswers {
-  part1: Map<number, string>; // questionNum -> 'A' | 'B' | 'C' | 'D'
-  part2: Map<number, Record<string, boolean>>; // questionNum -> { a: true, b: true, c: true, d: false }
-  part3: Map<number, string>; // questionNum -> "6" or "188,0"
-  explanations: Map<string, string>; // "part1_1" or "part3_2" -> explanation text
+/**
+ * Normalizes text to lower-case without diacritics for ultra-flexible section title matching
+ */
+function removeDiacritics(str: string): string {
+  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+}
+
+/**
+ * Detects section header across all variations in Vietnamese exams
+ */
+export function detectSectionHeader(rawLine: string): QuestionType | null {
+  const line = rawLine.trim().replace(/^[#*_\s\-–—:]+|[#*_\s\-–—:]+$/g, '');
+  if (!line || line.length > 150) return null;
+
+  const norm = removeDiacritics(line);
+
+  // Section III: Short Answer (check Part III first so Roman numeral III is not matched as II or I)
+  if (
+    /^(?:phan\s+(?:iii|3)\b|iii\b)[\s.:\-–—]*(?:cau\s+trac\s+nghiem\s+tra\s+loi\s+ngan|trac\s+nghiem\s+tra\s+loi\s+ngan|tra\s+loi\s+ngan|cau\s+hoi\s+tra\s+loi\s+ngan|dien\s+khuyet)?.*$/i.test(norm) ||
+    /^(?:phan\s+(?:iii|3)\b)$/i.test(norm) ||
+    /^(?:cau\s+trac\s+nghiem\s+tra\s+loi\s+ngan|trac\s+nghiem\s+tra\s+loi\s+ngan|tra\s+loi\s+ngan|cau\s+hoi\s+tra\s+loi\s+ngan)\b/i.test(norm)
+  ) {
+    return 'part3_short_answer';
+  }
+
+  // Section II: True / False (strictly require word boundary \b after ii/2)
+  if (
+    /^(?:phan\s+(?:ii|2)\b|ii\b)[\s.:\-–—]*(?:cau\s+trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|dung\s*[-–—/]?\s*sai|cau\s+hoi\s+dung\s*[-–—/]?\s*sai)?.*$/i.test(norm) ||
+    /^(?:phan\s+(?:ii|2)\b)$/i.test(norm) ||
+    /^(?:cau\s+trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|dung\s*[-–—/]\s*sai)\b/i.test(norm)
+  ) {
+    return 'part2_true_false';
+  }
+
+  // Section I: Multiple Choice (strictly require word boundary \b after i/1)
+  if (
+    /^(?:phan\s+(?:i|1)\b|i\b)[\s.:\-–—]*(?:cau\s+trac\s+nghiem\s+nhieu\s+phuong\s+an|trac\s+nghiem\s+4\s+lua\s+chon|nhieu\s+phuong\s+an|4\s+lua\s+chon|lua\s+chon|trac\s+nghiem)?.*$/i.test(norm) ||
+    /^(?:phan\s+(?:i|1)\b)$/i.test(norm) ||
+    /^(?:cau\s+trac\s+nghiem\s+nhieu\s+phuong\s+an|trac\s+nghiem\s+4\s+lua\s+chon|4\s+lua\s+chon)\b/i.test(norm)
+  ) {
+    return 'part1_single_choice';
+  }
+
+  return null;
+}
+
+/**
+ * Robust extractor for Part II statements (a, b, c, d)
+ * Handles multiline, inline, Word list prefixes, table rows, and trailing inline truth values
+ */
+export function extractPart2Statements(fullText: string): {
+  prompt: string;
+  statements: TrueFalseStatement[];
+} {
+  // Marker regex for a, b, c, d (strictly lowercase so uppercase A-D are not confused):
+  // e.g. "a)", "a.", "(a)", "a/", "a -", "a:", "Ý a)", "ý a:"
+  const markerRegex = /(?:^|\n|[\s;,])(?:[Ýý]\s*)?(?:\(?([a-d])[\)\].:\/–—]|\(([a-d])\))\s+/g;
+  const matches = [...fullText.matchAll(markerRegex)];
+
+  // Order validation: must follow sequential order a, b, c, d
+  const subMatches: { letter: 'a' | 'b' | 'c' | 'd'; index: number; fullMatchLength: number }[] = [];
+  const expectedOrder: ('a' | 'b' | 'c' | 'd')[] = ['a', 'b', 'c', 'd'];
+  let currentExpectedIdx = 0;
+
+  for (const m of matches) {
+    const letter = (m[1] || m[2]).toLowerCase() as 'a' | 'b' | 'c' | 'd';
+    if (letter === expectedOrder[currentExpectedIdx]) {
+      subMatches.push({
+        letter,
+        index: m.index !== undefined ? m.index : 0,
+        fullMatchLength: m[0].length,
+      });
+      currentExpectedIdx++;
+      if (currentExpectedIdx >= 4) break;
+    }
+  }
+
+  // Must have at least 2 consecutive sub-statements to qualify as Part II
+  if (subMatches.length < 2) {
+    return { prompt: fullText, statements: [] };
+  }
+
+  const firstSub = subMatches[0];
+  const prompt = fullText.slice(0, firstSub.index).trim();
+  const statements: TrueFalseStatement[] = [];
+
+  for (let i = 0; i < subMatches.length; i++) {
+    const curr = subMatches[i];
+    const textStart = curr.index + curr.fullMatchLength;
+    const textEnd = i + 1 < subMatches.length ? subMatches[i + 1].index : fullText.length;
+    let stmtText = fullText.slice(textStart, textEnd).trim();
+
+    // Check for inline answer tag: "[Đúng]", "(Đ)", "- Đúng", ": Đúng", "Đúng", "[Sai]", "(S)", "- Sai", ": Sai", "Sai"
+    let inlineAnswer: boolean | undefined = undefined;
+    const tfMatch = stmtText.match(/(?:[\s\-–—:]+|\s*[\[\(])\s*(Đúng|Sai|True|False|Đ|S)\s*[\]\)]?\s*$/i);
+    if (tfMatch) {
+      const val = tfMatch[1].trim();
+      inlineAnswer = /^(Đ|ĐÚNG|TRUE|T|D)$/i.test(val);
+      stmtText = stmtText.slice(0, tfMatch.index).trim();
+    }
+
+    statements.push({
+      id: curr.letter,
+      statement: stmtText,
+      correctAnswer: inlineAnswer !== undefined ? inlineAnswer : false,
+      explanation: inlineAnswer !== undefined ? (inlineAnswer ? 'Đúng' : 'Sai') : undefined,
+    });
+  }
+
+  return { prompt: prompt || fullText, statements };
+}
+
+/**
+ * Robust extractor for Part I options (A, B, C, D)
+ * Handles multiline, inline, asterisks (*), and tags
+ */
+export function extractPart1Options(fullText: string): {
+  prompt: string;
+  options: MultipleChoiceOption[];
+  correctOptionId?: string;
+} {
+  const markerRegex = /(?:^|\n|[\s;,])(?:\(?([A-D])[\)\].:\/–—]|\(([A-D])\))\s+/g;
+  const matches = [...fullText.matchAll(markerRegex)];
+
+  const optMatches: { letter: string; index: number; fullMatchLength: number }[] = [];
+  const expectedOrder = ['A', 'B', 'C', 'D'];
+  let currentExpectedIdx = 0;
+
+  for (const m of matches) {
+    const letter = (m[1] || m[2]).toUpperCase();
+    if (letter === expectedOrder[currentExpectedIdx]) {
+      optMatches.push({
+        letter,
+        index: m.index !== undefined ? m.index : 0,
+        fullMatchLength: m[0].length,
+      });
+      currentExpectedIdx++;
+      if (currentExpectedIdx >= 4) break;
+    }
+  }
+
+  if (optMatches.length < 2) {
+    return { prompt: fullText, options: [] };
+  }
+
+  const firstOpt = optMatches[0];
+  const prompt = fullText.slice(0, firstOpt.index).trim();
+  const options: MultipleChoiceOption[] = [];
+  let correctOptionId: string | undefined = undefined;
+
+  for (let i = 0; i < optMatches.length; i++) {
+    const curr = optMatches[i];
+    const textStart = curr.index + curr.fullMatchLength;
+    const textEnd = i + 1 < optMatches.length ? optMatches[i + 1].index : fullText.length;
+    let optText = fullText.slice(textStart, textEnd).trim();
+
+    const isCorrect = optText.startsWith('*') || optText.endsWith('*') || /\[Đúng\]|\(Đúng\)/i.test(optText);
+    optText = optText.replace(/^\*|\*$|\[Đúng\]|\(Đúng\)/gi, '').trim();
+
+    if (isCorrect) {
+      correctOptionId = curr.letter;
+    }
+
+    options.push({
+      id: curr.letter,
+      text: optText,
+      isCorrect: isCorrect || undefined,
+    });
+  }
+
+  return { prompt: prompt || fullText, options, correctOptionId };
+}
+
+/**
+ * Robust extractor for Part III short answers
+ */
+export function extractPart3Data(fullText: string): {
+  prompt: string;
+  inlineAnswer?: string;
+} {
+  let prompt = fullText.trim();
+  let inlineAnswer: string | undefined = undefined;
+
+  const ansMatch = prompt.match(/(?:^|\n)\s*(?:Đáp\s*án|Trả\s*lời|KQ|Kết\s*quả)[\s.:\-–—=]+([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]+)?)\s*$/i);
+  if (ansMatch) {
+    inlineAnswer = ansMatch[1].trim();
+    prompt = prompt.slice(0, ansMatch.index).trim();
+  }
+
+  return { prompt, inlineAnswer };
+}
+
+interface RawQuestionBlock {
+  promptNum: number;
+  sectionHint: QuestionType;
+  rawText: string;
 }
 
 /**
  * Parses Vietnamese Chemistry Exam text into structured Question array
+ * supporting Part I (4-choice), Part II (True/False statements), and Part III (Short Answer)
  */
 export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'): ParsedExamResult {
-  const lines = rawText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
-  
-  // Find exam title
+  // 1. Isolate question content from answer keys and solutions
+  const { answerSectionText } = isolateAnswerBlock(rawText);
+  const examBodyText = (rawText.includes(answerSectionText) && answerSectionText.length > 20)
+    ? rawText.slice(0, rawText.indexOf(answerSectionText))
+    : rawText;
+
+  const lines = (examBodyText.trim() ? examBodyText : rawText)
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(Boolean);
+
+  // 2. Find exam title
   let title = 'Đề kiểm tra Hóa học';
   for (let i = 0; i < Math.min(8, lines.length); i++) {
     const line = lines[i];
@@ -114,312 +275,240 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
     }
   }
 
-  // Pre-extract Answer Keys block
+  // 3. Pre-extract Answer Keys matrix from the full document
   const answerKeys = extractComprehensiveAnswerKeys(rawText);
 
-  // Section headers regex
-  const part1Regex = /PHẦN\s+(I|1)[\s.:\-–—]+(TRẮC NGHIỆM|CÂU HỎI TRẮC NGHIỆM|NHIỀU LỰA CHỌN|4 LỰA CHỌN|CÂU TRẮC NGHIỆM NHIỀU PHƯƠNG ÁN LỰA CHỌN|LỰA CHỌN)/i;
-  const part2Regex = /PHẦN\s+(II|2)[\s.:\-–—]+(TRẮC NGHIỆM|ĐÚNG\s*[-–—/]\s*SAI|CÂU HỎI ĐÚNG SAI|CÂU TRẮC NGHIỆM ĐÚNG SAI)/i;
-  const part3Regex = /PHẦN\s+(III|3)[\s.:\-–—]+(TRẢ LỜI NGẮN|ĐIỀN KHUYẾT|TỰ LUẬN NGẮN|CÂU TRẮC NGHIỆM TRẢ LỜI NGẮN)/i;
-
-  // Flexible question header regex: handles "Câu 1.", "Câu 1:", "Câu 1 -", and "Câu 1 (Biết - Lipid):"
-  const questionHeaderRegex = /^Câu\s+(\d+)(?:\s*[\(\[][^\)\]]*[\)\]])?[\s.:\-–—]+(.*)$/i;
-
+  // 4. Split question lines into distinct question blocks while tracking section transitions
+  const questionBlocks: RawQuestionBlock[] = [];
   let currentSection: QuestionType = 'part1_single_choice';
-  const questions: Question[] = [];
+  let activeBlock: { promptNum: number; sectionHint: QuestionType; lines: string[] } | null = null;
 
-  let currentQuestion: Partial<Question> | null = null;
-  let currentSectionNum = 0;
-  let currentOptionLetter: string | null = null;
-  let currentStatementLetter: string | null = null;
-  let tempContentLines: string[] = [];
+  const questionHeaderRegex = /^(?:#{1,6}\s*)?Câu\s+(\d+)(?:\s*[\(\[][^\)\]]*[\)\]])?[\s.:\-–—]+(.*)$/i;
+  const baiHeaderRegex = /^(?:#{1,6}\s*)?Bài\s+(\d+)(?:\s*[\(\[][^\)\]]*[\)\]])?[\s.:\-–—]+(.*)$/i;
 
-  const finalizeCurrentQuestion = () => {
-    if (!currentQuestion) return;
-
-    if (tempContentLines.length > 0 && !currentQuestion.content) {
-      currentQuestion.content = tempContentLines.join('\n').trim();
+  const flushActiveBlock = () => {
+    if (activeBlock && activeBlock.lines.length > 0) {
+      questionBlocks.push({
+        promptNum: activeBlock.promptNum,
+        sectionHint: activeBlock.sectionHint,
+        rawText: activeBlock.lines.join('\n').trim(),
+      });
+      activeBlock = null;
     }
-
-    // Match answers using section-specific question number
-    const qSecNum = currentSectionNum || 1;
-
-    if (currentQuestion.type === 'part1_single_choice') {
-      const detectedKey = answerKeys.part1.get(qSecNum);
-      if (!currentQuestion.correctOptionId && detectedKey) {
-        currentQuestion.correctOptionId = detectedKey.answer;
-        currentQuestion.recognitionSource = detectedKey.source || 'answer_table';
-        currentQuestion.teacherVerified = true;
-      }
-      if (currentQuestion.options) {
-        if (!currentQuestion.correctOptionId) {
-          const found = currentQuestion.options.find(o => o.isCorrect);
-          if (found) {
-            currentQuestion.correctOptionId = found.id;
-            currentQuestion.recognitionSource = 'question_content';
-          }
-        }
-        if (currentQuestion.correctOptionId) {
-          currentQuestion.options.forEach(o => {
-            o.isCorrect = o.id === currentQuestion!.correctOptionId;
-          });
-        }
-      }
-    } else if (currentQuestion.type === 'part2_true_false') {
-      const detectedTF = answerKeys.part2.get(qSecNum);
-      if (detectedTF && currentQuestion.statements) {
-        currentQuestion.recognitionSource = detectedTF.source || 'answer_table';
-        currentQuestion.teacherVerified = true;
-        currentQuestion.statements.forEach(st => {
-          if (detectedTF.statements && detectedTF.statements[st.id] !== undefined) {
-            st.correctAnswer = detectedTF.statements[st.id];
-          }
-        });
-      }
-    } else if (currentQuestion.type === 'part3_short_answer') {
-      const detectedShort = answerKeys.part3.get(qSecNum);
-      if (detectedShort && (!currentQuestion.shortAnswerConfig || currentQuestion.shortAnswerConfig.acceptableAnswers.length === 0)) {
-        const cleanVal = (detectedShort.answer || '').trim();
-        const isNum = !isNaN(Number(cleanVal.replace(',', '.')));
-        currentQuestion.recognitionSource = detectedShort.source || 'answer_table';
-        currentQuestion.teacherVerified = true;
-        currentQuestion.shortAnswerConfig = {
-          acceptableAnswers: detectedShort.acceptedAnswers && detectedShort.acceptedAnswers.length > 0 
-            ? detectedShort.acceptedAnswers 
-            : [cleanVal, cleanVal.replace(',', '.'), cleanVal.replace('.', ',')],
-          isNumeric: isNum,
-          numericValue: isNum ? parseFloat(cleanVal.replace(',', '.')) : undefined,
-          tolerance: isNum ? 0.05 : undefined,
-        };
-      }
-    }
-
-    // Attach explanation if found in detailed solution section
-    const expKey = `${currentQuestion.type}_${qSecNum}`;
-    if (!currentQuestion.explanation && answerKeys.explanations.has(expKey)) {
-      currentQuestion.explanation = answerKeys.explanations.get(expKey);
-    }
-
-    // Check status
-    let parseStatus: 'verified' | 'needs_review' | 'error' = 'verified';
-    let parseWarning = '';
-
-    if (currentQuestion.type === 'part1_single_choice') {
-      if (!currentQuestion.options || currentQuestion.options.length < 2) {
-        parseStatus = 'error';
-        parseWarning = 'Không tìm đủ các phương án A, B, C, D';
-      } else if (!currentQuestion.correctOptionId) {
-        parseStatus = 'needs_review';
-        parseWarning = 'Chưa nhận dạng được đáp án đúng (A/B/C/D)';
-      }
-    } else if (currentQuestion.type === 'part2_true_false') {
-      if (!currentQuestion.statements || currentQuestion.statements.length < 2) {
-        parseStatus = 'needs_review';
-        parseWarning = 'Chưa nhận dạng đủ các ý a, b, c, d';
-      }
-    } else if (currentQuestion.type === 'part3_short_answer') {
-      if (!currentQuestion.shortAnswerConfig || currentQuestion.shortAnswerConfig.acceptableAnswers.length === 0) {
-        parseStatus = 'needs_review';
-        parseWarning = 'Chưa có đáp án số hoặc từ khóa trả lời ngắn';
-      }
-    }
-
-    currentQuestion.parseStatus = parseStatus;
-    currentQuestion.parseWarning = parseWarning;
-
-    questions.push(currentQuestion as Question);
-    currentQuestion = null;
-    tempContentLines = [];
-    currentOptionLetter = null;
-    currentStatementLetter = null;
   };
 
   for (let idx = 0; idx < lines.length; idx++) {
     const line = lines[idx];
 
-    // Detect Answer section starts (e.g. "ĐÁP ÁN:", "BẢNG ĐÁP ÁN", "HƯỚNG DẪN CHẤM", or repeated "PHẦN I" after questions)
-    // Stop reading question prompts once answer key section is reached
-    const isAnswerSectionStart = 
-      /^[\-–—*_\s]*(?:BẢNG\s+)?(?:ĐÁP\s*ÁN|HƯỚNG\s*DẪN\s*(?:CHẤM|GIẢI\s*CHI\s*TIẾT))[\s.:\-–—]*$/i.test(line) ||
-      (part1Regex.test(line) && questions.length >= 4) ||
-      (/^Câu(?:\s*:)?\s+[\d\s]+$/i.test(line) && idx + 1 < lines.length && /^(?:Đáp\s*án|[a-d]\))/i.test(lines[idx + 1]));
+    // Check for Section Header
+    const detectedSec = detectSectionHeader(line);
+    if (detectedSec) {
+      flushActiveBlock();
+      currentSection = detectedSec;
+      continue;
+    }
 
-    if (isAnswerSectionStart && idx > 5) {
-      finalizeCurrentQuestion();
+    // Stop at end-of-exam markers ("Hết", "ĐÁP ÁN")
+    if (/^[\-–—*_\s]*HẾT[\-–—*_\s]*$/i.test(line) || /^(?:BẢNG\s+)?ĐÁP\s*ÁN(?:\s*[:\-–—])?$/i.test(line)) {
+      flushActiveBlock();
       break;
     }
 
-    // Detect Section transitions
-    if (part1Regex.test(line)) {
-      finalizeCurrentQuestion();
-      currentSection = 'part1_single_choice';
-      continue;
-    }
-    if (part2Regex.test(line)) {
-      finalizeCurrentQuestion();
-      currentSection = 'part2_true_false';
-      continue;
-    }
-    if (part3Regex.test(line)) {
-      finalizeCurrentQuestion();
-      currentSection = 'part3_short_answer';
-      continue;
-    }
-
-    // Question start pattern match
-    const qMatch = line.match(questionHeaderRegex);
+    // Check for Question start: "Câu 1.", "Câu 1:", "Bài 1:"
+    const qMatch = line.match(questionHeaderRegex) || line.match(baiHeaderRegex);
     if (qMatch) {
-      finalizeCurrentQuestion();
-      const qNum = parseInt(qMatch[1], 10);
-      currentSectionNum = qNum;
-      const remainingText = qMatch[2] || '';
-
-      const prefix = currentSection === 'part1_single_choice' ? 'P1' : currentSection === 'part2_true_false' ? 'P2' : 'P3';
-      
-      currentQuestion = {
-        id: `q_${Date.now()}_${prefix}_${qNum}_${Math.random().toString(36).substring(2, 6)}`,
-        code: `H_${defaultGrade}_${prefix}_C${qNum}`,
-        type: currentSection,
-        grade: defaultGrade,
-        topic: 'hoa_dai_cuong',
-        level: currentSection === 'part1_single_choice' ? (qNum <= 6 ? 'nhan_biet' : 'thong_hieu') : currentSection === 'part2_true_false' ? 'van_dung' : 'van_dung_cao',
-        content: remainingText,
-        options: currentSection === 'part1_single_choice' ? [] : undefined,
-        statements: currentSection === 'part2_true_false' ? [] : undefined,
-        shortAnswerConfig: currentSection === 'part3_short_answer' ? { acceptableAnswers: [], isNumeric: true } : undefined,
-        authorId: 'teacher_curr',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
+      flushActiveBlock();
+      const num = parseInt(qMatch[1], 10);
+      const rest = qMatch[2] || '';
+      activeBlock = {
+        promptNum: num,
+        sectionHint: currentSection,
+        lines: rest ? [rest] : [],
       };
       continue;
     }
 
-    if (currentQuestion) {
-      // 1. Part I Options
-      if (currentQuestion.type === 'part1_single_choice') {
-        const multiOptionRegex = /([A-D])[\s.:\-–—)]+([^A-D\n]+)/g;
-        const optionMatches = [...line.matchAll(multiOptionRegex)];
-
-        if (optionMatches.length >= 2) {
-          optionMatches.forEach(match => {
-            const letter = match[1].toUpperCase();
-            let optText = match[2].trim();
-            const isCorrect = optText.startsWith('*') || optText.endsWith('*') || /\[Đúng\]/i.test(optText);
-            optText = optText.replace(/^\*|\*$|\[Đúng\]/gi, '').trim();
-
-            currentQuestion!.options!.push({
-              id: letter,
-              text: optText,
-              isCorrect: isCorrect || undefined,
-            });
-            if (isCorrect) currentQuestion!.correctOptionId = letter;
-          });
-          continue;
-        }
-
-        const singleOptionMatch = line.match(/^([A-D])[\s.:\-–—)]+(.*)$/);
-        if (singleOptionMatch) {
-          const letter = singleOptionMatch[1].toUpperCase();
-          let optText = singleOptionMatch[2].trim();
-          const isCorrect = optText.startsWith('*') || optText.endsWith('*') || /\[Đúng\]/i.test(optText);
-          optText = optText.replace(/^\*|\*$|\[Đúng\]/gi, '').trim();
-
-          currentOptionLetter = letter;
-          currentQuestion.options!.push({
-            id: letter,
-            text: optText,
-            isCorrect: isCorrect || undefined,
-          });
-          if (isCorrect) currentQuestion.correctOptionId = letter;
-          continue;
-        }
-      }
-
-      // 2. Part II Statements
-      if (currentQuestion.type === 'part2_true_false') {
-        const stmtMatch = line.match(/^([a-d])[\s.:\-–—)]+(.*)$/i);
-        if (stmtMatch) {
-          const stmtId = stmtMatch[1].toLowerCase();
-          let stmtText = stmtMatch[2].trim();
-          
-          let ans = false;
-          if (/\b(Đúng|Đ|True|T)\b/i.test(stmtText)) {
-            ans = true;
-            stmtText = stmtText.replace(/\s*[-–—:]*\s*(Đúng|Đ|True|T)\b/gi, '').trim();
-          } else if (/\b(Sai|S|False|F)\b/i.test(stmtText)) {
-            ans = false;
-            stmtText = stmtText.replace(/\s*[-–—:]*\s*(Sai|S|False|F)\b/gi, '').trim();
-          }
-
-          currentStatementLetter = stmtId;
-          currentQuestion.statements!.push({
-            id: stmtId,
-            statement: stmtText,
-            correctAnswer: ans,
-          });
-          continue;
-        }
-      }
-
-      // 3. Part III Short Answer inline
-      if (currentQuestion.type === 'part3_short_answer') {
-        const ansMatch = line.match(/^(Đáp\s*án|Trả\s*lời|KQ|Kết\s*quả)[\s.:\-–—]+(.*)$/i);
-        if (ansMatch) {
-          const val = ansMatch[2].trim();
-          const isNum = !isNaN(Number(val.replace(',', '.')));
-          currentQuestion.shortAnswerConfig = {
-            acceptableAnswers: [val, val.replace(',', '.'), val.replace('.', ',')],
-            isNumeric: isNum,
-            numericValue: isNum ? parseFloat(val.replace(',', '.')) : undefined,
-            tolerance: isNum ? 0.05 : undefined,
-          };
-          continue;
-        }
-      }
-
-      // 4. Explanation line inside question
-      if (/^(Lời giải|Hướng dẫn giải|Giải thích|HDG)[\s.:\-–—]+(.*)$/i.test(line)) {
-        const exp = line.replace(/^(Lời giải|Hướng dẫn giải|Giải thích|HDG)[\s.:\-–—]+/i, '');
-        currentQuestion.explanation = exp;
-        continue;
-      }
-
-      // Multi-line continuation
-      if (currentOptionLetter && currentQuestion.type === 'part1_single_choice') {
-        const opt = currentQuestion.options?.find(o => o.id === currentOptionLetter);
-        if (opt) {
-          opt.text += ' ' + line;
-          continue;
-        }
-      }
-
-      if (currentStatementLetter && currentQuestion.type === 'part2_true_false') {
-        const stmt = currentQuestion.statements?.find(s => s.id === currentStatementLetter);
-        if (stmt) {
-          stmt.statement += ' ' + line;
-          continue;
-        }
-      }
-
-      // Question content
-      if (!currentQuestion.content) {
-        currentQuestion.content = line;
-      } else {
-        currentQuestion.content += '\n' + line;
-      }
+    // Continuation line for active question
+    if (activeBlock) {
+      activeBlock.lines.push(line);
     }
   }
 
-  finalizeCurrentQuestion();
+  flushActiveBlock();
 
-  // Statistics
+  // 5. Structure each question block into Question object with Structural Auto-Detection
+  const questions: Question[] = [];
+  let p1Counter = 0;
+  let p2Counter = 0;
+  let p3Counter = 0;
+
+  for (let bIdx = 0; bIdx < questionBlocks.length; bIdx++) {
+    const block = questionBlocks[bIdx];
+    const rawContent = block.rawText;
+    const promptNum = block.promptNum;
+
+    // Structural Auto-Detection:
+    // Check 1: Does it contain Part II statements a, b, c, d?
+    const tfResult = extractPart2Statements(rawContent);
+    const hasTFStatements = tfResult.statements.length >= 2;
+
+    // Check 2: Does it contain Part I options A, B, C, D?
+    const mcResult = extractPart1Options(rawContent);
+    const hasMCOptions = mcResult.options.length >= 2;
+
+    // Resolve Final Question Type:
+    let finalType: QuestionType;
+    if (block.sectionHint === 'part1_single_choice') {
+      if (hasTFStatements && !hasMCOptions) {
+        finalType = 'part2_true_false';
+      } else {
+        finalType = 'part1_single_choice';
+      }
+    } else if (block.sectionHint === 'part2_true_false') {
+      if (hasMCOptions && !hasTFStatements) {
+        finalType = 'part1_single_choice';
+      } else {
+        finalType = 'part2_true_false';
+      }
+    } else if (block.sectionHint === 'part3_short_answer') {
+      if (hasTFStatements && !hasMCOptions) {
+        finalType = 'part2_true_false';
+      } else if (hasMCOptions && !hasTFStatements) {
+        finalType = 'part1_single_choice';
+      } else {
+        finalType = 'part3_short_answer';
+      }
+    } else {
+      // Fallback auto-detection without section header
+      if (hasMCOptions) {
+        finalType = 'part1_single_choice';
+      } else if (hasTFStatements) {
+        finalType = 'part2_true_false';
+      } else {
+        finalType = 'part3_short_answer';
+      }
+    }
+
+    const prefix = finalType === 'part1_single_choice' ? 'P1' : finalType === 'part2_true_false' ? 'P2' : 'P3';
+    const qId = `q_${Date.now()}_${prefix}_${promptNum}_${bIdx}_${Math.random().toString(36).substring(2, 6)}`;
+    const qCode = `H_${defaultGrade}_${prefix}_C${promptNum}`;
+
+    let question: Question;
+
+    if (finalType === 'part1_single_choice') {
+      p1Counter++;
+      const detectedKey = answerKeys.part1.get(p1Counter) || answerKeys.part1.get(promptNum);
+      const correctOptId = mcResult.correctOptionId || detectedKey?.answer;
+
+      if (mcResult.options && correctOptId) {
+        mcResult.options.forEach(o => {
+          o.isCorrect = o.id === correctOptId;
+        });
+      }
+
+      question = {
+        id: qId,
+        code: qCode,
+        type: 'part1_single_choice',
+        grade: defaultGrade,
+        topic: 'hoa_dai_cuong',
+        level: p1Counter <= 6 ? 'nhan_biet' : 'thong_hieu',
+        content: mcResult.prompt || rawContent,
+        options: mcResult.options,
+        correctOptionId: correctOptId,
+        recognitionSource: detectedKey ? 'answer_table' : (mcResult.correctOptionId ? 'question_content' : undefined),
+        teacherVerified: !!correctOptId,
+        parseStatus: (mcResult.options.length >= 2 && correctOptId) ? 'verified' : 'needs_review',
+        parseWarning: !correctOptId ? 'Chưa có đáp án chính thức' : (mcResult.options.length < 2 ? 'Không đủ 4 lựa chọn' : undefined),
+        authorId: 'teacher_curr',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    } else if (finalType === 'part2_true_false') {
+      p2Counter++;
+      const detectedTF = answerKeys.part2.get(p2Counter) || answerKeys.part2.get(promptNum);
+
+      let allAssigned = true;
+      tfResult.statements.forEach(st => {
+        if (detectedTF?.statements && detectedTF.statements[st.id] !== undefined) {
+          st.correctAnswer = detectedTF.statements[st.id];
+          st.explanation = detectedTF.statements[st.id] ? 'Đúng' : 'Sai';
+        } else if (st.explanation !== 'Đúng' && st.explanation !== 'Sai') {
+          allAssigned = false;
+        }
+      });
+
+      question = {
+        id: qId,
+        code: qCode,
+        type: 'part2_true_false',
+        grade: defaultGrade,
+        topic: 'hoa_vo_co',
+        level: 'van_dung',
+        content: tfResult.prompt || rawContent,
+        statements: tfResult.statements,
+        recognitionSource: detectedTF ? 'answer_table' : 'question_content',
+        teacherVerified: (tfResult.statements.length >= 2 && allAssigned),
+        parseStatus: (tfResult.statements.length >= 2 && allAssigned) ? 'verified' : 'needs_review',
+        parseWarning: allAssigned ? undefined : 'Chưa có đáp án chính thức cho tất cả các ý',
+        authorId: 'teacher_curr',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    } else {
+      // Part III: Short Answer
+      p3Counter++;
+      const detectedShort = answerKeys.part3.get(p3Counter) || answerKeys.part3.get(promptNum);
+      const { prompt: cleanPrompt, inlineAnswer } = extractPart3Data(rawContent);
+
+      const finalVal = detectedShort?.answer || inlineAnswer || '';
+      const hasAnswer = !!finalVal;
+
+      question = {
+        id: qId,
+        code: qCode,
+        type: 'part3_short_answer',
+        grade: defaultGrade,
+        topic: 'hoa_thuc_nghiem',
+        level: 'van_dung_cao',
+        content: cleanPrompt,
+        options: undefined,
+        statements: undefined,
+        shortAnswerConfig: {
+          acceptableAnswers: hasAnswer
+            ? (detectedShort?.acceptedAnswers || [finalVal, finalVal.replace(',', '.'), finalVal.replace('.', ',')])
+            : [],
+          isNumeric: !isNaN(Number(finalVal.replace(',', '.'))),
+          numericValue: hasAnswer ? parseFloat(finalVal.replace(',', '.') || '0') : undefined,
+          tolerance: 0.05,
+        },
+        recognitionSource: detectedShort ? 'answer_table' : (inlineAnswer ? 'question_content' : undefined),
+        teacherVerified: hasAnswer,
+        parseStatus: hasAnswer ? 'verified' : 'needs_review',
+        parseWarning: hasAnswer ? undefined : 'Chưa có đáp án chính thức',
+        authorId: 'teacher_curr',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
+    }
+
+    // Attach detailed solution if available
+    const expKey = `${question.type}_${promptNum}`;
+    if (answerKeys.explanations.has(expKey)) {
+      question.explanation = answerKeys.explanations.get(expKey);
+    }
+
+    questions.push(question);
+  }
+
+  // 6. Summary Statistics
   const part1Count = questions.filter(q => q.type === 'part1_single_choice').length;
   const part2Count = questions.filter(q => q.type === 'part2_true_false').length;
   const part3Count = questions.filter(q => q.type === 'part3_short_answer').length;
-  
+
   const questionsWithAnswers = questions.filter(q => {
     if (q.type === 'part1_single_choice') return !!q.correctOptionId;
-    if (q.type === 'part2_true_false') return q.statements && q.statements.some(s => s.correctAnswer !== undefined);
+    if (q.type === 'part2_true_false') return q.statements && q.statements.length > 0 && q.teacherVerified;
     if (q.type === 'part3_short_answer') return q.shortAnswerConfig && q.shortAnswerConfig.acceptableAnswers.length > 0;
     return false;
   }).length;
@@ -427,12 +516,12 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
   const questionsMissingAnswers = questions.length - questionsWithAnswers;
   const questionsWithWarnings = questions.filter(q => q.parseStatus !== 'verified').length;
 
-  // Build Answer Recognition Items for dedicated reconciliation table
-  const { 
-    items: answerItems, 
-    part1Found: part1FoundCount, 
-    part2StatementsFound: part2StatementsFoundCount, 
-    part3Found: part3FoundCount 
+  // 7. Reconcile with 3-section Answer Recognition Items
+  const {
+    items: answerItems,
+    part1Found: part1FoundCount,
+    part2StatementsFound: part2StatementsFoundCount,
+    part3Found: part3FoundCount,
   } = buildAnswerRecognitionItems(questions, answerKeys);
 
   const part1TotalCount = answerItems.filter(item => item.section === 'part1').length;
@@ -1384,5 +1473,94 @@ Câu 10: Chọn A. Theo định luật tác dụng khối lượng: $[H^+] = \\s
 Câu 11: Chọn C. $N(3T) = N_0 \\cdot (1/2)^3 = N_0 / 8 = 12,5\\%$.
 Câu 12: Chọn A. $\\Delta_r H^\\circ_{298} = \\Delta_f H^\\circ(CO_2) + 2 \\Delta_f H^\\circ(H_2O) - \\Delta_f H^\\circ(CH_4) = (-393,5) + 2(-285,8) - (-74,8) = -890,3 \\text{ kJ/mol}$.
 `
+  },
+  {
+    id: 'sample_section_ix_3parts_mandatory',
+    name: '7. 🧪 BỘ KIỂM THỬ BẮT BUỘC MỤC IX: 3 PHẦN (P1: 3 CÂU, P2: 2 CÂU, P3: 6 CÂU)',
+    grade: '12' as const,
+    description: 'Chính xác 100% theo Mục IX yêu cầu: Phần I (3 câu: B, C, A); Phần II (2 câu, 8 ý: C1 [Đ,S,Đ,S], C2 [S,Đ,Đ,S]); Phần III (6 câu: 4; 104; 58,4; 7,1; 9,5; 4132) kiểm thử bảng số liệu, thập phân phẩy, công thức Equation.',
+    content: `BỘ GIÁO DỤC VÀ ĐÀO TẠO - ĐỀ KIỂM THỬ BẮT BUỘC 3 PHẦN (MỤC IX)
+HỆ THỐNG HQTEST - ĐỀ THI TRẮC NGHIỆM HÓA HỌC CHUẨN GDPT 2018
+
+PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (3 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 3. Mỗi câu chỉ chọn một phương án.
+
+Câu 1. Dung dịch chất nào sau đây làm quỳ tím chuyển sang màu đỏ?
+A. NaCl.
+B. H2SO4.
+C. NaOH.
+D. Na2SO4.
+
+Câu 2. Kim loại nào sau đây có tính dẫn điện tốt nhất trong tất cả các kim loại?
+A. Cu.
+B. Au.
+C. Ag.
+D. Al.
+
+Câu 3. Chất nào sau đây là chất béo no ở điều kiện thường?
+A. Tristearin.
+B. Triolein.
+C. Trilinolein.
+D. Methyl acetate.
+
+PHẦN II. Câu trắc nghiệm đúng sai (2 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 2. Trong mỗi ý a), b), c), d) ở mỗi câu, thí sinh chọn đúng hoặc sai.
+
+Câu 1. Khảo sát các phản ứng của kim loại và phi kim trong dung dịch:
+a) Kim loại Fe tác dụng với dung dịch HCl dư sinh ra muối FeCl2 và khí H2 bay lên.
+b) Sục khí Cl2 vào dung dịch NaOH loãng ở nhiệt độ thường thu được muối chlorate NaClO3.
+c) Dung dịch CuSO4 phản ứng với lượng dư dung dịch ammonia NH3 tạo thành phức chất [Cu(NH3)4]2+ có màu xanh lam thẫm.
+d) Kim loại đồng Cu tan được hoàn toàn trong dung dịch FeSO4 ở điều kiện thường.
+
+Câu 2. Về cân bằng hóa học và bảng dữ liệu nhiệt động học:
+| Đại lượng | Giá trị |
+|---|---|
+| Nhiệt tạo thành chuẩn $\\Delta_f H^\\circ_{298}(NH_3)$ | -46 kJ/mol |
+| Nồng độ ban đầu $C(N_2)$ | 0,5 mol/L |
+
+Cho cân bằng tổng hợp ammonia: N2 + 3H2 ⇌ 2NH3.
+a) Phản ứng tổng hợp ammonia là phản ứng thu nhiệt vì có biến thiên enthalpy âm.
+b) Khi tăng áp suất chung của bình phản ứng, cân bằng chuyển dịch theo chiều thuận tạo thêm NH3.
+c) Thêm chất xúc tác bột sắt Fe làm tăng tốc độ phản ứng thuận và tốc độ phản ứng nghịch với số lần bằng nhau.
+d) Khi nhiệt độ của hệ tăng từ 25°C lên 450°C, hằng số cân bằng $K_C$ của phản ứng luôn luôn tăng lên.
+
+PHẦN III. Câu trắc nghiệm trả lời ngắn (6 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 6. Ghi kết quả theo yêu cầu.
+
+Câu 1. Tính giá trị biểu thức số phối tử trong phức chất [Cu(NH3)4]2+ (kết quả là 4).
+Câu 2. Tính số mol khí tương ứng với thể tích 2329,6 mL khí H2 ở đkc (kết quả là 104).
+Câu 3. Tính nồng độ phần trăm của dung dịch muối sau khi cô cạn một phần nước (kết quả là 58,4).
+Câu 4. Tính giá trị pH của một dung dịch đệm sau phản ứng trung hòa (kết quả là 7,1).
+Câu 5. Tính khối lượng (gam) chất kết tủa BaSO4 thu được khi hòa tan mẫu phân tích (kết quả là 9,5).
+Câu 6. Tính giá trị nhiệt lượng tỏa ra (kJ) theo yêu cầu của bài toán nhiệt hóa học (kết quả là 4132).
+
+---------------------Hết----------------
+
+ĐÁP ÁN:
+
+PHẦN I: Trắc nghiệm 4 lựa chọn
+| Câu | 1 | 2 | 3 |
+|---|---|---|---|
+| Đáp án | B | C | A |
+
+PHẦN II: Trắc nghiệm Đúng / Sai
+| Câu | 1 | 2 |
+|---|---|---|
+| a) | Đ | S |
+| b) | S | Đ |
+| c) | Đ | Đ |
+| d) | S | S |
+
+PHẦN III: Trắc nghiệm trả lời ngắn
+| Câu | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| Đáp án | 4 | 104 | 58,4 | 7,1 | 9,5 | 4132 |
+
+HƯỚNG DẪN GIẢI CHI TIẾT:
+Câu 1: Chọn B. H2SO4 là acid mạnh làm quỳ tím hóa đỏ.
+Câu 2: Chọn C. Bạc (Ag) dẫn điện tốt nhất, sau đó đến Cu, Au, Al, Fe.
+Câu 3: Chọn A. Tristearin (C17H35COO)3C3H5 là chất béo no, thể rắn.
+`
   }
 ];
+

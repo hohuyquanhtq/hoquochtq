@@ -267,25 +267,60 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
         }
       }
 
-      // 3. INLINE True/False:
-      // "Câu 1: a-S, b-Đ, c-Đ, d-S" or "1: a-S; b-Đ..."
-      const inlineTfMatch = line.match(/(?:Câu\s+)?(\d+)[\s.:\-–—]+([a-d]\s*[-:]\s*[ĐS](?:[,\s;]+[a-d]\s*[-:]\s*[ĐS])*)/gi);
-      if (inlineTfMatch) {
-        const qNumMatch = line.match(/(?:Câu\s+)?(\d+)[\s.:\-–—]+/i);
-        if (qNumMatch) {
-          const qNum = parseInt(qNumMatch[1], 10);
-          const pairs = [...line.matchAll(/([a-d])\s*[-:]\s*([ĐS])/gi)];
-          if (pairs.length > 0) {
-            const tfMap: Record<string, boolean> = {};
-            pairs.forEach(p => {
-              tfMap[p[1].toLowerCase()] = p[2].toUpperCase() === 'Đ';
-            });
-            matrix.part2.set(qNum, {
-              statements: tfMap,
-              source: 'answer_table',
-              notes: 'Dạng danh sách a,b,c,d',
-            });
+      // 3. MULTILINE True/False:
+      // Line i: "Câu 1:"
+      // Line i+1: "a) Đúng"
+      // Line i+2: "b) Sai"
+      // Line i+3: "c) Đúng"
+      // Line i+4: "d) Sai"
+      const multiQMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]*$/i);
+      if (multiQMatch && i + 1 < lines.length) {
+        const qNum = parseInt(multiQMatch[1], 10);
+        const tfMap: Record<string, boolean> = {};
+        let step = 0;
+
+        for (let nextR = i + 1; nextR < Math.min(lines.length, i + 6); nextR++) {
+          const nextL = lines[nextR];
+          const subMatch = nextL.match(/^(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)\b/i);
+          if (subMatch) {
+            const sub = (subMatch[1] || subMatch[2]).toLowerCase();
+            const val = /^(Đ|ĐÚNG|TRUE|T|D)$/i.test(subMatch[3].trim());
+            tfMap[sub] = val;
+            step++;
+          } else {
+            break;
           }
+        }
+
+        if (Object.keys(tfMap).length >= 2) {
+          matrix.part2.set(qNum, {
+            statements: tfMap,
+            source: 'answer_table',
+            notes: 'Danh sách nhiều dòng',
+          });
+          i += step;
+          continue;
+        }
+      }
+
+      // 4. INLINE True/False:
+      // "Câu 1: a-S, b-Đ, c-Đ, d-S" or "Câu 1: a) Đ; b) S; c) Đ; d) S" or "Câu 1: a. Đúng, b. Sai..."
+      const inlineQNumMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]+/i);
+      if (inlineQNumMatch) {
+        const qNum = parseInt(inlineQNumMatch[1], 10);
+        const pairs = [...line.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)\b/gi)];
+        if (pairs.length >= 2) {
+          const tfMap: Record<string, boolean> = {};
+          pairs.forEach(p => {
+            const sub = (p[1] || p[2]).toLowerCase();
+            const val = /^(Đ|ĐÚNG|TRUE|T|D)$/i.test(p[3].trim());
+            tfMap[sub] = val;
+          });
+          matrix.part2.set(qNum, {
+            statements: tfMap,
+            source: 'answer_table',
+            notes: 'Dạng danh sách a,b,c,d cùng dòng',
+          });
         }
       }
     }
@@ -320,16 +355,20 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
       }
 
       // 2. Inline Part III in Answer Section:
-      // "Câu 1: 4" or "1: 104" or "Câu 3: 58,4"
-      const p3InlineMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]+([0-9,.\-+]+(?:\s*[a-zA-Z/%°]+)?)$/i);
-      if (p3InlineMatch && currentSection === 'part3') {
-        const qNum = parseInt(p3InlineMatch[1], 10);
-        const val = p3InlineMatch[2].trim();
-        matrix.part3.set(qNum, {
-          answer: val,
-          acceptedAnswers: [val, val.replace(',', '.'), val.replace('.', ',')],
-          source: 'answer_table',
-        });
+      // "Câu 1: 4" or "1: 104" or "Câu 3: 58,4" or "Câu 4 = 7,1"
+      const p3InlineMatches = [...line.matchAll(/(?:^|\s|[,;|])(?:Câu\s*)?(\d+)[\s.:\-–—=]+([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z/%°]+)?)/gi)];
+      if (p3InlineMatches.length > 0) {
+        for (const m of p3InlineMatches) {
+          const qNum = parseInt(m[1], 10);
+          const val = m[2].trim();
+          if (!matrix.part3.has(qNum)) {
+            matrix.part3.set(qNum, {
+              answer: val,
+              acceptedAnswers: [val, val.replace(',', '.'), val.replace('.', ',')],
+              source: 'answer_table',
+            });
+          }
+        }
       }
     }
   }
@@ -451,10 +490,19 @@ export function buildAnswerRecognitionItems(
   let p2Index = 1;
   let p3Index = 1;
 
+  const getPromptNumber = (q: Question): number => {
+    const codeM = q.code.match(/_C(\d+)$/i);
+    if (codeM) return parseInt(codeM[1], 10);
+    const contentM = q.content.match(/^Câu\s+(\d+)/i);
+    return contentM ? parseInt(contentM[1], 10) : -1;
+  };
+
   questions.forEach(q => {
+    const promptNum = getPromptNumber(q);
+
     if (q.type === 'part1_single_choice') {
       const qNum = p1Index++;
-      const detected = matrix.part1.get(qNum);
+      const detected = matrix.part1.get(qNum) || (promptNum > 0 ? matrix.part1.get(promptNum) : undefined);
       const chosenKey = q.correctOptionId || detected?.answer || '';
       const status: RecognitionStatus = chosenKey ? 'verified' : 'not_found';
       const source: RecognitionSource = q.correctOptionId && !detected ? 'question_content' : (detected?.source || 'manual');
@@ -470,7 +518,7 @@ export function buildAnswerRecognitionItems(
         correctAnswer: chosenKey,
         recognitionStatus: status,
         recognitionSource: source,
-        teacherVerified: q.teacherVerified || false,
+        teacherVerified: (chosenKey ? (q.teacherVerified ?? true) : false),
         notes: detected?.notes,
       });
 
@@ -482,11 +530,12 @@ export function buildAnswerRecognitionItems(
           o.isCorrect = o.id === chosenKey;
         });
       }
-      q.parseStatus = status === 'verified' ? 'verified' : 'needs_review';
+      q.parseStatus = chosenKey ? 'verified' : 'needs_review';
+      q.parseWarning = chosenKey ? undefined : 'Chưa có đáp án chính thức';
     } 
     else if (q.type === 'part2_true_false') {
       const qNum = p2Index++;
-      const detectedTF = matrix.part2.get(qNum);
+      const detectedTF = matrix.part2.get(qNum) || (promptNum > 0 ? matrix.part2.get(promptNum) : undefined);
       const stmts = q.statements || [
         { id: 'a', statement: '', correctAnswer: false },
         { id: 'b', statement: '', correctAnswer: false },
@@ -494,17 +543,28 @@ export function buildAnswerRecognitionItems(
         { id: 'd', statement: '', correctAnswer: false },
       ];
 
+      let allStmtsHaveAnswer = true;
+
       ['a', 'b', 'c', 'd'].forEach(subLetter => {
         const stmtObj = stmts.find(s => s.id === subLetter);
-        let ansVal: boolean | undefined = stmtObj?.correctAnswer;
+        let ansVal: boolean | undefined = undefined;
+        let isVerified = false;
 
         if (detectedTF?.statements && detectedTF.statements[subLetter] !== undefined) {
           ansVal = detectedTF.statements[subLetter];
+          isVerified = true;
           if (stmtObj) stmtObj.correctAnswer = ansVal;
+        } else if (stmtObj?.explanation === 'Đúng' || stmtObj?.explanation === 'Sai') {
+          ansVal = stmtObj.correctAnswer;
+          isVerified = true;
         }
 
-        const hasVal = ansVal !== undefined;
-        if (hasVal) part2StatementsFound++;
+        const hasVal = isVerified && ansVal !== undefined;
+        if (hasVal) {
+          part2StatementsFound++;
+        } else {
+          allStmtsHaveAnswer = false;
+        }
 
         items.push({
           id: `II.${qNum}${subLetter}`,
@@ -515,18 +575,19 @@ export function buildAnswerRecognitionItems(
           answerType: 'true_false',
           correctAnswer: hasVal ? (ansVal ? 'Đ' : 'S') : '',
           recognitionStatus: hasVal ? 'verified' : 'not_found',
-          recognitionSource: detectedTF?.source || 'question_content',
-          teacherVerified: q.teacherVerified || false,
+          recognitionSource: detectedTF?.source || (stmtObj?.explanation ? 'question_content' : 'manual'),
+          teacherVerified: hasVal,
           notes: stmtObj?.statement?.slice(0, 50),
         });
       });
 
-      q.parseStatus = stmts.length >= 4 ? 'verified' : 'needs_review';
+      q.parseStatus = (stmts.length >= 2 && allStmtsHaveAnswer) ? 'verified' : 'needs_review';
+      q.parseWarning = allStmtsHaveAnswer ? undefined : 'Chưa có đáp án chính thức cho tất cả các ý';
       q.recognitionSource = detectedTF?.source || 'question_content';
     } 
     else if (q.type === 'part3_short_answer') {
       const qNum = p3Index++;
-      const detectedShort = matrix.part3.get(qNum);
+      const detectedShort = matrix.part3.get(qNum) || (promptNum > 0 ? matrix.part3.get(promptNum) : undefined);
       const finalVal = detectedShort?.answer || q.shortAnswerConfig?.acceptableAnswers[0] || '';
       const hasVal = !!finalVal;
 
@@ -542,8 +603,8 @@ export function buildAnswerRecognitionItems(
         acceptedAnswers: detectedShort?.acceptedAnswers || (finalVal ? [finalVal, finalVal.replace(',', '.'), finalVal.replace('.', ',')] : []),
         tolerance: 0.05,
         recognitionStatus: hasVal ? 'verified' : 'not_found',
-        recognitionSource: detectedShort?.source || 'manual',
-        teacherVerified: q.teacherVerified || false,
+        recognitionSource: detectedShort?.source || (q.shortAnswerConfig?.acceptableAnswers.length ? 'question_content' : 'manual'),
+        teacherVerified: hasVal,
         notes: detectedShort?.notes,
       });
 
@@ -555,9 +616,15 @@ export function buildAnswerRecognitionItems(
           tolerance: 0.05,
         };
         q.parseStatus = 'verified';
-        q.recognitionSource = detectedShort?.source || 'manual';
+        q.parseWarning = undefined;
+        q.recognitionSource = detectedShort?.source || 'question_content';
       } else {
+        q.shortAnswerConfig = {
+          acceptableAnswers: [],
+          isNumeric: true,
+        };
         q.parseStatus = 'needs_review';
+        q.parseWarning = 'Chưa có đáp án chính thức';
       }
     }
   });
