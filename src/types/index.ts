@@ -265,3 +265,7 @@ export interface ParsedExamResult {
   allAnswersVerified: boolean;
   successRatePercent?: number;
 }
+
+declare global {
+  const __APP_URL__: string | undefined;
+}

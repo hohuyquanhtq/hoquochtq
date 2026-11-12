@@ -22,6 +22,7 @@ interface ExamResultsProps {
   exam: Exam;
   submissions: StudentSubmission[];
   onBack: () => void;
+  onShareExam?: (exam: Exam) => void;
 }
 
 export const ExamResults: React.FC<ExamResultsProps> = ({
@@ -91,13 +92,26 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
           </div>
         </div>
 
-        <button
-          onClick={handleExport}
-          className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all flex items-center gap-2 shrink-0"
-        >
-          <FileSpreadsheet className="w-4 h-4" />
-          <span>Xuất Bảng Điểm Excel (.xlsx)</span>
-        </button>
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          {onShareExam && (
+            <button
+              onClick={() => onShareExam(exam)}
+              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-2"
+              title="Lấy link trực tiếp và tạo mã QR cho học sinh"
+            >
+              <BarChart3 className="w-4 h-4 hidden" />
+              <span>Chia sẻ &amp; QR</span>
+            </button>
+          )}
+
+          <button
+            onClick={handleExport}
+            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all flex items-center gap-2"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span>Xuất Bảng Điểm Excel (.xlsx)</span>
+          </button>
+        </div>
       </div>
 
       {/* Stats Summary Cards */}

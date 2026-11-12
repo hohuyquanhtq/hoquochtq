@@ -27,6 +27,7 @@ interface ExamManagerProps {
   onTakeExamAsPreview: (exam: Exam) => void;
   onTogglePublish: (examId: string) => void;
   onDeleteExam: (examId: string) => void;
+  onShareExam?: (exam: Exam) => void;
 }
 
 export const ExamManager: React.FC<ExamManagerProps> = ({
@@ -37,6 +38,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   onTakeExamAsPreview,
   onTogglePublish,
   onDeleteExam,
+  onShareExam,
 }) => {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
@@ -142,7 +144,10 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
 
                   {/* Share Link & QR Button (Sections V & VI) */}
                   <button
-                    onClick={() => setActiveShareExam(exam)}
+                    onClick={() => {
+                      if (onShareExam) onShareExam(exam);
+                      else setActiveShareExam(exam);
+                    }}
                     className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5"
                     title="Lấy link trực tiếp và tạo mã QR cho học sinh"
                   >
@@ -191,8 +196,9 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
       {/* Dedicated Exam Share & QR Modal */}
       <ExamShareModal
         isOpen={!!activeShareExam}
-        exam={activeShareExam}
+        exam={activeShareExam ? (exams.find(e => e.id === activeShareExam.id) || activeShareExam) : null}
         onClose={() => setActiveShareExam(null)}
+        onTogglePublish={onTogglePublish}
       />
 
     </div>

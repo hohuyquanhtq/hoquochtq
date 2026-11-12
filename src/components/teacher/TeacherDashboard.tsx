@@ -26,6 +26,7 @@ interface TeacherDashboardProps {
   submissions: StudentSubmission[];
   onNavigate: (tab: string) => void;
   onOpenExamResults: (examId: string) => void;
+  onTogglePublish?: (examId: string) => void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -35,6 +36,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   submissions,
   onNavigate,
   onOpenExamResults,
+  onTogglePublish,
 }) => {
   const totalQuestions = questions.length;
   const activeExamsCount = exams.filter(e => e.isPublished).length;
@@ -307,8 +309,9 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       {/* Share Modal */}
       <ExamShareModal
         isOpen={!!activeShareExam}
-        exam={activeShareExam}
+        exam={activeShareExam ? (exams.find(e => e.id === activeShareExam.id) || activeShareExam) : null}
         onClose={() => setActiveShareExam(null)}
+        onTogglePublish={onTogglePublish}
       />
 
     </div>

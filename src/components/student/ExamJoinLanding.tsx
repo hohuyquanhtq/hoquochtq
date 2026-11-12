@@ -106,6 +106,16 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
             </div>
           )}
 
+          {!exam.isPublished && (
+            <div className="p-4 bg-amber-50 border border-amber-300 text-amber-900 rounded-2xl flex items-center gap-3 text-xs font-semibold">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
+              <div>
+                <p className="font-bold">Phòng thi đang tạm khóa hoặc chưa mở</p>
+                <p className="text-amber-700 mt-0.5">Giáo viên chưa mở phòng thi cho mã "{exam.code}". Vui lòng liên hệ giáo viên để biết thời gian mở phòng!</p>
+              </div>
+            </div>
+          )}
+
           {/* Quick Stats Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 rounded-2xl bg-blue-50/60 border border-blue-100 flex items-center gap-3">
@@ -220,10 +230,15 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
 
             <button
               type="submit"
-              className="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-extrabold text-sm rounded-2xl shadow-lg shadow-blue-500/25 transition-all flex items-center justify-center gap-2"
+              disabled={!exam.isPublished}
+              className={`w-full py-4 text-white font-extrabold text-sm rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 ${
+                exam.isPublished
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/25 cursor-pointer'
+                  : 'bg-slate-400 cursor-not-allowed shadow-none opacity-80'
+              }`}
             >
               <Play className="w-5 h-5 fill-white" />
-              <span>BẮT ĐẦU LÀM BÀI THI ({exam.durationMinutes} PHÚT)</span>
+              <span>{exam.isPublished ? `BẮT ĐẦU LÀM BÀI THI (${exam.durationMinutes} PHÚT)` : 'PHÒNG THI ĐANG TẠM KHÓA'}</span>
             </button>
           </form>
 
