@@ -5,23 +5,34 @@
 
 import mammoth from 'mammoth';
 import { RawDocumentTable } from './types';
+import { parseDocxWithEquations } from '../docxEquationParser';
 
 /**
- * Extracts structured HTML & Markdown from DOCX preserving exact table grids
+ * Extracts structured HTML & Markdown from DOCX preserving exact table grids, OMML formulas, and sub/sup tags
  */
 export async function readDocxStructure(arrayBuffer: ArrayBuffer): Promise<{
   fullMarkdownText: string;
   tables: RawDocumentTable[];
 }> {
+  // 1. Try OMML & XML-based Docx Equation Parser first (preserves Word equations, formulas, sub/sup, tables, images)
   try {
-    // 1. Convert to HTML to preserve full <table><tr><td> structure
+    const eqResult = await parseDocxWithEquations(arrayBuffer);
+    if (eqResult.fullMarkdownText && eqResult.fullMarkdownText.trim().length > 20) {
+      return {
+        fullMarkdownText: eqResult.fullMarkdownText,
+        tables: eqResult.tables,
+      };
+    }
+  } catch (err) {
+    console.warn('OMML equation parser fallback to Mammoth:', err);
+  }
+
+  try {
+    // 2. Fallback to Mammoth HTML conversion
     const htmlResult = await mammoth.convertToHtml({ arrayBuffer });
     const rawHtml = htmlResult.value || '';
 
-    // 2. Extract structured 2D tables from HTML
     const tables = extractTablesFromHtml(rawHtml);
-
-    // 3. Convert HTML to formatted Markdown with Markdown tables
     const fullMarkdownText = htmlToMarkdownWithTables(rawHtml);
 
     return {
@@ -29,8 +40,8 @@ export async function readDocxStructure(arrayBuffer: ArrayBuffer): Promise<{
       tables,
     };
   } catch (err) {
-    console.warn('Docx structure reading fallback:', err);
-    // Fallback to raw text if HTML conversion fails
+    console.warn('Docx structure reading fallback to raw text:', err);
+    // 3. Last fallback: Mammoth raw text
     const rawRes = await mammoth.extractRawText({ arrayBuffer });
     return {
       fullMarkdownText: rawRes.value || '',
@@ -112,9 +123,13 @@ export function htmlToMarkdownWithTables(html: string): string {
       const tdMatches = [...rowContent.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)];
 
       tdMatches.forEach((tdMatch: RegExpMatchArray) => {
-        const text = tdMatch[1]
+        let text = tdMatch[1]
           .replace(/<br\s*\/?>/gi, ' ')
-          .replace(/<[^>]+>/g, ' ')
+          .replace(/<sub[^>]*>([\s\S]*?)<\/sub>/gi, '<sub>$1</sub>')
+          .replace(/<sup[^>]*>([\s\S]*?)<\/sup>/gi, '<sup>$1</sup>');
+        
+        // Remove other HTML tags except sub and sup
+        text = text.replace(/<(?!\/?(sub|sup)\b)[^>]+>/gi, ' ')
           .replace(/&nbsp;/gi, ' ')
           .replace(/&amp;/gi, '&')
           .replace(/&lt;/gi, '<')
@@ -152,14 +167,14 @@ export function htmlToMarkdownWithTables(html: string): string {
     return mdTable;
   });
 
-  // Convert paragraphs and line breaks
+  // Convert paragraphs and line breaks while preserving sub and sup
   return markdownText
     .replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, '\n\n### $1\n\n')
     .replace(/<p[^>]*>([\s\S]*?)<\/p>/gi, '\n$1\n')
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<strong[^>]*>([\s\S]*?)<\/strong>/gi, '**$1**')
     .replace(/<em[^>]*>([\s\S]*?)<\/em>/gi, '*$1*')
-    .replace(/<[^>]+>/g, ' ')
+    .replace(/<(?!\/?(sub|sup)\b)[^>]+>/gi, ' ')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')

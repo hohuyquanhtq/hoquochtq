@@ -191,6 +191,30 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     }
   };
 
+  const loadTestDocxDirectly = async () => {
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/assets/test_chem_equations.docx');
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        const text = await extractTextFromDocx(buffer);
+        if (text && text.trim().length > 20) {
+          setInputText(text);
+          const result = parseExamContent(text, '12');
+          setParsedResult(result);
+          showToast('Đã đọc và nhận dạng file Word test_chem_equations.docx với OMML Equations!');
+          return;
+        }
+      }
+      loadSample('sample_mandatory_equations_test');
+    } catch (err) {
+      console.warn('DOCX direct load fallback:', err);
+      loadSample('sample_mandatory_equations_test');
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
   const handleDeepScan = async () => {
     if (!inputText.trim()) {
       alert('Không có nội dung để quét.');
@@ -537,6 +561,24 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               >
                 <FileUp className="w-3.5 h-3.5" />
                 <span>Nạp file PDF gốc</span>
+              </button>
+
+              <button
+                onClick={() => loadSample('sample_mandatory_equations_test')}
+                className="px-3 py-1.5 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-xs font-bold transition-all shadow-sm flex items-center gap-1"
+                title="6. 🧪 Bộ kiểm thử toàn diện 14 tiêu chuẩn công thức, KaTeX, OMML, chỉ số trên dưới và bảng"
+              >
+                <Sparkles className="w-3.5 h-3.5 text-yellow-300" />
+                <span>6. 🧪 Kiểm thử 14 Mục (Công thức & Equation)</span>
+              </button>
+
+              <button
+                onClick={loadTestDocxDirectly}
+                className="px-3 py-1.5 rounded-xl bg-indigo-50 hover:bg-indigo-100 text-indigo-900 text-xs font-bold transition-colors border border-indigo-300 flex items-center gap-1"
+                title="Đọc trực tiếp file binary test_chem_equations.docx chứa Word Insert -> Equation OMML"
+              >
+                <FileUp className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Nạp DOCX test (OMML)</span>
               </button>
             </div>
           </div>

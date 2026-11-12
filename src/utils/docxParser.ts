@@ -1214,5 +1214,175 @@ Câu 10: Chọn A. Tripeptide trở lên cho phản ứng màu biuret với Cu(O
 Câu 11: Chọn B. Dùng Na2CO3 kết tủa ion Ca2+ và Mg2+ dưới dạng muối carbonate.
 Câu 12: Chọn C. Khí CO2 là tác nhân chủ yếu gây hiệu ứng nhà kính toàn cầu.
 `
+  },
+  {
+    id: 'sample_mandatory_equations_test',
+    name: '6. 🧪 BỘ KIỂM THỬ TỔNG HỢP 14 MỤC: CÔNG THỨC & EQUATION WORD',
+    grade: '12' as const,
+    description: 'Bộ kiểm thử toàn diện gồm 14 tiêu chí chuẩn: H2SO4, Fe2O3, SO4 2-, [Cu(NH3)4]2+, N2 + 3H2 ⇌ 2NH3, Fe + 2HCl → FeCl2 + H2↑, CaCO3 → CaO + CO2↑, CH3-CH2-OH, C6H12O6, %, °C, kJ/mol, KaTeX phân số, căn thức, OMML Word equation, bảng dữ liệu và lời giải.',
+    content: `BỘ GIÁO DỤC VÀ ĐÀO TẠO - ĐỀ KIỂM THỬ CÔNG THỨC VÀ EQUATION HÓA HỌC
+(Bộ kiểm thử chuẩn 14 hạng mục - HQTest Chemical Content Engine)
+
+PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (12 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 12. Mỗi câu chỉ chọn một phương án.
+
+Câu 1. (Mục 1 & 13: Công thức vô cơ chỉ số dưới trong đoạn văn) Trong công nghiệp, acid sulfuric có công thức là H2SO4 được sản xuất từ quặng pyrite sắt có thành phần chính là FeS2 hoặc quặng hematite chứa Fe2O3. Muối nhôm sulfate có công thức nào sau đây?
+A. AlSO4.
+B. Al2(SO4)3.
+C. Al3(SO4)2.
+D. Al(SO4)2.
+
+Câu 2. (Mục 2: Ion đa nguyên tử và ion phức) Trong dung dịch nước, ion sulfate SO4 2- và ion ammonium NH4+ tồn tại bền. Khi cho dung dịch ammonia dư tác dụng với dung dịch CuSO4, tạo thành phức chất tetraamminecopper(II) có công thức là:
+A. [Cu(NH3)4]2+.
+B. [Cu(NH3)2]+.
+C. [Cu(OH)4]2-.
+D. [Cu(H2O)4]2+.
+
+Câu 3. (Mục 3: Phản ứng thuận nghịch) Xét cân bằng hóa học tổng hợp ammonia: N2 + 3H2 ⇌ 2NH3 có $\\Delta_r H^\\circ_{298} = -92 \\text{ kJ/mol}$. Yếu tố nào sau đây làm cân bằng chuyển dịch theo chiều thuận?
+A. Tăng nhiệt độ.
+B. Giảm áp suất chung của hệ.
+C. Tăng nồng độ của N2 hoặc H2.
+D. Thêm chất xúc tác bột Fe.
+
+Câu 4. (Mục 4: Phản ứng có khí bay lên) Cho m gam kim loại Fe tác dụng hoàn toàn với dung dịch HCl dư, thu được dung dịch FeCl2 và khí hydrogen thoát ra theo phương trình: Fe + 2HCl → FeCl2 + H2↑. Thể tích khí H2 (ở đkc) thu được khi hòa tan 5,6 gam Fe là:
+A. 1,2395 L.
+B. 2,4790 L.
+C. 4,9580 L.
+D. 2,2400 L.
+
+Câu 5. (Mục 5: Phản ứng có nhiệt độ và kết tủa) Nung đá vôi ở nhiệt độ cao xảy ra phản ứng phân hủy: CaCO3 $\\xrightarrow{t^\\circ}$ CaO + CO2↑. Sục khí CO2 sinh ra vào dung dịch nước vôi trong dư thấy xuất hiện kết tủa trắng: CO2 + Ca(OH)2 → CaCO3↓ + H2O. Khối lượng kết tủa CaCO3 thu được khi hấp thụ hết 0,1 mol CO2 là:
+A. 5,0 gam.
+B. 10,0 gam.
+C. 15,0 gam.
+D. 20,0 gam.
+
+Câu 6. (Mục 6: Công thức cấu tạo hữu cơ có liên kết đơn) Hợp chất hữu cơ X có công thức cấu tạo thu gọn là CH3-CH2-OH (ethanol) và hợp chất Y là CH3COOH (acetic acid). Phản ứng este hóa giữa X và Y có xúc tác H2SO4 đặc tạo thành ester có mùi thơm là:
+A. CH3COOCH3.
+B. CH3COOC2H5.
+C. HCOOC2H5.
+D. C2H5COOCH3.
+
+Câu 7. (Mục 7: Công thức phân tử hữu cơ) Glucose có công thức phân tử là C6H12O6. Khối lượng mol phân tử của glucose là:
+A. 162 g/mol.
+B. 180 g/mol.
+C. 342 g/mol.
+D. 184 g/mol.
+
+Câu 8. (Mục 8: Dấu phần trăm %) Dung dịch H2SO4 đặc thường có nồng độ phần trăm là 98%. Một dung dịch giấm ăn chứa acetic acid có nồng độ khoảng 5%. Để pha loãng dung dịch H2SO4 98% xuống dung dịch 10%, cách làm an toàn là:
+A. Rót nhanh nước vào acid đặc.
+B. Rót từ từ acid đặc vào nước và khuấy đều.
+C. Đổ đồng thời cả acid đặc và nước vào cốc.
+D. Đun sôi nước trước khi cho acid đặc vào.
+
+Câu 9. (Mục 9: Đơn vị nhiệt độ, năng lượng, nồng độ) Một phản ứng thu nhiệt được thực hiện ở 25°C với biến thiên enthalpy chuẩn $\\Delta_r H^\\circ_{298} = +100 \\text{ kJ/mol}$. Nồng độ dung dịch chất phản ứng là 0,1 mol/L. Ở trạng thái cân bằng, hằng số tốc độ phản ứng phụ thuộc chủ yếu vào:
+A. Áp suất khí quyển.
+B. Thể tích bình chứa.
+C. Nhiệt độ của hệ phản ứng.
+D. Khối lượng chất rắn.
+
+Câu 10. (Mục 10: Biểu thức toán học KaTeX phân số và căn thức) Theo định luật tác dụng khối lượng, nồng độ ion $H^+$ trong dung dịch acid yếu đơn chức HA có hằng số phân ly acid $K_a$ và nồng độ ban đầu $C$ (với $C = \\frac{m}{M \\cdot V}$) được tính gần đúng bằng biểu thức:
+A. $[H^+] = \\sqrt{K_a \\cdot C}$.
+B. $[H^+] = \\frac{K_a}{C}$.
+C. $[H^+] = K_a \\cdot C^2$.
+D. $[H^+] = \\sqrt{\\frac{K_a}{C}}$.
+
+Câu 11. (Mục 11: Công thức biểu diễn dạng Word Equation) Cho phản ứng phân hủy phóng xạ với chu kỳ bán hủy $T_{1/2}$: $N(t) = N_0 \\cdot 2^{-\\frac{t}{T_{1/2}}}$. Khối lượng chất còn lại sau thời gian $t = 3 T_{1/2}$ so với ban đầu là:
+A. 50%.
+B. 25%.
+C. 12,5%.
+D. 6,25%.
+
+Câu 12. (Mục 12: Công thức nằm trong bảng số liệu)
+Cho bảng số liệu nhiệt tạo thành chuẩn $\\Delta_f H^\\circ_{298}$ của một số chất:
+
+| Chất | $CO_{2(g)}$ | $H_2O_{(l)}$ | $CH_{4(g)}$ | $O_{2(g)}$ |
+|---|---|---|---|---|
+| $\\Delta_f H^\\circ_{298}$ (kJ/mol) | -393,5 | -285,8 | -74,8 | 0,0 |
+
+Biến thiên enthalpy chuẩn của phản ứng đốt cháy 1 mol methane: CH4 + 2O2 → CO2 + 2H2O là:
+A. -890,3 kJ/mol.
+B. +890,3 kJ/mol.
+C. -604,5 kJ/mol.
+D. -965,1 kJ/mol.
+
+PHẦN II. Câu trắc nghiệm Đúng / Sai (4 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 4. Trong mỗi ý a), b), c), d) ở mỗi câu, thí sinh chọn đúng hoặc sai.
+
+Câu 1. Khảo sát các công thức vô cơ và ion:
+a) Trong muối Al2(SO4)3, nhôm có số oxi hóa là +3 và gốc SO4 2- có hóa trị II.
+b) Phức chất [Cu(NH3)4]2+ có dạng hình học vuông phẳng và mang điện tích dương 2+.
+c) Dung dịch chứa cation NH4+ khi tác dụng với kiềm nóng sinh ra khí ammonia có mùi khai làm quỳ tím hóa xanh: NH4+ + OH- → NH3↑ + H2O.
+d) Dung dịch Fe2O3 phản ứng trực tiếp với nước ở điều kiện thường tạo thành base Fe(OH)3.
+
+Câu 2. Về cân bằng hóa học và nhiệt hóa học:
+a) Phản ứng tổng hợp ammonia N2 + 3H2 ⇌ 2NH3 tỏa nhiệt ($\\Delta_r H^\\circ_{298} < 0$), do đó làm lạnh hỗn hợp sẽ làm tăng hiệu suất phản ứng.
+b) Phương trình nhiệt hóa học biểu diễn biến thiên enthalpy chuẩn ký hiệu là $\\Delta_r H^\\circ_{298}$.
+c) Ở 25°C, phản ứng hòa tan phân đạm urea trong nước làm nhiệt độ môi trường giảm, đây là quá trình tỏa nhiệt.
+d) Khi tăng nồng độ chất phản ứng từ 0,1 mol/L lên 0,5 mol/L, hằng số cân bằng $K_C$ của phản ứng luôn tăng lên 5 lần.
+
+Câu 3. Về hóa học hữu cơ và liên kết hóa học:
+a) Ethanol có công thức phân tử C2H6O và công thức cấu tạo CH3-CH2-OH có liên kết hydro liên phân tử.
+b) Glucose C6H12O6 và fructose có cùng công thức phân tử và đều cho phản ứng tráng bạc.
+c) Dung dịch giấm ăn có nồng độ 5% acetic acid CH3COOH làm quỳ tím chuyển màu đỏ hoàn toàn giống HCl đặc.
+d) Phản ứng este hóa giữa CH3COOH và CH3-CH2-OH là phản ứng thuận nghịch, có xúc tác H2SO4 đặc và đun nóng.
+
+Câu 4. Về bảng số liệu và tính toán công thức:
+| Thuốc thử | $Cu^{2+}$ | $Fe^{3+}$ | $Ba^{2+}$ |
+|---|---|---|---|
+| Dung dịch NaOH | Kết tủa xanh $Cu(OH)_2$ | Kết tủa nâu đỏ $Fe(OH)_3$ | Không có kết tủa |
+| Dung dịch $Na_2SO_4$ | Không có kết tủa | Không có kết tủa | Kết tủa trắng $BaSO_4$ |
+
+a) Dựa vào bảng trên, có thể dùng dung dịch NaOH để phân biệt cation Cu2+ và Fe3+.
+b) Kết tủa BaSO4 tạo thành không tan trong dung dịch acid mạnh như HCl loãng.
+c) Nồng độ phần trăm của dung dịch được tính bằng công thức: $C\\% = \\frac{m_{ct}}{m_{dd}} \\times 100\\%$.
+d) Khi hòa tan 10 gam muối vào 90 gam nước cất thu được dung dịch có nồng độ 10%.
+
+PHẦN III. Câu trắc nghiệm trả lời ngắn (6 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 6. Ghi kết quả theo yêu cầu.
+
+Câu 1. Khối lượng mol phân tử (g/mol) của acid H2SO4 là bao nhiêu?
+Câu 2. Số phối tử ammonia (NH3) phối trí xung quanh cation Cu2+ trong phức chất [Cu(NH3)4]2+ là bao nhiêu?
+Câu 3. Nồng độ phần trăm (%) của dung dịch khi hòa tan 20 gam NaOH vào 80 gam nước là bao nhiêu?
+Câu 4. Cho phương trình nhiệt hóa học: N2 + 3H2 ⇌ 2NH3 có $\\Delta_r H^\\circ_{298} = -92 \\text{ kJ}$. Biến thiên enthalpy khi tạo thành 1 mol NH3 là bao nhiêu kJ? (Ghi giá trị số có dấu âm, ví dụ -46).
+Câu 5. Số nguyên tử hydro có trong một phân tử glucose (C6H12O6) là bao nhiêu?
+Câu 6. Hòa tan 5,6 gam Fe trong HCl dư, khối lượng muối FeCl2 thu được là bao nhiêu gam? (Làm tròn đến 1 chữ số thập phân, kết quả là 12,7).
+
+---------------------Hết----------------
+
+ĐÁP ÁN:
+
+PHẦN I: Trắc nghiệm 4 lựa chọn
+| Câu | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Đáp án | B | A | C | B | B | B | B | B | C | A | C | A |
+
+PHẦN II: Trắc nghiệm Đúng / Sai
+| Câu | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| a) | Đ | Đ | Đ | Đ |
+| b) | Đ | Đ | Đ | Đ |
+| c) | Đ | S | S | Đ |
+| d) | S | S | Đ | Đ |
+
+PHẦN III: Trắc nghiệm trả lời ngắn
+| Câu | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| Đáp án | 98 | 4 | 20 | -46 | 12 | 12,7 |
+
+HƯỚNG DẪN GIẢI CHI TIẾT:
+(Mục 14: Công thức và phương trình hóa học trong đáp án và lời giải chi tiết)
+Câu 1: Chọn B. Nhôm sulfate Al2(SO4)3 có $M = 342 \\text{ g/mol}$.
+Câu 2: Chọn A. Phức tetraamminecopper(II) có công thức là [Cu(NH3)4]2+ màu xanh lam thẫm.
+Câu 3: Chọn C. Tăng nồng độ chất phản ứng làm cân bằng chuyển dịch theo chiều thuận tạo NH3.
+Câu 4: Chọn B. Phương trình: Fe + 2HCl → FeCl2 + H2↑. Số mol Fe = 5,6 / 56 = 0,1 mol. Thể tích H2 ở đkc = 0,1 × 24,79 = 2,479 L.
+Câu 5: Chọn B. CaCO3 $\\xrightarrow{t^\\circ}$ CaO + CO2↑ và CO2 + Ca(OH)2 → CaCO3↓ + H2O. Khối lượng CaCO3 = 0,1 × 100 = 10,0 g.
+Câu 6: Chọn B. CH3COOH + CH3-CH2-OH ⇌ CH3COOC2H5 + H2O (ethyl acetate có mùi thơm táo chín).
+Câu 7: Chọn B. C6H12O6 có $M = 6 \\times 12 + 12 \\times 1 + 6 \\times 16 = 180 \\text{ g/mol}$.
+Câu 8: Chọn B. Nguyên tắc an toàn: Rót từ từ acid sulfuric đặc vào nước, không bao giờ làm ngược lại.
+Câu 9: Chọn C. Hằng số tốc độ và hằng số cân bằng phụ thuộc bản chất phản ứng và nhiệt độ hệ.
+Câu 10: Chọn A. Theo định luật tác dụng khối lượng: $[H^+] = \\sqrt{K_a \\cdot C}$ khi độ điện ly $\\alpha \\ll 1$.
+Câu 11: Chọn C. $N(3T) = N_0 \\cdot (1/2)^3 = N_0 / 8 = 12,5\\%$.
+Câu 12: Chọn A. $\\Delta_r H^\\circ_{298} = \\Delta_f H^\\circ(CO_2) + 2 \\Delta_f H^\\circ(H_2O) - \\Delta_f H^\\circ(CH_4) = (-393,5) + 2(-285,8) - (-74,8) = -890,3 \\text{ kJ/mol}$.
+`
   }
 ];
