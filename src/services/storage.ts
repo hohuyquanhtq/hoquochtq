@@ -321,8 +321,51 @@ export const ATTACHED_EXAM_DE5: Exam = {
   updatedAt: new Date().toISOString(),
 };
 
+export const EXAM_HQ50: Exam = {
+  id: 'exam_hq50_standard',
+  title: 'Đề kiểm tra Hóa học 12 chuẩn GDPT 2018 (Mã đề: HQ50)',
+  code: 'HQ50',
+  folderId: 'f_12_chuyen',
+  grade: '12',
+  topic: 'hoa_dai_cuong',
+  durationMinutes: 45,
+  totalQuestions: 10,
+  totalScore: 10.0,
+  questions: [
+    DEFAULT_QUESTIONS[0], // Part 1 - ethylamine (0.5đ)
+    DEFAULT_QUESTIONS[1], // Part 1 - Al2O3 điện phân (0.5đ)
+    DEFAULT_QUESTIONS[2], // Part 1 - ethyl acetate (0.5đ)
+    DEFAULT_QUESTIONS[3], // Part 1 - cân bằng N2 + 3H2 (0.5đ)
+    DEFAULT_QUESTIONS[4], // Part 1 - phức bát diện Co(NH3)6 (0.5đ)
+    DEFAULT_QUESTIONS[5], // Part 2 - ester hóa propyl acetate (2.5đ)
+    DEFAULT_QUESTIONS[6], // Part 2 - pin Daniell Zn-Cu (2.5đ)
+    DEFAULT_QUESTIONS[7], // Part 3 - 4 đồng phân amine (0.83đ)
+    DEFAULT_QUESTIONS[8], // Part 3 - pH = 2.0 (0.83đ)
+    DEFAULT_QUESTIONS[9], // Part 3 - thể tích H2 6.72 lít (0.84đ)
+  ],
+  rules: {
+    part1ScorePerQuestion: 0.5,
+    part2GradingModel: 'standard_moet',
+    part3ScorePerQuestion: 0.833,
+    totalTargetScore: 10.0,
+  },
+  shuffleQuestions: false,
+  shuffleOptions: false,
+  isPublished: true,
+  maxAttempts: 5,
+  showScoreAfterSubmit: true,
+  showAnswersAfterSubmit: true,
+  showSolutionsAfterSubmit: true,
+  allowReviewLater: true,
+  authorId: 'teacher_1',
+  authorName: 'Hồ Ngọc Quốc',
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+};
+
 // Initial Exams
 export const DEFAULT_EXAMS: Exam[] = [
+  EXAM_HQ50,
   ATTACHED_EXAM_DE5,
   {
     id: 'exam_chem12_01',
@@ -590,8 +633,13 @@ export const StorageService = {
       try {
         const list: Exam[] = JSON.parse(saved);
         let changed = false;
+        // Ensure official HQ50 exam exists
+        if (!list.some(e => e.code.toUpperCase() === 'HQ50' || e.id === 'exam_hq50_standard')) {
+          list.unshift(EXAM_HQ50);
+          changed = true;
+        }
         if (!list.some(e => e.id === 'exam_de5_attached')) {
-          list.unshift(ATTACHED_EXAM_DE5);
+          list.push(ATTACHED_EXAM_DE5);
           changed = true;
         }
         list.forEach(e => {
@@ -612,14 +660,97 @@ export const StorageService = {
 
   saveExams(exams: Exam[]): void {
     localStorage.setItem(STORAGE_KEYS.EXAMS, JSON.stringify(exams));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('hqtest_exams_updated', { detail: { count: exams.length } }));
+    }
+  },
+
+  addExam(newExam: Exam): boolean {
+    try {
+      const exams = this.getExams();
+      // Remove any prior exam with exact same id or exact same code to prevent duplicates
+      const filtered = exams.filter(e => e.id !== newExam.id && e.code.toUpperCase() !== newExam.code.toUpperCase());
+      const updated = [newExam, ...filtered];
+      this.saveExams(updated);
+      
+      // Verified readback
+      const check = localStorage.getItem(STORAGE_KEYS.EXAMS);
+      if (!check || !check.includes(newExam.code)) {
+        throw new Error('Không thể xác nhận dữ liệu đã được lưu vào bộ nhớ trình duyệt.');
+      }
+      return true;
+    } catch (err) {
+      console.error('Failed to save exam to storage:', err);
+      return false;
+    }
   },
 
   getExamById(id: string): Exam | undefined {
     return this.getExams().find(e => e.id === id);
   },
 
-  getExamByCode(code: string): Exam | undefined {
-    return this.getExams().find(e => e.code.toUpperCase() === code.trim().toUpperCase());
+  /**
+   * Robust search for exams by Code or ID
+   * Normalizes whitespaces, case, prefixes (#, c/, ?exam=, etc.)
+   */
+  getExamByCode(rawCode: string): Exam | undefined {
+    if (!rawCode || !rawCode.trim()) return undefined;
+    const clean = rawCode.trim().replace(/^(?:#|\/?c\/)/i, '').replace(/[\s\-_]/g, '').toUpperCase();
+    const list = this.getExams();
+    return list.find(e => {
+      const eCode = e.code.trim().replace(/[\s\-_]/g, '').toUpperCase();
+      return eCode === clean || e.id.toLowerCase() === rawCode.trim().toLowerCase() || e.code.toUpperCase() === rawCode.trim().toUpperCase();
+    });
+  },
+
+  /**
+   * Diagnostic lookup detailing status: found, not_found, not_published, not_started, expired
+   */
+  checkExamStatus(rawCode: string): { 
+    exam?: Exam; 
+    status: 'found' | 'not_found' | 'not_published' | 'not_started' | 'expired';
+    message?: string;
+  } {
+    const exam = this.getExamByCode(rawCode);
+    if (!exam) {
+      return { 
+        status: 'not_found', 
+        message: `Không tìm thấy bài thi với mã "${rawCode.trim()}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!` 
+      };
+    }
+
+    if (!exam.isPublished) {
+      return { 
+        exam, 
+        status: 'not_published', 
+        message: `Bài thi "${exam.title}" (Mã: ${exam.code}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.` 
+      };
+    }
+
+    const now = new Date();
+    if (exam.openAt) {
+      const openTime = new Date(exam.openAt);
+      if (now < openTime) {
+        return { 
+          exam, 
+          status: 'not_started', 
+          message: `Bài thi chưa mở. Thời gian bắt đầu: ${openTime.toLocaleString('vi-VN')}` 
+        };
+      }
+    }
+
+    if (exam.closeAt) {
+      const closeTime = new Date(exam.closeAt);
+      if (now > closeTime) {
+        return { 
+          exam, 
+          status: 'expired', 
+          message: `Bài thi đã kết thúc thời hạn làm bài lúc: ${closeTime.toLocaleString('vi-VN')}` 
+        };
+      }
+    }
+
+    return { exam, status: 'found' };
   },
 
   getSubmissions(examId?: string): StudentSubmission[] {

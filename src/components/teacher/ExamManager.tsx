@@ -14,8 +14,10 @@ import {
   AlertCircle,
   ToggleLeft,
   ToggleRight,
-  Sparkles
+  Sparkles,
+  QrCode
 } from 'lucide-react';
+import { ExamShareModal } from '../common/ExamShareModal';
 
 interface ExamManagerProps {
   exams: Exam[];
@@ -37,6 +39,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   onDeleteExam,
 }) => {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard?.writeText(code);
@@ -137,6 +140,16 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                     <span>{isCopied ? 'Đã chép mã!' : `Mã: ${exam.code}`}</span>
                   </button>
 
+                  {/* Share Link & QR Button (Sections V & VI) */}
+                  <button
+                    onClick={() => setActiveShareExam(exam)}
+                    className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5"
+                    title="Lấy link trực tiếp và tạo mã QR cho học sinh"
+                  >
+                    <QrCode className="w-3.5 h-3.5" />
+                    <span>Chia sẻ &amp; QR</span>
+                  </button>
+
                   {/* Student View Preview */}
                   <button
                     onClick={() => onTakeExamAsPreview(exam)}
@@ -174,6 +187,13 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
           })
         )}
       </div>
+
+      {/* Dedicated Exam Share & QR Modal */}
+      <ExamShareModal
+        isOpen={!!activeShareExam}
+        exam={activeShareExam}
+        onClose={() => setActiveShareExam(null)}
+      />
 
     </div>
   );

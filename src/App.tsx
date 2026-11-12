@@ -23,6 +23,7 @@ import { ExamResults } from './components/teacher/ExamResults';
 import { StudentHome } from './components/student/StudentHome';
 import { ExamTaker } from './components/student/ExamTaker';
 import { ExamResultView } from './components/student/ExamResultView';
+import { ExamJoinLanding } from './components/student/ExamJoinLanding';
 
 // Admin Components
 import { AdminDashboard } from './components/admin/AdminDashboard';
@@ -50,6 +51,86 @@ export default function App() {
   const [creatorInitialTitle, setCreatorInitialTitle] = useState<string>('');
   const [creatorInitialGrade, setCreatorInitialGrade] = useState<ChemGrade>('12');
 
+  // Direct Join via link/QR state (Sections V, VI, VII)
+  const [directJoinExam, setDirectJoinExam] = useState<Exam | null>(null);
+
+  // Reload data from storage helper
+  const reloadDataFromStorage = () => {
+    setQuestions(StorageService.getQuestions());
+    setExams(StorageService.getExams());
+    setFolders(StorageService.getFolders());
+    setSubmissions(StorageService.getSubmissions());
+  };
+
+  // URL Routing, QR Scan Detection & Cross-Tab Storage Sync
+  useEffect(() => {
+    const handleStorageUpdate = () => {
+      reloadDataFromStorage();
+    };
+    window.addEventListener('storage', handleStorageUpdate);
+    window.addEventListener('hqtest_exams_updated', handleStorageUpdate);
+
+    // Inspect URL for direct exam links (e.g. /c/HQ50, ?c=HQ50, ?exam=HQ50, #/c/HQ50)
+    const checkUrlForDirectExam = () => {
+      if (typeof window === 'undefined') return;
+
+      const pathname = window.location.pathname;
+      const searchParams = new URLSearchParams(window.location.search);
+      const hash = window.location.hash;
+
+      let targetCode: string | null = null;
+
+      // 1. Path format: /c/:code or /exam/:code
+      const pathMatch = pathname.match(/^\/(?:c|exam)\/([^/?#]+)/i);
+      if (pathMatch && pathMatch[1]) {
+        targetCode = pathMatch[1];
+      } else if (searchParams.get('c')) {
+        targetCode = searchParams.get('c');
+      } else if (searchParams.get('exam')) {
+        targetCode = searchParams.get('exam');
+      } else if (searchParams.get('code')) {
+        targetCode = searchParams.get('code');
+      } else if (hash) {
+        const hashMatch = hash.match(/#\/?(?:c|exam)\/([^/?#]+)/i) || hash.match(/[?&#](?:c|exam|code)=([^&#]+)/i);
+        if (hashMatch && hashMatch[1]) {
+          targetCode = hashMatch[1];
+        }
+      }
+
+      if (targetCode) {
+        const clean = targetCode.trim().replace(/^(?:#|\/?c\/)/i, '').replace(/[\s\-_]/g, '').toUpperCase();
+        const res = StorageService.checkExamStatus(clean);
+
+        if (res.exam) {
+          setDirectJoinExam(res.exam);
+          // Switch to student view for taking exam
+          const studentUser = DEFAULT_USERS.find(u => u.role === 'student') || DEFAULT_USERS[1];
+          setCurrentUser(studentUser);
+          StorageService.setCurrentUser(studentUser);
+          setActiveTab('exam_landing');
+        } else {
+          // Fallback to student home with clear explanation
+          const studentUser = DEFAULT_USERS.find(u => u.role === 'student') || DEFAULT_USERS[1];
+          setCurrentUser(studentUser);
+          StorageService.setCurrentUser(studentUser);
+          setActiveTab('student_home');
+          alert(res.message || `Không tìm thấy bài thi với mã "${clean}". Vui lòng kiểm tra lại liên kết!`);
+        }
+      }
+    };
+
+    checkUrlForDirectExam();
+    window.addEventListener('popstate', checkUrlForDirectExam);
+    window.addEventListener('hashchange', checkUrlForDirectExam);
+
+    return () => {
+      window.removeEventListener('storage', handleStorageUpdate);
+      window.removeEventListener('hqtest_exams_updated', handleStorageUpdate);
+      window.removeEventListener('popstate', checkUrlForDirectExam);
+      window.removeEventListener('hashchange', checkUrlForDirectExam);
+    };
+  }, []);
+
   // Sync state whenever activeTab or role changes
   const handleSwitchUserRole = (role: UserRole) => {
     const targetUser = DEFAULT_USERS.find(u => u.role === role) || DEFAULT_USERS[0];
@@ -63,14 +144,6 @@ export default function App() {
     } else if (role === 'admin') {
       setActiveTab('admin_dashboard');
     }
-  };
-
-  // Reload data from storage helper
-  const reloadDataFromStorage = () => {
-    setQuestions(StorageService.getQuestions());
-    setExams(StorageService.getExams());
-    setFolders(StorageService.getFolders());
-    setSubmissions(StorageService.getSubmissions());
   };
 
   // --- Handlers for Teacher Actions ---
@@ -284,6 +357,26 @@ export default function App() {
                 studentClass={activeStudentClass}
                 onFinishExam={handleFinishExam}
                 onExitWithoutSave={() => setActiveTab('student_home')}
+              />
+            )}
+
+            {activeTab === 'exam_landing' && directJoinExam && (
+              <ExamJoinLanding
+                exam={directJoinExam}
+                currentUser={currentUser}
+                onStartExam={(ex, name, cls) => {
+                  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/c/')) {
+                    window.history.replaceState({}, '', '/');
+                  }
+                  handleStartExam(ex, name, cls);
+                }}
+                onBackToHome={() => {
+                  if (typeof window !== 'undefined' && window.location.pathname.startsWith('/c/')) {
+                    window.history.replaceState({}, '', '/');
+                  }
+                  setDirectJoinExam(null);
+                  setActiveTab('student_home');
+                }}
               />
             )}
 

@@ -10,9 +10,12 @@ import {
   ArrowRight,
   Sparkles,
   FlaskConical,
-  Search
+  Search,
+  QrCode
 } from 'lucide-react';
 import { getUserGreeting, APP_CONFIG } from '../../constants/brand';
+import { StorageService } from '../../services/storage';
+import { ExamShareModal } from '../common/ExamShareModal';
 
 interface StudentHomeProps {
   currentUser: User;
@@ -33,6 +36,7 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
   const [name, setName] = useState(currentUser.name || '');
   const [className, setClassName] = useState(currentUser.className || '');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [shareExam, setShareExam] = useState<Exam | null>(null);
 
   useEffect(() => {
     setName(currentUser.name || '');
@@ -50,18 +54,30 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
       return;
     }
 
-    const found = exams.find(e => e.code.toUpperCase() === examCode.trim().toUpperCase());
-    if (!found) {
-      setErrorMsg(`Không tìm thấy bài thi với mã "${examCode}". Vui lòng kiểm tra lại!`);
+    const cleanCode = examCode.trim().replace(/^(?:#|\/?c\/)/i, '').replace(/[\s\-_]/g, '').toUpperCase();
+    const result = StorageService.checkExamStatus(cleanCode);
+
+    if (result.status === 'not_found' || !result.exam) {
+      setErrorMsg(`Không tìm thấy bài thi với mã "${cleanCode}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!`);
       return;
     }
 
-    if (!found.isPublished) {
-      setErrorMsg('Phòng thi này hiện đang tạm đóng bởi giáo viên.');
+    if (result.status === 'not_published') {
+      setErrorMsg(`Bài thi "${result.exam.title}" (Mã: ${cleanCode}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.`);
       return;
     }
 
-    onStartExam(found, name.trim(), className.trim());
+    if (result.status === 'not_started') {
+      setErrorMsg(result.message || 'Bài thi chưa đến thời gian mở.');
+      return;
+    }
+
+    if (result.status === 'expired') {
+      setErrorMsg(result.message || 'Bài thi đã kết thúc thời hạn làm bài.');
+      return;
+    }
+
+    onStartExam(result.exam, name.trim(), className.trim());
   };
 
   return (
@@ -141,26 +157,36 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Mã bài thi (6 ký tự)</label>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Mã bài thi (Ví dụ: HQ50)</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     required
                     value={examCode}
                     onChange={(e) => setExamCode(e.target.value.toUpperCase())}
-                    placeholder="VD: CHEM12"
+                    placeholder="VD: HQ50 hoặc CHEM12"
                     className="flex-1 p-2.5 rounded-xl border border-slate-200 text-xs font-mono font-bold uppercase focus:ring-2 focus:ring-blue-500 bg-slate-50 text-blue-800"
                   />
-                  {activeExams.length > 0 && (
+                  <div className="flex items-center gap-1 shrink-0">
                     <button
                       type="button"
-                      onClick={() => setExamCode(activeExams[0].code)}
-                      className="px-2.5 py-1 text-[11px] font-bold bg-blue-50 text-blue-700 hover:bg-blue-100 rounded-xl"
-                      title="Nạp nhanh mã đề có sẵn"
+                      onClick={() => setExamCode('HQ50')}
+                      className="px-2.5 py-1 text-[11px] font-bold bg-blue-100 hover:bg-blue-200 text-blue-800 rounded-xl transition-colors"
+                      title="Nạp nhanh mã đề chuẩn HQ50"
                     >
-                      Mẫu
+                      Mã HQ50
                     </button>
-                  )}
+                    {activeExams.length > 0 && activeExams[0].code !== 'HQ50' && (
+                      <button
+                        type="button"
+                        onClick={() => setExamCode(activeExams[0].code)}
+                        className="px-2 py-1 text-[11px] font-bold bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors"
+                        title={`Nạp mã đề ${activeExams[0].code}`}
+                      >
+                        {activeExams[0].code}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -218,13 +244,22 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
 
               <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                 <span className="text-[11px] text-slate-500">Giáo viên: {exam.authorName}</span>
-                <button
-                  onClick={() => onStartExam(exam, name, className)}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5"
-                >
-                  <Play className="w-3.5 h-3.5" />
-                  <span>Vào thi ngay</span>
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setShareExam(exam)}
+                    className="p-2 border border-slate-200 hover:bg-slate-100 rounded-xl text-slate-600 transition-colors"
+                    title="Lấy link & mã QR chia sẻ cho bạn bè"
+                  >
+                    <QrCode className="w-3.5 h-3.5 text-blue-600" />
+                  </button>
+                  <button
+                    onClick={() => onStartExam(exam, name, className)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5"
+                  >
+                    <Play className="w-3.5 h-3.5" />
+                    <span>Vào thi ngay</span>
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -280,6 +315,13 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
           </div>
         )}
       </div>
+
+      {/* Share & QR Modal */}
+      <ExamShareModal
+        isOpen={!!shareExam}
+        exam={shareExam}
+        onClose={() => setShareExam(null)}
+      />
 
     </div>
   );

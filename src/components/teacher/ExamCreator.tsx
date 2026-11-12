@@ -18,6 +18,8 @@ import {
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { APP_CONFIG } from '../../constants/brand';
+import { StorageService } from '../../services/storage';
+import { ExamShareModal } from '../common/ExamShareModal';
 
 interface ExamCreatorProps {
   initialTitle?: string;
@@ -112,6 +114,8 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     }
   };
 
+  const [createdExamForShare, setCreatedExamForShare] = useState<Exam | null>(null);
+
   const handleRemoveQuestion = (id: string) => {
     setQuestions(questions.filter(q => q.id !== id));
   };
@@ -125,18 +129,42 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       alert('Đề thi cần có ít nhất 1 câu hỏi!');
       return;
     }
+
+    let finalPart1Score = part1Score;
+    let finalPart2Model = part2Model;
+    let finalPart2Custom = part2CustomScore;
+    let finalPart3Score = part3Score;
+
+    // Auto-balance if score is not exactly 10.0
     if (!isScoreExactly10) {
-      const proceed = confirm(`CẢNH BÁO: Tổng điểm hiện tại là ${currentTotal} điểm (chưa bằng 10.0 điểm). Bạn có muốn hệ thống tự động cân đối thang điểm về đúng 10.0 trước khi lưu không?`);
-      if (proceed) {
-        handleAutoBalanceScore();
+      const p2Budget = Math.min(4.0, p2Count * 1.0);
+      const remaining = 10.0 - (p2Count > 0 ? p2Budget : 0);
+      const nonP2 = p1Count + p3Count;
+      if (nonP2 > 0) {
+        const base = Math.floor((remaining / nonP2) * 100) / 100;
+        finalPart1Score = base;
+        finalPart3Score = base;
+        const diff = 10.0 - (p1Count * base + p2Budget + p3Count * base);
+        if (p3Count > 0) {
+          finalPart3Score = Math.round((base + (diff / p3Count)) * 100) / 100;
+        }
       }
-      return;
+    }
+
+    // Clean and validate code
+    let cleanCode = (code.trim() || `HQ${Math.floor(10 + Math.random() * 90)}`).replace(/^(?:#|\/?c\/)/i, '').replace(/[\s\-_]/g, '').toUpperCase();
+    
+    // Check if code already belongs to another existing exam
+    const existingExams = StorageService.getExams();
+    const isConflict = existingExams.some(e => e.code.toUpperCase() === cleanCode);
+    if (isConflict) {
+      cleanCode = `${cleanCode}-${Math.floor(10 + Math.random() * 89)}`;
     }
 
     const newExam: Exam = {
       id: `exam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       title: title.trim(),
-      code: code.trim().toUpperCase(),
+      code: cleanCode,
       grade,
       topic,
       folderId: selectedFolderId,
@@ -145,10 +173,10 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       totalScore: 10.0,
       questions,
       rules: {
-        part1ScorePerQuestion: part1Score,
-        part2GradingModel: part2Model,
-        part2CustomScorePerStatement: part2CustomScore,
-        part3ScorePerQuestion: part3Score,
+        part1ScorePerQuestion: finalPart1Score,
+        part2GradingModel: finalPart2Model,
+        part2CustomScorePerStatement: finalPart2Custom,
+        part3ScorePerQuestion: finalPart3Score,
         totalTargetScore: 10.0,
       },
       shuffleQuestions,
@@ -165,7 +193,18 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       updatedAt: new Date().toISOString(),
     };
 
+    // 1. Guaranteed database persistence with verified readback
+    const savedSuccess = StorageService.addExam(newExam);
+    if (!savedSuccess) {
+      alert('Không thể lưu đề thi vào bộ nhớ. Vui lòng kiểm tra dung lượng trình duyệt và thử lại!');
+      return;
+    }
+
+    // 2. Notify parent state
     onSaveExam(newExam);
+
+    // 3. Immediately show the Share & QR Code modal
+    setCreatedExamForShare(newExam);
   };
 
   return (
@@ -550,6 +589,16 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         </div>
 
       </div>
+
+      {/* Share Modal upon Successful Exam Creation */}
+      <ExamShareModal
+        isOpen={!!createdExamForShare}
+        exam={createdExamForShare}
+        onClose={() => {
+          setCreatedExamForShare(null);
+          onCancel(); // Return to manager
+        }}
+      />
 
     </div>
   );

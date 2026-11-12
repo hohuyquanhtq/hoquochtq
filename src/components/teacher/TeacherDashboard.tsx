@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { User, Question, Exam, StudentSubmission } from '../../types';
 import { 
   FileUp, 
@@ -13,9 +13,11 @@ import {
   Sparkles,
   ArrowRight,
   TrendingUp,
-  FlaskConical
+  FlaskConical,
+  QrCode
 } from 'lucide-react';
 import { getUserGreeting, APP_CONFIG } from '../../constants/brand';
+import { ExamShareModal } from '../common/ExamShareModal';
 
 interface TeacherDashboardProps {
   currentUser: User;
@@ -44,6 +46,8 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   const part1Count = questions.filter(q => q.type === 'part1_single_choice').length;
   const part2Count = questions.filter(q => q.type === 'part2_true_false').length;
   const part3Count = questions.filter(q => q.type === 'part3_short_answer').length;
+
+  const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
 
   return (
     <div className="space-y-6">
@@ -193,15 +197,12 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       Xem điểm
                     </button>
                     <button
-                      onClick={() => {
-                        navigator.clipboard?.writeText(exam.code);
-                        alert(`Đã sao chép mã thi: ${exam.code}`);
-                      }}
-                      title="Sao chép mã phòng thi"
-                      className="px-3 py-1.5 rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold flex items-center gap-1 transition-colors"
+                      onClick={() => setActiveShareExam(exam)}
+                      title="Lấy link trực tiếp và tạo mã QR"
+                      className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold flex items-center gap-1 transition-all shadow-2xs"
                     >
-                      <Share2 className="w-3.5 h-3.5" />
-                      Mã: {exam.code}
+                      <QrCode className="w-3.5 h-3.5" />
+                      <span>Chia sẻ &amp; QR</span>
                     </button>
                   </div>
                 </div>
@@ -302,6 +303,13 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
 
       </div>
+
+      {/* Share Modal */}
+      <ExamShareModal
+        isOpen={!!activeShareExam}
+        exam={activeShareExam}
+        onClose={() => setActiveShareExam(null)}
+      />
 
     </div>
   );
