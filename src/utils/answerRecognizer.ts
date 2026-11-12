@@ -1,4 +1,6 @@
 import { Question, QuestionType, AnswerRecognitionItem, RecognitionStatus, RecognitionSource } from '../types';
+import { extractTablesFromText } from './answerExtractionEngine/documentTableReader';
+import { extractAnswersAlgorithmically } from './answerExtractionEngine/algorithmicExtractor';
 
 export interface SectionAnswersMatrix {
   part1: Map<number, { answer: string; source: RecognitionSource; notes?: string }>;
@@ -35,6 +37,48 @@ export function extractComprehensiveAnswerKeys(rawText: string): SectionAnswersM
     part3: new Map(),
     explanations: new Map(),
   };
+
+  // PASS 0: Fast High-Fidelity 2D Table & Matrix Extraction via Answer Extraction Engine
+  try {
+    const tables = extractTablesFromText(rawText);
+    const { part1Items, part2Items, part3Items, detailedSolutions } = extractAnswersAlgorithmically(tables, rawText);
+
+    for (const item of part1Items) {
+      matrix.part1.set(item.questionNumber, {
+        answer: item.correctAnswer,
+        source: item.source || 'answer_table',
+        notes: item.notes || item.sourceSnippet,
+      });
+    }
+
+    for (const item of part2Items) {
+      if (!matrix.part2.has(item.questionNumber)) {
+        matrix.part2.set(item.questionNumber, {
+          statements: {},
+          source: item.source || 'answer_table',
+          notes: item.notes,
+        });
+      }
+      if (item.subQuestion) {
+        matrix.part2.get(item.questionNumber)!.statements[item.subQuestion] = (item.correctAnswer === 'Đ');
+      }
+    }
+
+    for (const item of part3Items) {
+      matrix.part3.set(item.questionNumber, {
+        answer: item.correctAnswer,
+        acceptedAnswers: item.acceptedAnswers || [item.correctAnswer, item.correctAnswer.replace(',', '.'), item.correctAnswer.replace('.', ',')],
+        source: item.source || 'answer_table',
+        notes: item.notes || item.sourceSnippet,
+      });
+    }
+
+    for (const [key, sol] of detailedSolutions.entries()) {
+      matrix.explanations.set(key, sol);
+    }
+  } catch (err) {
+    console.warn('AnswerExtractionEngine pass encountered warning, falling back to line parser:', err);
+  }
 
   const rawLines = rawText.split(/\r?\n/).map(l => cleanTableLine(l)).filter(Boolean);
 

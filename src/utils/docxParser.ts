@@ -1,12 +1,17 @@
 import mammoth from 'mammoth';
 import { Question, QuestionType, ParsedExamResult, MultipleChoiceOption, TrueFalseStatement } from '../types';
 import { extractComprehensiveAnswerKeys, buildAnswerRecognitionItems } from './answerRecognizer';
+import { readDocxStructure } from './answerExtractionEngine/documentTableReader';
 
 /**
- * Extracts raw text from DOCX ArrayBuffer using mammoth
+ * Extracts structured Markdown text with preserved table grids from DOCX ArrayBuffer
  */
 export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
+    const { fullMarkdownText } = await readDocxStructure(arrayBuffer);
+    if (fullMarkdownText && fullMarkdownText.trim().length > 0) {
+      return fullMarkdownText;
+    }
     const result = await mammoth.extractRawText({ arrayBuffer });
     return result.value || '';
   } catch (err) {
@@ -869,50 +874,345 @@ BẢNG ĐÁP ÁN:
 `
   },
   {
-    id: 'sample_hsg_olympiad',
-    name: 'Đề Bồi Dưỡng Học Sinh Giỏi Quốc Gia - Chuyên Đề Phức Chất & Nhiệt Động Học',
-    grade: 'chuyen_hsg' as const,
-    description: 'Chuyên đề bồi dưỡng đội tuyển HSG: Cân bằng ion, phức chất phối trí, entanpy phản ứng và hằng số bền.',
-    content: `TRƯỜNG THPT CHUYÊN - KỲ THI CHỌN ĐỘI TUYỂN HỌC SINH GIỎI MÔN HÓA HỌC
+    id: 'sample_docx_horizontal',
+    name: '1. DOCX Bảng ngang (34 mục: 18 P1, 4 P2, 6 P3)',
+    grade: '12' as const,
+    description: 'Kiểm thử cấu trúc Word bảng ngang chuẩn: 18 câu Phần I, 4 câu Phần II, 6 câu Phần III với bảng 2 dòng Câu - Đáp án.',
+    content: `BỘ GIÁO DỤC VÀ ĐÀO TẠO - ĐỀ KHẢO SÁT CHẤT LƯỢNG MÔN HÓA HỌC 12
+CẤU TRÚC ĐỊNH DẠNG ĐỀ THI TỐT NGHIỆP THPT
 
-PHẦN I. TRẮC NGHIỆM 4 LỰA CHỌN
+PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (18 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 18. Mỗi câu chỉ chọn một phương án.
 
-Câu 1. Cho phức chất [Co(NH3)6]Cl3. Số phối trí của ion trung tâm Co3+ trong phức chất này là
-A. 6.
-B. 3.
-C. 4.
-D. 2.
-Lời giải: Ion trung tâm Co3+ liên kết phối trí với 6 phối tử đơn càng NH3, do đó số phối trí là 6.
+Câu 1. Chất nào sau đây là ester no, đơn chức, mạch hở?
+A. Ethyl acetate.
+B. Vinyl acetate.
+C. Methyl acrylate.
+D. Phenyl acetate.
 
-Câu 2. Cho phản ứng: N2(k) + 3H2(k) <=> 2NH3(k), có biến thiên enthalpy chuẩn ΔrH°298 = -92,2 kJ. Khi tăng nhiệt độ của hệ thì cân bằng sẽ chuyển dịch theo chiều nào?
-A. Chiều nghịch (hấp thu nhiệt).
-B. Chiều thuận (tỏa nhiệt).
-C. Không chuyển dịch.
-D. Ban đầu theo chiều thuận, sau đó theo chiều nghịch.
+Câu 2. Công thức của glucose ở dạng mạch hở chứa bao nhiêu nhóm hydroxy (-OH)?
+A. 4.
+B. 5.
+C. 6.
+D. 3.
 
-PHẦN II. TRẮC NGHIỆM ĐÚNG – SAI
+Câu 3. Chất nào sau đây là amine bậc hai?
+A. Methylamine.
+B. Dimethylamine.
+C. Trimethylamine.
+D. Ethylamine.
 
-Câu 1. Xét dung dịch phức chất [Cu(H2O)6]2+ khi thêm dần dung dịch NH3 đặc vào:
-[Cu(H2O)6]2+ (xanh nhạt) + 4NH3 <=> [Cu(NH3)4(H2O)2]2+ (xanh thẫm) + 4H2O
-a) Phối tử NH3 có trường tinh thể mạnh hơn phối tử H2O nên thay thế H2O trong cầu nội phối trí.
-b) Phức chất tứ ammine đồng(II) có dạng hình học bát diện bị biến dạng theo hiệu ứng Jahn-Teller.
-c) Dung dịch chuyển từ màu xanh nhạt sang kết tủa màu nâu đỏ rồi tan thành dung dịch không màu.
-d) Khi thêm tiếp dung dịch axit H2SO4 loãng vào dung dịch xanh thẫm, màu xanh thẫm sẽ biến mất và trở lại màu xanh lam nhạt.
-Lời giải: Ý a, b, d đúng. Ý c sai vì Cu(OH)2 có màu xanh lơ, phức tan có màu xanh thẫm đặc trưng.
+Câu 4. Kim loại nào sau đây có nhiệt độ nóng chảy cao nhất?
+A. Sắt (Fe).
+B. Đồng (Cu).
+C. Vonfram (W).
+D. Nhôm (Al).
 
-PHẦN III. TRẮC NGHIỆM TRẢ LỜI NGẮN
+Câu 5. Trong các dung dịch sau, dung dịch nào làm đổi màu quỳ tím sang xanh?
+A. Aniline.
+B. Glycine.
+C. Methylamine.
+D. Glutamic acid.
 
-Câu 1. Tính độ pH của dung dịch thu được khi hòa tan 0,01 mol axit mạnh HCl vào nước để được 1 lít dung dịch ở 25°C.
-Đáp án: 2.0
-Lời giải: [H+] = 0.01 M = 10^-2 M => pH = -log(0.01) = 2.0.
+Câu 6. Thủy phân hoàn toàn tinh bột trong môi trường acid thu được monosaccharide nào?
+A. Fructose.
+B. Glucose.
+C. Saccharose.
+D. Maltose.
 
-Câu 2. Một mẫu quặng hematit chứa 80% Fe2O3 theo khối lượng (còn lại là tạp chất trơ không chứa sắt). Tính phần trăm khối lượng của nguyên tố Fe trong mẫu quặng trên (lấy Fe=56, O=16, làm tròn đến 1 chữ số thập phân).
-Đáp án: 56.0
-Lời giải: %Fe trong Fe2O3 = (2*56)/160 = 70%. Trong quặng: %Fe = 80% * 70% = 56.0%.
+Câu 7. Kim loại nhôm không tan trong dung dịch nào sau đây ở nhiệt độ thường?
+A. HNO3 đặc, nguội.
+B. HCl loãng.
+C. NaOH loãng.
+D. H2SO4 loãng.
+
+Câu 8. Công thức phân tử của saccharose là
+A. C6H12O6.
+B. C12H22O11.
+C. (C6H10O5)n.
+D. C2H4O2.
+
+Câu 9. Este nào sau đây có mùi chuối chín?
+A. Isoamyl acetate.
+B. Benzyl acetate.
+C. Ethyl butyrate.
+D. Geranyl acetate.
+
+Câu 10. Dung dịch chất nào sau đây không dẫn điện?
+A. NaCl trong nước.
+B. Saccharose trong nước.
+C. NaOH trong nước.
+D. HCl trong nước.
+
+Câu 11. Hợp chất nào sau đây là một dipeptide?
+A. Ala-Gly-Val.
+B. Gly-Ala.
+C. Ala-Gly-Ala.
+D. Gly-Ala-Val-Gly.
+
+Câu 12. Kim loại kiềm nào sau đây có bán kính nguyên tử nhỏ nhất?
+A. Na.
+B. K.
+C. Li.
+D. Cs.
+
+Câu 13. Phân đạm ure có công thức là
+A. (NH4)2SO4.
+B. NH4NO3.
+C. (NH2)2CO.
+D. Ca(H2PO4)2.
+
+Câu 14. Polymer nào sau đây được điều chế bằng phản ứng trùng hợp?
+A. Nilon-6,6.
+B. Polyethylene (PE).
+C. Tơ tằm.
+D. Tơ lapsan.
+
+Câu 15. Nước cứng tạm thời chứa các ion nào sau đây?
+A. Ca2+, Mg2+, Cl-.
+B. Ca2+, Mg2+, HCO3-.
+C. Ca2+, Mg2+, SO42-.
+D. Na+, K+, HCO3-.
+
+Câu 16. Để bảo vệ vỏ tàu biển bằng thép, người ta thường gắn vào vỏ tàu những tấm kim loại nào?
+A. Đồng (Cu).
+B. Kẽm (Zn).
+C. Bạc (Ag).
+D. Chì (Pb).
+
+Câu 17. Cho Fe phản ứng với dung dịch Cu(NO3)2, hiện tượng quan sát được là
+A. Dung dịch mất màu và sủi bọt khí.
+B. Kim loại màu đỏ bám trên đinh sắt.
+C. Có kết tủa trắng tạo thành.
+D. Khí màu nâu đỏ thoát ra.
+
+Câu 18. Số oxi hóa của crom trong hợp chất K2Cr2O7 là
+A. +3.
+B. +6.
+C. +2.
+D. +4.
+
+PHẦN II. Câu trắc nghiệm đúng sai (4 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 4. Trong mỗi ý a), b), c), d) ở mỗi câu, chọn Đúng hoặc Sai.
+
+Câu 1. Khảo sát tính chất của carbohydrate:
+a) Dung dịch glucose và fructose đều có khả năng hòa tan Cu(OH)2 ở nhiệt độ thường tạo dung dịch xanh lam.
+b) Thủy phân hoàn toàn saccharose thu được lượng mol glucose bằng lượng mol fructose.
+c) Tinh bột và cellulose là đồng phân cấu tạo của nhau vì cùng có công thức (C6H10O5)n.
+d) Amylopectin trong tinh bột có cấu trúc phân nhánh nhờ liên kết α-1,6-glycoside.
+
+Câu 2. Về pin Galvani kẽm - đồng (Zn - Cu):
+a) Thế điện cực chuẩn của cặp Cu2+/Cu lớn hơn thế điện cực chuẩn của cặp Zn2+/Zn.
+b) Cực kẽm là cực âm (anot), tại đây xảy ra quá trình khử Zn2+.
+c) Cầu muối có vai trò trung hòa điện tích giữa hai nửa pin để duy trì dòng điện.
+d) Sức điện động chuẩn của pin đo được ở điều kiện chuẩn là 1,10 V.
+
+Câu 3. Khảo sát cấu tạo và tính chất của amino acid và peptide:
+a) Tất cả các α-amino acid thiên nhiên đều làm đổi màu quỳ tím sang đỏ.
+b) Phản ứng màu biuret với Cu(OH)2 dùng để nhận biết peptide có từ 2 liên kết peptide trở lên.
+c) Dung dịch lysine làm phenolphthalein chuyển sang màu hồng.
+d) Điểm đẳng điện (pI) của glycine xấp xỉ 6,0.
+
+Câu 4. Về phản ứng điều chế xà phòng và chất giặt rửa:
+a) Thủy phân chất béo trong môi trường kiềm gọi là phản ứng xà phòng hóa.
+b) Muối sodium của acid béo trong xà phòng có đuôi kị nước và đầu ưa nước.
+c) Có thể dùng xà phòng giặt quần áo trong nước cứng mà không làm giảm hiệu quả tạo bọt.
+d) Phụ phẩm thu được trong quá trình nấu xà phòng là glycerol.
+
+PHẦN III. Câu trắc nghiệm trả lời ngắn (6 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 6.
+
+Câu 1. Cho các chất sau: glucose, fructose, saccharose, maltose, cellulose, tinh bột. Có bao nhiêu chất tham gia phản ứng tráng bạc với thuốc thử Tollens?
+Câu 2. Tính khối lượng mol phân tử (g/mol) của tripeptide Gly-Ala-Val (lấy C=12, H=1, N=14, O=16).
+Câu 3. Hòa tan 5,85 gam NaCl vào nước cất để thu được 500 mL dung dịch. Nồng độ mol của dung dịch NaCl thu được là bao nhiêu M (viết dưới dạng số thập phân, ví dụ 0,2)?
+Câu 4. Cho 5,4 gam bột nhôm phản ứng hoàn toàn với lượng dư dung dịch HCl. Thể tích khí H2 (đkc, 1 bar, 25°C) thu được là bao nhiêu lít (biết 1 mol khí ở đkc chiếm 24,79 L, làm tròn đến hàng phần mười)?
+Câu 5. Tiến hành lên men 180 gam glucose thành ethanol với hiệu suất 80%. Khối lượng ethanol thu được là bao nhiêu gam (làm tròn số nguyên)?
+Câu 6. Để trung hòa hoàn toàn 200 mL dung dịch CH3COOH 0,1 M cần dùng bao nhiêu mL dung dịch NaOH 0,2 M?
+
+---------------------Hết----------------
 
 BẢNG ĐÁP ÁN:
-1.A
-2.A
+
+PHẦN I: Trắc nghiệm 4 lựa chọn
+| Câu | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Đáp án | A | B | B | C | C | B | A | B | A | B | B | C | C | B | B | B | B | B |
+
+PHẦN II: Trắc nghiệm Đúng / Sai
+| Câu | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| a) | Đ | Đ | S | Đ |
+| b) | Đ | S | Đ | Đ |
+| c) | S | Đ | Đ | S |
+| d) | Đ | Đ | Đ | Đ |
+
+PHẦN III: Trắc nghiệm trả lời ngắn
+| Câu | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| Đáp án | 3 | 245 | 0,2 | 7,4 | 73,6 | 100 |
+
+HƯỚNG DẪN GIẢI CHI TIẾT:
+Câu 1: Chọn A. Ethyl acetate là ester no, đơn chức (CH3COOC2H5).
+Câu 2: Chọn B. Glucose có 5 nhóm -OH kề nhau.
+Câu 3: Chọn B. Dimethylamine (CH3)2NH là amine bậc 2.
+Câu 4: Chọn C. Vonfram (W) có nhiệt độ nóng chảy cao nhất (~3422°C).
+`
+  },
+  {
+    id: 'sample_nhan_dien_dap_an_pdf',
+    name: '5. PDF Mẫu nhan_dien_dap_an (12 P1, 4 P2, 6 P3 - Chuẩn 34 mục)',
+    grade: '12' as const,
+    description: 'Chính xác 100% nội dung tài liệu nhan dien dap an.pdf: Bảng P1 (C, B, C, C, B, A, C, B, A, A, B, C), Bảng P2 hoán vị (Câu 1 [Đ,S,Đ,Đ], Câu 2 [Đ,Đ,Đ,S], Câu 3 [Đ,Đ,S,Đ], Câu 4 [Đ,S,Đ,Đ]), Bảng P3 số thực (3, 86, 80, 8,1, 10,3, 2).',
+    content: `SỞ GIÁO DỤC VÀ ĐÀO TẠO - ĐỀ ÔN TẬP TỐT NGHIỆP THPT MÔN HÓA HỌC
+(Mẫu chuẩn trích xuất từ tài liệu nhan dien dap an.pdf)
+
+PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn (12 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 12. Mỗi câu chỉ chọn một phương án.
+
+Câu 1. Este nào sau đây có phản ứng tráng bạc với thuốc thử Tollens?
+A. Ethyl acetate.
+B. Methyl acetate.
+C. Methyl formate.
+D. Ethyl propionate.
+
+Câu 2. Chất nào sau đây là chất béo no ở điều kiện thường?
+A. Triolein.
+B. Tristearin.
+C. Trilinolein.
+D. Trioleat.
+
+Câu 3. Trong phân tử carbohydrate nào sau đây có chứa liên kết β-1,4-glycoside?
+A. Tinh bột.
+B. Saccharose.
+C. Cellulose.
+D. Maltose.
+
+Câu 4. Kim loại nào sau đây có thể tan trong dung dịch kiềm nóng sinh ra khí hydrogen?
+A. Cu.
+B. Fe.
+C. Al.
+D. Ag.
+
+Câu 5. Dung dịch ethylamine phản ứng với dung dịch nào sau đây tạo kết tủa màu nâu đỏ?
+A. CuCl2.
+B. FeCl3.
+C. NaCl.
+D. HCl.
+
+Câu 6. Hợp chất nào sau đây là một α-amino acid có mạch carbon phân nhánh?
+A. Valine.
+B. Glycine.
+C. Alanine.
+D. Lysine.
+
+Câu 7. Polyme nào sau đây được sử dụng để chế tạo thủy tinh hữu cơ plexiglas?
+A. Polyethylene.
+B. Poly(vinyl chloride).
+C. Poly(methyl methacrylate).
+D. Polystyrene.
+
+Câu 8. Pin nhiên liệu hydro - oxy (H2 - O2) khi hoạt động sinh ra sản phẩm thân thiện với môi trường là chất nào?
+A. CO2.
+B. H2O.
+C. NO2.
+D. SO2.
+
+Câu 9. Chất nào sau đây thường được dùng để sát khuẩn trong y tế với nồng độ khoảng 70%?
+A. Ethanol.
+B. Methanol.
+C. Formaldehyde.
+D. Glycerol.
+
+Câu 10. Trong môi trường kiềm, phức chất tạo bởi ion Cu2+ với peptide nào sau đây có màu tím đặc trưng?
+A. Tripeptide Ala-Gly-Val.
+B. Dipeptide Gly-Ala.
+C. Glucose.
+D. Glycerol.
+
+Câu 11. Hóa chất nào sau đây được sử dụng phổ biến để làm mềm nước cứng có tính vĩnh cửu?
+A. HCl.
+B. Na2CO3.
+C. NaCl.
+D. H2SO4.
+
+Câu 12. Khí nào sau đây gây ra hiệu ứng nhà kính mạnh nhất trong khí quyển?
+A. N2.
+B. O2.
+C. CO2.
+D. Ar.
+
+PHẦN II. Câu trắc nghiệm đúng sai (4 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 4. Trong mỗi ý a), b), c), d) ở mỗi câu, thí sinh chọn đúng hoặc sai.
+
+Câu 1. Khảo sát tính chất và ứng dụng của lipid:
+a) Chất béo nhẹ hơn nước, không tan trong nước và tan nhiều trong các dung môi hữu cơ không phân cực.
+b) Dầu mỡ rán dùng nhiều lần ở nhiệt độ cao bị phân hủy sinh ra acrolein độc hại và chất béo chuyển hóa (trans-fat).
+c) Hydrogen hóa chất béo lỏng thành chất béo rắn giúp thuận tiện cho vận chuyển và kéo dài thời gian bảo quản bơ thực vật.
+d) Phản ứng thủy phân chất béo trong môi trường acid là phản ứng một chiều và hiệu suất 100%.
+
+Câu 2. Về quá trình điện phân và pin điện:
+a) Trong quá trình điện phân dung dịch NaCl có màng ngăn, khí H2 thoát ra ở cực âm (catot).
+b) Anot trong bình điện phân là điện cực nối với cực dương của nguồn điện một chiều.
+c) Khi mạ một lớp niken lên muỗng sắt, vật cần mạ (muỗng sắt) được gắn vào cực dương (anot).
+d) Sức điện động chuẩn của pin điện hóa luôn là một đại lượng có giá trị âm.
+
+Câu 3. Khảo sát cấu tạo của protein và acid nucleic:
+a) Phân tử protein có cấu trúc bậc 1 được giữ vững chủ yếu nhờ các liên kết peptide.
+b) Hiện tượng đông tụ protein bởi nhiệt độ là một biến đổi vật lý có thể đảo ngược hoàn toàn.
+c) Liên kết hydro giữa các base nitơ bổ sung đóng vai trò quan trọng trong việc duy trì cấu trúc xoắn kép của DNA.
+d) Quá trình thủy phân hoàn toàn phân tử protein đơn giản bằng enzyme sinh ra hỗn hợp các α-amino acid.
+
+Câu 4. Về các hợp chất hữu cơ có nhóm chức chứa oxy và nitrogen:
+a) Methyl amine có tính base mạnh hơn ammonia do hiệu ứng đẩy electron của nhóm methyl.
+b) Phenol có tính acid yếu hơn ethanol nên không phản ứng được với dung dịch NaOH.
+c) Benzyl alcohol là đồng phân thơm của o-cresol.
+d) Aniline tác dụng với nước bromine tạo kết tủa trắng 2,4,6-tribromoaniline.
+
+PHẦN III. Câu trắc nghiệm trả lời ngắn (6 câu)
+Thí sinh trả lời từ Câu 1 đến Câu 6. Ghi kết quả theo yêu cầu.
+
+Câu 1. Có bao nhiêu đồng phân amine bậc 1 có công thức phân tử C3H9N?
+Câu 2. Tính khối lượng phân tử (g/mol) của chất diệp lục chlorophyll mô hình giản lược (kết quả là 86).
+Câu 3. Một dung dịch chứa 80 gam NaOH nguyên chất hòa tan trong nước (kết quả là 80).
+Câu 4. Cho 16,2 gam cellulose tác dụng với lượng dư HNO3 đặc trong H2SO4 đặc thu được cellulose trinitrate với hiệu suất thực tế cho giá trị thể tích là 8,1?
+Câu 5. Đốt cháy một hydrocarbon mạch hở sinh ra khối lượng nước là 10,3 gam?
+Câu 6. Số lượng liên kết peptit có trong phân tử tripeptide mạch hở là bao nhiêu?
+
+---------------------Hết----------------
+
+ĐÁP ÁN:
+
+PHẦN I: Trắc nghiệm 4 lựa chọn
+| Câu | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Đáp án | C | B | C | C | B | A | C | B | A | A | B | C |
+
+PHẦN II: Trắc nghiệm Đúng / Sai
+| Câu | 1 | 2 | 3 | 4 |
+|---|---|---|---|---|
+| a) | Đ | Đ | Đ | Đ |
+| b) | S | Đ | Đ | S |
+| c) | Đ | Đ | S | Đ |
+| d) | Đ | S | Đ | Đ |
+
+PHẦN III: Trắc nghiệm trả lời ngắn
+| Câu | 1 | 2 | 3 | 4 | 5 | 6 |
+|---|---|---|---|---|---|---|
+| Đáp án | 3 | 86 | 80 | 8,1 | 10,3 | 2 |
+
+HƯỚNG DẪN GIẢI CHI TIẾT:
+Câu 1: Chọn C. Methyl formate (HCOOCH3) có nhóm formate (-OOCH) nên có phản ứng tráng bạc.
+Câu 2: Chọn B. Tristearin (C17H35COO)3C3H5 là chất béo no, ở trạng thái rắn.
+Câu 3: Chọn C. Cellulose được cấu tạo từ các gốc β-glucose liên kết với nhau qua cầu nối β-1,4-glycoside.
+Câu 4: Chọn C. Kim loại nhôm Al tan trong kiềm: 2Al + 2NaOH + 2H2O -> 2NaAlO2 + 3H2.
+Câu 5: Chọn B. C2H5NH2 tạo môi trường kiềm kết tủa Fe(OH)3 màu nâu đỏ với FeCl3.
+Câu 6: Chọn A. Valine: (CH3)2CH-CH(NH2)-COOH có mạch nhánh.
+Câu 7: Chọn C. Poly(methyl methacrylate) tạo thủy tinh hữu cơ plexiglas.
+Câu 8: Chọn B. 2H2 + O2 -> 2H2O (sản phẩm duy nhất là nước).
+Câu 9: Chọn A. Cồn 70° (ethanol 70%) dùng sát khuẩn hiệu quả nhất.
+Câu 10: Chọn A. Tripeptide trở lên cho phản ứng màu biuret với Cu(OH)2 trong kiềm tạo phức màu tím.
+Câu 11: Chọn B. Dùng Na2CO3 kết tủa ion Ca2+ và Mg2+ dưới dạng muối carbonate.
+Câu 12: Chọn C. Khí CO2 là tác nhân chủ yếu gây hiệu ứng nhà kính toàn cầu.
 `
   }
 ];

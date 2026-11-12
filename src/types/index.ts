@@ -89,7 +89,7 @@ export interface Question {
   parseStatus?: 'verified' | 'needs_review' | 'error';
   parseWarning?: string;
   teacherVerified?: boolean;
-  recognitionSource?: 'answer_table' | 'question_content' | 'detailed_solution' | 'manual';
+  recognitionSource?: RecognitionSource;
 }
 
 export interface Folder {
@@ -222,7 +222,7 @@ export interface ExamStatistics {
 }
 
 export type RecognitionStatus = 'verified' | 'needs_review' | 'not_found' | 'conflicted';
-export type RecognitionSource = 'answer_table' | 'question_content' | 'detailed_solution' | 'manual';
+export type RecognitionSource = 'answer_table' | 'question_content' | 'detailed_solution' | 'manual' | 'table' | 'text' | 'gemini_ai';
 
 export interface AnswerRecognitionItem {
   id: string; // e.g. "I.1", "II.1a", "III.1"
@@ -238,6 +238,7 @@ export interface AnswerRecognitionItem {
   recognitionSource: RecognitionSource;
   teacherVerified: boolean;
   notes?: string;
+  validationIssues?: string[];
 }
 
 export interface ParsedExamResult {
@@ -262,4 +263,5 @@ export interface ParsedExamResult {
   part3FoundCount: number;
   part3TotalCount: number;
   allAnswersVerified: boolean;
+  successRatePercent?: number;
 }
