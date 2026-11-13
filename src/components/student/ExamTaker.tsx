@@ -32,15 +32,17 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   onFinishExam,
   onExitWithoutSave,
 }) => {
+  const safeQuestions = Array.isArray(exam?.questions) ? exam.questions : [];
+
   // Local storage auto-save key
-  const storageKey = `chemtest_progress_${exam.id}_${studentName.replace(/\s+/g, '_')}`;
+  const storageKey = `chemtest_progress_${exam?.id || 'unknown'}_${(studentName || 'student').replace(/\s+/g, '_')}`;
 
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, StudentAnswer>>({});
   const [startedAt] = useState<string>(() => new Date().toISOString());
   
   // Timer state (seconds)
-  const [timeLeftSeconds, setTimeLeftSeconds] = useState(exam.durationMinutes * 60);
+  const [timeLeftSeconds, setTimeLeftSeconds] = useState((exam?.durationMinutes || 45) * 60);
   const [tabSwitchesCount, setTabSwitchesCount] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
@@ -48,25 +50,29 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
 
   // Restore saved state from localStorage if available
   useEffect(() => {
-    const saved = localStorage.getItem(storageKey);
-    if (saved) {
-      try {
+    try {
+      const saved = typeof window !== 'undefined' && window.localStorage ? window.localStorage.getItem(storageKey) : null;
+      if (saved) {
         const parsed = JSON.parse(saved);
         if (parsed.answers) setAnswers(parsed.answers);
         if (parsed.timeLeftSeconds && parsed.timeLeftSeconds > 5) {
           setTimeLeftSeconds(parsed.timeLeftSeconds);
         }
-      } catch {}
-    }
+      }
+    } catch {}
   }, [storageKey]);
 
   // Auto-save answers whenever they change
   useEffect(() => {
-    localStorage.setItem(storageKey, JSON.stringify({
-      answers,
-      timeLeftSeconds,
-      timestamp: Date.now(),
-    }));
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(storageKey, JSON.stringify({
+          answers,
+          timeLeftSeconds,
+          timestamp: Date.now(),
+        }));
+      }
+    } catch {}
   }, [answers, timeLeftSeconds, storageKey]);
 
   // Anti-cheat tab switch monitoring
@@ -82,6 +88,7 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
 
   // Countdown timer
   useEffect(() => {
+    if (safeQuestions.length === 0) return;
     const timer = setInterval(() => {
       setTimeLeftSeconds(prev => {
         if (prev <= 1) {
@@ -94,12 +101,13 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, []);
+  }, [safeQuestions.length]);
 
-  const currentQuestion = exam.questions[currentIndex];
-  const currentAnswer = answers[currentQuestion?.id] || {
-    questionId: currentQuestion?.id,
-    questionType: currentQuestion?.type,
+  const safeIndex = safeQuestions.length > 0 ? Math.min(currentIndex, safeQuestions.length - 1) : 0;
+  const currentQuestion = safeQuestions[safeIndex];
+  const currentAnswer = (currentQuestion && answers[currentQuestion.id]) || {
+    questionId: currentQuestion?.id || '',
+    questionType: currentQuestion?.type || 'part1_single_choice',
   };
 
   const handleSelectOption = (optionId: string) => {
@@ -145,12 +153,13 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   };
 
   const toggleFlag = (questionId: string) => {
+    const foundQ = safeQuestions.find(q => q.id === questionId);
     setAnswers(prev => ({
       ...prev,
       [questionId]: {
         ...prev[questionId],
         questionId,
-        questionType: exam.questions.find(q => q.id === questionId)!.type,
+        questionType: foundQ?.type || 'part1_single_choice',
         isMarkedForReview: !prev[questionId]?.isMarkedForReview,
       },
     }));
@@ -169,8 +178,12 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
       });
     } catch {}
 
-    // Clean up local progress
-    localStorage.removeItem(storageKey);
+    // Clean up local progress safely
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(storageKey);
+      }
+    } catch {}
 
     const submission = gradeSubmission(
       exam,
@@ -196,7 +209,7 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   const isUrgent = timeLeftSeconds < 300; // Under 5 mins
 
   // Count answered questions
-  const answeredCount = exam.questions.filter(q => {
+  const answeredCount = safeQuestions.filter(q => {
     const a = answers[q.id];
     if (!a) return false;
     if (q.type === 'part1_single_choice') return !!a.selectedOptionId;
@@ -204,6 +217,31 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
     if (q.type === 'part3_short_answer') return !!a.textAnswer && a.textAnswer.trim().length > 0;
     return false;
   }).length;
+
+  if (!exam || safeQuestions.length === 0 || !currentQuestion) {
+    return (
+      <div className="max-w-xl mx-auto py-12 px-4">
+        <div className="bg-white border border-slate-200 rounded-3xl shadow-xl p-8 text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-600 flex items-center justify-center mx-auto">
+            <AlertCircle className="w-6 h-6" />
+          </div>
+          <h2 className="text-lg font-extrabold text-slate-900">
+            Không thể hiển thị nội dung câu hỏi
+          </h2>
+          <p className="text-xs text-slate-600 leading-relaxed">
+            Đề thi này chưa có câu hỏi hợp lệ hoặc dữ liệu đang được cập nhật. Vui lòng quay lại và kiểm tra lại với giáo viên.
+          </p>
+          <button
+            type="button"
+            onClick={onExitWithoutSave}
+            className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20"
+          >
+            Quay về trang chủ
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl mx-auto space-y-4 pb-12">

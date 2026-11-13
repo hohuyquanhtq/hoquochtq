@@ -1,7 +1,7 @@
 import { User, Question, Exam, Folder, StudentSubmission } from '../types';
 import { parseExamContent, SAMPLE_CHEMISTRY_EXAMS } from '../utils/docxParser';
 import { normalizeExamCode, normalizeExamCodeCompact } from '../utils/urlHelper';
-import { fetchPublicExamFromFirestore, sanitizeExamForStudent } from './firebase';
+import { fetchPublicExamFromFirestore, sanitizeExamForStudent, CloudExamLookupStatus } from './firebase';
 
 const STORAGE_KEYS = {
   CURRENT_USER: 'chemtest_current_user',
@@ -11,6 +11,32 @@ const STORAGE_KEYS = {
   SUBMISSIONS: 'chemtest_submissions',
   CLASSES: 'chemtest_classes',
 };
+
+const memoryStorageFallback = new Map<string, string>();
+
+function safeGetStorageItem(key: string): string | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage.getItem(key);
+    }
+  } catch {
+    // Fallback below when localStorage is blocked (e.g., strict privacy/incognito iframe)
+  }
+  return memoryStorageFallback.get(key) ?? null;
+}
+
+function safeSetStorageItem(key: string, value: string): boolean {
+  memoryStorageFallback.set(key, value);
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      window.localStorage.setItem(key, value);
+      return true;
+    }
+  } catch (err) {
+    console.warn(`[HQTest Storage] Không thể ghi localStorage (${key}), dùng bộ nhớ tạm:`, err);
+  }
+  return false;
+}
 
 // Initial Demo Users
 export const DEFAULT_USERS: User[] = [
@@ -550,17 +576,19 @@ export const DEFAULT_SUBMISSIONS: StudentSubmission[] = [
  */
 export const StorageService = {
   getCurrentUser(): User {
-    const saved = localStorage.getItem(STORAGE_KEYS.CURRENT_USER);
+    const saved = safeGetStorageItem(STORAGE_KEYS.CURRENT_USER);
     if (saved) {
       try {
         const u: User = JSON.parse(saved);
-        if (u.name && u.name.includes('Nguyễn Hoàng Long')) {
-          u.name = 'Hồ Ngọc Quốc';
-          u.school = 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng';
-          u.email = 'quochn@chuyennguyenbinhkhiem.edu.vn';
-          this.setCurrentUser(u);
+        if (u && typeof u === 'object' && u.role) {
+          if (u.name && u.name.includes('Nguyễn Hoàng Long')) {
+            u.name = 'Hồ Ngọc Quốc';
+            u.school = 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng';
+            u.email = 'quochn@chuyennguyenbinhkhiem.edu.vn';
+            this.setCurrentUser(u);
+          }
+          return u;
         }
-        return u;
       } catch {
         // fallback
       }
@@ -569,20 +597,22 @@ export const StorageService = {
   },
 
   setCurrentUser(user: User): void {
-    localStorage.setItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+    safeSetStorageItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
   },
 
   getQuestions(): Question[] {
-    const saved = localStorage.getItem(STORAGE_KEYS.QUESTIONS);
+    const saved = safeGetStorageItem(STORAGE_KEYS.QUESTIONS);
     if (saved) {
       try {
-        const list: Question[] = JSON.parse(saved);
-        if (!list.some(q => q.code?.includes('P1_C1') || q.content?.includes('methyl salicylate'))) {
-          const merged = [...parsedDe5.questions, ...list];
-          this.saveQuestions(merged);
-          return merged;
+        const list = JSON.parse(saved);
+        if (Array.isArray(list)) {
+          if (!list.some(q => q?.code?.includes('P1_C1') || q?.content?.includes('methyl salicylate'))) {
+            const merged = [...parsedDe5.questions, ...list];
+            this.saveQuestions(merged);
+            return merged;
+          }
+          return list;
         }
-        return list;
       } catch {}
     }
     const initialList = [...parsedDe5.questions, ...DEFAULT_QUESTIONS];
@@ -591,7 +621,7 @@ export const StorageService = {
   },
 
   saveQuestions(questions: Question[]): void {
-    localStorage.setItem(STORAGE_KEYS.QUESTIONS, JSON.stringify(questions));
+    safeSetStorageItem(STORAGE_KEYS.QUESTIONS, JSON.stringify(questions));
   },
 
   addQuestion(question: Question): void {
@@ -615,10 +645,11 @@ export const StorageService = {
   },
 
   getFolders(): Folder[] {
-    const saved = localStorage.getItem(STORAGE_KEYS.FOLDERS);
+    const saved = safeGetStorageItem(STORAGE_KEYS.FOLDERS);
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
       } catch {}
     }
     this.saveFolders(DEFAULT_FOLDERS);
@@ -626,34 +657,37 @@ export const StorageService = {
   },
 
   saveFolders(folders: Folder[]): void {
-    localStorage.setItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders));
+    safeSetStorageItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders));
   },
 
   getExams(): Exam[] {
-    const saved = localStorage.getItem(STORAGE_KEYS.EXAMS);
+    const saved = safeGetStorageItem(STORAGE_KEYS.EXAMS);
     if (saved) {
       try {
-        const list: Exam[] = JSON.parse(saved);
-        let changed = false;
-        // Ensure official HQ50 exam exists
-        if (!list.some(e => e.code.toUpperCase() === 'HQ50' || e.id === 'exam_hq50_standard')) {
-          list.unshift(EXAM_HQ50);
-          changed = true;
-        }
-        if (!list.some(e => e.id === 'exam_de5_attached')) {
-          list.push(ATTACHED_EXAM_DE5);
-          changed = true;
-        }
-        list.forEach(e => {
-          if (e.authorName && e.authorName.includes('Nguyễn Hoàng Long')) {
-            e.authorName = 'Hồ Ngọc Quốc';
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          const list: Exam[] = parsed.filter((e): e is Exam => !!e && typeof e === 'object' && !!e.id);
+          let changed = list.length !== parsed.length;
+          // Ensure official HQ50 exam exists
+          if (!list.some(e => (e.code || '').toUpperCase() === 'HQ50' || e.id === 'exam_hq50_standard')) {
+            list.unshift(EXAM_HQ50);
             changed = true;
           }
-        });
-        if (changed) {
-          this.saveExams(list);
+          if (!list.some(e => e.id === 'exam_de5_attached')) {
+            list.push(ATTACHED_EXAM_DE5);
+            changed = true;
+          }
+          list.forEach(e => {
+            if (e.authorName && e.authorName.includes('Nguyễn Hoàng Long')) {
+              e.authorName = 'Hồ Ngọc Quốc';
+              changed = true;
+            }
+          });
+          if (changed) {
+            this.saveExams(list);
+          }
+          return list;
         }
-        return list;
       } catch {}
     }
     this.saveExams(DEFAULT_EXAMS);
@@ -661,7 +695,7 @@ export const StorageService = {
   },
 
   saveExams(exams: Exam[]): void {
-    localStorage.setItem(STORAGE_KEYS.EXAMS, JSON.stringify(exams));
+    safeSetStorageItem(STORAGE_KEYS.EXAMS, JSON.stringify(exams));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('hqtest_exams_updated', { detail: { count: exams.length } }));
     }
@@ -671,12 +705,18 @@ export const StorageService = {
     try {
       const exams = this.getExams();
       // Remove any prior exam with exact same id or exact same code to prevent duplicates
-      const filtered = exams.filter(e => e.id !== newExam.id && e.code.toUpperCase() !== newExam.code.toUpperCase());
+      const newCodeUpper = (newExam.code || '').toUpperCase();
+      const filtered = exams.filter(e => e.id !== newExam.id && (e.code || '').toUpperCase() !== newCodeUpper);
       const updated = [newExam, ...filtered];
-      this.saveExams(updated);
-      
-      // Verified readback
-      const check = localStorage.getItem(STORAGE_KEYS.EXAMS);
+      const savedOk = safeSetStorageItem(STORAGE_KEYS.EXAMS, JSON.stringify(updated));
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('hqtest_exams_updated', { detail: { count: updated.length } }));
+      }
+      if (!savedOk) {
+        return true; // Still saved in memoryStorageFallback for current session
+      }
+      // Verified readback when localStorage is writable
+      const check = safeGetStorageItem(STORAGE_KEYS.EXAMS);
       if (!check || !check.includes(newExam.code)) {
         throw new Error('Không thể xác nhận dữ liệu đã được lưu vào bộ nhớ trình duyệt.');
       }
@@ -701,12 +741,12 @@ export const StorageService = {
     const compact = normalizeExamCodeCompact(rawCode);
     const list = this.getExams();
     return list.find(e => {
-      const eNorm = normalizeExamCode(e.code);
-      const eCompact = normalizeExamCodeCompact(e.code);
+      const eNorm = normalizeExamCode(e.code || '');
+      const eCompact = normalizeExamCodeCompact(e.code || '');
       return (
-        eNorm === normalized ||
-        eCompact === compact ||
-        e.id.toLowerCase() === rawCode.trim().toLowerCase()
+        (normalized && eNorm === normalized) ||
+        (compact && eCompact === compact) ||
+        (e.id || '').toLowerCase() === rawCode.trim().toLowerCase()
       );
     });
   },
@@ -714,24 +754,24 @@ export const StorageService = {
   /**
    * Diagnostic lookup detailing status: found, not_found, not_published, not_started, expired
    */
-  checkExamStatus(rawCode: string): { 
-    exam?: Exam; 
+  checkExamStatus(rawCode: string): {
+    exam?: Exam;
     status: 'found' | 'not_found' | 'not_published' | 'not_started' | 'expired';
     message?: string;
   } {
     const exam = this.getExamByCode(rawCode);
     if (!exam) {
-      return { 
-        status: 'not_found', 
-        message: `Không tìm thấy bài thi với mã "${normalizeExamCode(rawCode) || rawCode.trim()}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!` 
+      return {
+        status: 'not_found',
+        message: `Không tìm thấy bài thi với mã "${normalizeExamCode(rawCode) || rawCode.trim()}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!`,
       };
     }
 
     if (!exam.isPublished) {
-      return { 
-        exam: sanitizeExamForStudent(exam), 
-        status: 'not_published', 
-        message: `Bài thi "${exam.title}" (Mã: ${exam.code}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.` 
+      return {
+        exam: sanitizeExamForStudent(exam),
+        status: 'not_published',
+        message: `Bài thi "${exam.title}" (Mã: ${exam.code}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.`,
       };
     }
 
@@ -739,10 +779,10 @@ export const StorageService = {
     if (exam.openAt) {
       const openTime = new Date(exam.openAt);
       if (!isNaN(openTime.getTime()) && now < openTime) {
-        return { 
-          exam: sanitizeExamForStudent(exam), 
-          status: 'not_started', 
-          message: `Bài thi chưa mở. Thời gian bắt đầu: ${openTime.toLocaleString('vi-VN')}` 
+        return {
+          exam: sanitizeExamForStudent(exam),
+          status: 'not_started',
+          message: `Bài thi chưa mở. Thời gian bắt đầu: ${openTime.toLocaleString('vi-VN')}`,
         };
       }
     }
@@ -750,10 +790,10 @@ export const StorageService = {
     if (exam.closeAt) {
       const closeTime = new Date(exam.closeAt);
       if (!isNaN(closeTime.getTime()) && now > closeTime) {
-        return { 
-          exam: sanitizeExamForStudent(exam), 
-          status: 'expired', 
-          message: `Bài thi đã kết thúc thời hạn làm bài lúc: ${closeTime.toLocaleString('vi-VN')}` 
+        return {
+          exam: sanitizeExamForStudent(exam),
+          status: 'expired',
+          message: `Bài thi đã kết thúc thời hạn làm bài lúc: ${closeTime.toLocaleString('vi-VN')}`,
         };
       }
     }
@@ -763,41 +803,78 @@ export const StorageService = {
 
   /**
    * Cross-device student-safe exam lookup: checks Firestore cloud projection first
-   * (with stripped answers/solutions), then falls back to local/built-in exams (also sanitized).
+   * (with stripped answers/solutions), then falls back to local/built-in exams (also sanitized),
+   * while preserving explicit network/permission/unexpected errors instead of masking them.
    */
   async checkExamStatusAsync(rawCode: string): Promise<{
     exam?: Exam;
     ownerId?: string;
     source: 'cloud' | 'local';
-    status: 'found' | 'not_found' | 'not_published' | 'not_started' | 'expired';
+    status: CloudExamLookupStatus;
     message?: string;
   }> {
-    const cloudResult = await fetchPublicExamFromFirestore(rawCode);
-    if (cloudResult.status !== 'not_found') {
+    try {
+      const cloudResult = await fetchPublicExamFromFirestore(rawCode);
+
+      if (
+        cloudResult.status === 'found' ||
+        cloudResult.status === 'not_published' ||
+        cloudResult.status === 'not_started' ||
+        cloudResult.status === 'expired' ||
+        cloudResult.status === 'unauthorized'
+      ) {
+        return {
+          exam: cloudResult.exam,
+          ownerId: cloudResult.ownerId,
+          source: 'cloud',
+          status: cloudResult.status,
+          message: cloudResult.message,
+        };
+      }
+
+      // Check local/built-in exams when cloud returns not_found or transient error
+      const localResult = this.checkExamStatus(rawCode);
+      if (localResult.status !== 'not_found') {
+        return {
+          exam: localResult.exam ? sanitizeExamForStudent(localResult.exam) : undefined,
+          source: 'local',
+          status: localResult.status,
+          message: localResult.message,
+        };
+      }
+
+      if (cloudResult.status === 'network_error' || cloudResult.status === 'unexpected_error') {
+        return {
+          source: 'cloud',
+          status: cloudResult.status,
+          message: cloudResult.message,
+        };
+      }
+
       return {
-        exam: cloudResult.exam,
-        ownerId: cloudResult.ownerId,
+        source: 'local',
+        status: localResult.status,
+        message: localResult.message,
+      };
+    } catch (err) {
+      console.error('[HQTest Storage] Lỗi checkExamStatusAsync:', err);
+      return {
         source: 'cloud',
-        status: cloudResult.status,
-        message: cloudResult.message,
+        status: 'unexpected_error',
+        message: 'Đã xảy ra lỗi không mong muốn khi kiểm tra thông tin bài thi. Vui lòng thử lại.',
       };
     }
-
-    const localResult = this.checkExamStatus(rawCode);
-    return {
-      exam: localResult.exam ? sanitizeExamForStudent(localResult.exam) : undefined,
-      source: 'local',
-      status: localResult.status,
-      message: localResult.message,
-    };
   },
 
   getSubmissions(examId?: string): StudentSubmission[] {
-    const saved = localStorage.getItem(STORAGE_KEYS.SUBMISSIONS);
+    const saved = safeGetStorageItem(STORAGE_KEYS.SUBMISSIONS);
     let subs = DEFAULT_SUBMISSIONS;
     if (saved) {
       try {
-        subs = JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          subs = parsed;
+        }
       } catch {}
     } else {
       this.saveSubmissions(DEFAULT_SUBMISSIONS);
@@ -809,7 +886,7 @@ export const StorageService = {
   },
 
   saveSubmissions(subs: StudentSubmission[]): void {
-    localStorage.setItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(subs));
+    safeSetStorageItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(subs));
   },
 
   addSubmission(sub: StudentSubmission): void {

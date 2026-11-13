@@ -7,6 +7,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { User, UserRole, Question, Exam, Folder, StudentSubmission, ChemGrade } from './types';
 import { StorageService, DEFAULT_USERS } from './services/storage';
 import { Header } from './components/common/Header';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SystemDesignModal } from './components/docs/SystemDesignModal';
 import { APP_CONFIG } from './constants/brand';
 import {
@@ -46,9 +47,34 @@ import { ExamJoinLanding, ExamLandingStatus } from './components/student/ExamJoi
 // Admin Components
 import { AdminDashboard } from './components/admin/AdminDashboard';
 
+function getDefaultTabForRole(role: UserRole): string {
+  if (role === 'student') return 'student_home';
+  if (role === 'admin') return 'admin_dashboard';
+  return 'dashboard';
+}
+
 export default function App() {
-  const [currentUser, setCurrentUser] = useState<User>(() => StorageService.getCurrentUser());
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [initialDirectCode] = useState<string | null>(() => {
+    if (typeof window === 'undefined') return null;
+    try {
+      return extractExamCodeFromLocation(window.location);
+    } catch {
+      return null;
+    }
+  });
+
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    if (initialDirectCode) {
+      return DEFAULT_USERS.find((u) => u.role === 'student') || DEFAULT_USERS[1];
+    }
+    return StorageService.getCurrentUser();
+  });
+
+  const [activeTab, setActiveTab] = useState<string>(() => {
+    if (initialDirectCode) return 'exam_landing';
+    return getDefaultTabForRole(StorageService.getCurrentUser().role);
+  });
+
   const [isSystemDocsOpen, setIsSystemDocsOpen] = useState(false);
 
   // Firebase Auth Cloud User State
@@ -78,8 +104,12 @@ export default function App() {
   // Direct Join via link/QR state
   const [directJoinExam, setDirectJoinExam] = useState<Exam | null>(null);
   const [directJoinOwnerId, setDirectJoinOwnerId] = useState<string | undefined>(undefined);
-  const [directJoinCode, setDirectJoinCode] = useState<string>('');
-  const [directJoinStatus, setDirectJoinStatus] = useState<ExamLandingStatus>('found');
+  const [directJoinCode, setDirectJoinCode] = useState<string>(() =>
+    initialDirectCode ? normalizeExamCode(initialDirectCode) : ''
+  );
+  const [directJoinStatus, setDirectJoinStatus] = useState<ExamLandingStatus>(() =>
+    initialDirectCode ? 'loading' : 'found'
+  );
   const [directJoinMessage, setDirectJoinMessage] = useState<string | undefined>(undefined);
 
   // Reload data from storage helper
@@ -154,11 +184,19 @@ export default function App() {
     setDirectJoinMessage(undefined);
     setActiveTab('exam_landing');
 
-    const res = await StorageService.checkExamStatusAsync(clean);
-    setDirectJoinStatus(res.status);
-    setDirectJoinMessage(res.message);
-    setDirectJoinExam(res.exam || null);
-    setDirectJoinOwnerId(res.ownerId);
+    try {
+      const res = await StorageService.checkExamStatusAsync(clean);
+      setDirectJoinStatus(res.status);
+      setDirectJoinMessage(res.message);
+      setDirectJoinExam(res.exam || null);
+      setDirectJoinOwnerId(res.ownerId);
+    } catch (err) {
+      console.error('[HQTest] Lỗi tải thông tin bài thi từ URL:', err);
+      setDirectJoinStatus('unexpected_error');
+      setDirectJoinMessage('Đã xảy ra lỗi không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.');
+      setDirectJoinExam(null);
+      setDirectJoinOwnerId(undefined);
+    }
   }, []);
 
   // URL Routing, QR Scan Detection & Cross-Tab Storage Sync
@@ -166,18 +204,29 @@ export default function App() {
     const handleStorageUpdate = () => {
       reloadDataFromStorage();
     };
+    const handleRouteChange = () => {
+      const code = extractExamCodeFromLocation(window.location);
+      if (code) {
+        void resolveDirectExamFromUrl();
+      } else {
+        setDirectJoinExam(null);
+        setDirectJoinCode('');
+        setActiveTab((prev) => (prev === 'exam_landing' ? 'student_home' : prev));
+      }
+    };
+
     window.addEventListener('storage', handleStorageUpdate);
     window.addEventListener('hqtest_exams_updated', handleStorageUpdate);
 
     void resolveDirectExamFromUrl();
-    window.addEventListener('popstate', resolveDirectExamFromUrl);
-    window.addEventListener('hashchange', resolveDirectExamFromUrl);
+    window.addEventListener('popstate', handleRouteChange);
+    window.addEventListener('hashchange', handleRouteChange);
 
     return () => {
       window.removeEventListener('storage', handleStorageUpdate);
       window.removeEventListener('hqtest_exams_updated', handleStorageUpdate);
-      window.removeEventListener('popstate', resolveDirectExamFromUrl);
-      window.removeEventListener('hashchange', resolveDirectExamFromUrl);
+      window.removeEventListener('popstate', handleRouteChange);
+      window.removeEventListener('hashchange', handleRouteChange);
     };
   }, [reloadDataFromStorage, resolveDirectExamFromUrl]);
 
@@ -289,9 +338,13 @@ export default function App() {
     }
     // Keep ?examCode= in URL so refreshing (F5) during the session never 404s and restores cleanly
     if (typeof window !== 'undefined' && exam.code) {
-      const normalized = normalizeExamCode(exam.code);
-      const nextUrl = `/?examCode=${encodeURIComponent(normalized)}`;
-      window.history.replaceState({}, '', nextUrl);
+      try {
+        const normalized = normalizeExamCode(exam.code);
+        const nextUrl = `/?examCode=${encodeURIComponent(normalized)}`;
+        window.history.replaceState({}, '', nextUrl);
+      } catch {
+        // Ignore history restriction in embedded contexts
+      }
     }
     setActiveTab('take_exam');
   };
@@ -408,10 +461,22 @@ export default function App() {
 
   const clearExamUrlParam = () => {
     if (typeof window !== 'undefined') {
-      if (window.location.pathname !== '/' || window.location.search || window.location.hash) {
-        window.history.replaceState({}, '', '/');
+      try {
+        if (window.location.pathname !== '/' || window.location.search || window.location.hash) {
+          window.history.replaceState({}, '', '/');
+        }
+      } catch {
+        // Ignore history restriction
       }
     }
+  };
+
+  const resetToRoleHome = () => {
+    clearExamUrlParam();
+    setDirectJoinExam(null);
+    setActiveExamForTaking(null);
+    setReviewSubmission(null);
+    setActiveTab(getDefaultTabForRole(currentUser.role));
   };
 
   return (
@@ -433,154 +498,207 @@ export default function App() {
 
       {/* Main Content Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* --- TEACHER VIEWS --- */}
-        {currentUser.role === 'teacher' && (
-          <>
-            {activeTab === 'dashboard' && (
-              <TeacherDashboard
-                currentUser={currentUser}
-                questions={questions}
-                exams={exams}
-                submissions={submissions}
-                onNavigate={(tab) => setActiveTab(tab)}
-                onOpenExamResults={handleOpenExamResults}
-              />
-            )}
+        <ErrorBoundary
+          fallbackTitle="Không thể hiển thị nội dung bài thi"
+          onResetToHome={resetToRoleHome}
+        >
+          {/* --- TEACHER VIEWS --- */}
+          {currentUser.role === 'teacher' && (
+            <>
+              {activeTab === 'dashboard' && (
+                <TeacherDashboard
+                  currentUser={currentUser}
+                  questions={questions}
+                  exams={exams}
+                  submissions={submissions}
+                  onNavigate={(tab) => setActiveTab(tab)}
+                  onOpenExamResults={handleOpenExamResults}
+                />
+              )}
 
-            {activeTab === 'upload_exam' && (
-              <ExamUploader
-                onSaveToQuestionBank={handleSaveQuestionsToBank}
-                onCreateExamFromParsed={handleCreateExamFromParsed}
-              />
-            )}
+              {activeTab === 'upload_exam' && (
+                <ExamUploader
+                  onSaveToQuestionBank={handleSaveQuestionsToBank}
+                  onCreateExamFromParsed={handleCreateExamFromParsed}
+                />
+              )}
 
-            {activeTab === 'question_bank' && (
-              <QuestionBank
-                questions={questions}
-                folders={folders}
-                onAddQuestion={handleAddQuestion}
-                onUpdateQuestion={handleUpdateQuestion}
-                onDeleteQuestion={handleDeleteQuestion}
-                onCreateExamFromSelected={handleCreateExamFromSelected}
-              />
-            )}
+              {activeTab === 'question_bank' && (
+                <QuestionBank
+                  questions={questions}
+                  folders={folders}
+                  onAddQuestion={handleAddQuestion}
+                  onUpdateQuestion={handleUpdateQuestion}
+                  onDeleteQuestion={handleDeleteQuestion}
+                  onCreateExamFromSelected={handleCreateExamFromSelected}
+                />
+              )}
 
-            {activeTab === 'folder_manager' && (
-              <FolderManager
-                folders={folders}
-                questions={questions}
-                exams={exams}
-                onSaveFolders={handleSaveFolders}
-                onNavigateToExam={(id) => handleOpenExamResults(id)}
-              />
-            )}
+              {activeTab === 'folder_manager' && (
+                <FolderManager
+                  folders={folders}
+                  questions={questions}
+                  exams={exams}
+                  onSaveFolders={handleSaveFolders}
+                  onNavigateToExam={(id) => handleOpenExamResults(id)}
+                />
+              )}
 
-            {activeTab === 'create_exam' && (
-              <ExamCreator
-                initialTitle={creatorInitialTitle}
-                initialQuestions={creatorInitialQuestions}
-                initialGrade={creatorInitialGrade}
-                folders={folders}
-                onSaveExam={handleSaveExam}
-                onCancel={() => setActiveTab('dashboard')}
-              />
-            )}
+              {activeTab === 'create_exam' && (
+                <ExamCreator
+                  initialTitle={creatorInitialTitle}
+                  initialQuestions={creatorInitialQuestions}
+                  initialGrade={creatorInitialGrade}
+                  folders={folders}
+                  onSaveExam={handleSaveExam}
+                  onCancel={() => setActiveTab('dashboard')}
+                />
+              )}
 
-            {activeTab === 'exam_manager' && (
-              <ExamManager
-                exams={exams}
-                submissions={submissions}
-                onCreateNew={() => {
-                  setCreatorInitialQuestions([]);
-                  setCreatorInitialTitle('Đề thi Hóa học mới');
-                  setActiveTab('create_exam');
+              {activeTab === 'exam_manager' && (
+                <ExamManager
+                  exams={exams}
+                  submissions={submissions}
+                  onCreateNew={() => {
+                    setCreatorInitialQuestions([]);
+                    setCreatorInitialTitle('Đề thi Hóa học mới');
+                    setActiveTab('create_exam');
+                  }}
+                  onOpenResults={handleOpenExamResults}
+                  onTakeExamAsPreview={(ex) => handleStartExam(ex, currentUser.name, 'Giáo viên xem thử')}
+                  onTogglePublish={handleToggleExamPublish}
+                  onDeleteExam={handleDeleteExam}
+                />
+              )}
+
+              {activeTab === 'exam_results' && (
+                <ExamResults
+                  exam={exams.find((e) => e.id === selectedExamIdForResults) || exams[0]}
+                  submissions={submissions.filter((s) => s.examId === (selectedExamIdForResults || exams[0]?.id))}
+                  onBack={() => setActiveTab('exam_manager')}
+                />
+              )}
+
+              {!['dashboard', 'upload_exam', 'question_bank', 'folder_manager', 'create_exam', 'exam_manager', 'exam_results', 'take_exam', 'review_submission'].includes(activeTab) && (
+                <TeacherDashboard
+                  currentUser={currentUser}
+                  questions={questions}
+                  exams={exams}
+                  submissions={submissions}
+                  onNavigate={(tab) => setActiveTab(tab)}
+                  onOpenExamResults={handleOpenExamResults}
+                />
+              )}
+            </>
+          )}
+
+          {/* --- STUDENT VIEWS --- */}
+          {currentUser.role === 'student' && (
+            <>
+              {activeTab === 'student_home' && (
+                <StudentHome
+                  currentUser={currentUser}
+                  exams={exams}
+                  submissions={submissions}
+                  onStartExam={handleStartExam}
+                  onReviewSubmission={handleReviewSubmission}
+                />
+              )}
+
+              {activeTab === 'exam_landing' && (
+                <ExamJoinLanding
+                  exam={directJoinExam}
+                  examCode={directJoinCode}
+                  status={directJoinStatus}
+                  statusMessage={directJoinMessage}
+                  currentUser={currentUser}
+                  onStartExam={(ex, name, cls) => {
+                    handleStartExam(ex, name, cls, directJoinOwnerId);
+                  }}
+                  onRetryLookup={() => void resolveDirectExamFromUrl()}
+                  onBackToHome={() => {
+                    clearExamUrlParam();
+                    setDirectJoinExam(null);
+                    setActiveTab('student_home');
+                  }}
+                />
+              )}
+
+              {!['student_home', 'exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
+                <StudentHome
+                  currentUser={currentUser}
+                  exams={exams}
+                  submissions={submissions}
+                  onStartExam={handleStartExam}
+                  onReviewSubmission={handleReviewSubmission}
+                />
+              )}
+            </>
+          )}
+
+          {/* --- SHARED EXAM TAKING & RESULT VIEWS (Student & Teacher Preview) --- */}
+          {activeTab === 'take_exam' && (
+            activeExamForTaking ? (
+              <ExamTaker
+                exam={activeExamForTaking}
+                studentName={activeStudentName}
+                studentClass={activeStudentClass}
+                onFinishExam={handleFinishExam}
+                onExitWithoutSave={() => {
+                  clearExamUrlParam();
+                  setActiveTab(currentUser.role === 'teacher' ? 'exam_manager' : 'student_home');
                 }}
-                onOpenResults={handleOpenExamResults}
-                onTakeExamAsPreview={(ex) => handleStartExam(ex, currentUser.name, 'Giáo viên xem thử')}
-                onTogglePublish={handleToggleExamPublish}
-                onDeleteExam={handleDeleteExam}
               />
-            )}
+            ) : (
+              <div className="max-w-xl mx-auto py-12 px-4 text-center bg-white border border-slate-200 rounded-3xl shadow-lg space-y-4">
+                <h2 className="text-lg font-extrabold text-slate-900">Không tìm thấy phiên làm bài</h2>
+                <p className="text-xs text-slate-600">Vui lòng chọn hoặc nhập mã bài thi để bắt đầu lại.</p>
+                <button
+                  type="button"
+                  onClick={resetToRoleHome}
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
+                >
+                  Quay về trang chủ
+                </button>
+              </div>
+            )
+          )}
 
-            {activeTab === 'exam_results' && (
-              <ExamResults
-                exam={exams.find((e) => e.id === selectedExamIdForResults) || exams[0]}
-                submissions={submissions.filter((s) => s.examId === (selectedExamIdForResults || exams[0]?.id))}
-                onBack={() => setActiveTab('exam_manager')}
-              />
-            )}
-          </>
-        )}
-
-        {/* --- STUDENT VIEWS --- */}
-        {currentUser.role === 'student' && (
-          <>
-            {activeTab === 'student_home' && (
-              <StudentHome
-                currentUser={currentUser}
-                exams={exams}
-                submissions={submissions}
-                onStartExam={handleStartExam}
-                onReviewSubmission={handleReviewSubmission}
-              />
-            )}
-
-            {activeTab === 'exam_landing' && (
-              <ExamJoinLanding
-                exam={directJoinExam}
-                examCode={directJoinCode}
-                status={directJoinStatus}
-                statusMessage={directJoinMessage}
-                currentUser={currentUser}
-                onStartExam={(ex, name, cls) => {
-                  handleStartExam(ex, name, cls, directJoinOwnerId);
-                }}
-                onRetryLookup={() => void resolveDirectExamFromUrl()}
+          {activeTab === 'review_submission' && (
+            reviewSubmission ? (
+              <ExamResultView
+                submission={reviewSubmission}
+                exam={reviewExamOverride || exams.find((e) => e.id === reviewSubmission.examId)}
                 onBackToHome={() => {
                   clearExamUrlParam();
-                  setDirectJoinExam(null);
-                  setActiveTab('student_home');
+                  setActiveTab(currentUser.role === 'teacher' ? 'exam_manager' : 'student_home');
                 }}
               />
-            )}
-          </>
-        )}
+            ) : (
+              <div className="max-w-xl mx-auto py-12 px-4 text-center bg-white border border-slate-200 rounded-3xl shadow-lg space-y-4">
+                <h2 className="text-lg font-extrabold text-slate-900">Chưa có dữ liệu bài làm để xem lại</h2>
+                <button
+                  type="button"
+                  onClick={resetToRoleHome}
+                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
+                >
+                  Quay về trang chủ
+                </button>
+              </div>
+            )
+          )}
 
-        {/* --- SHARED EXAM TAKING & RESULT VIEWS (Student & Teacher Preview) --- */}
-        {activeTab === 'take_exam' && activeExamForTaking && (
-          <ExamTaker
-            exam={activeExamForTaking}
-            studentName={activeStudentName}
-            studentClass={activeStudentClass}
-            onFinishExam={handleFinishExam}
-            onExitWithoutSave={() => {
-              clearExamUrlParam();
-              setActiveTab(currentUser.role === 'teacher' ? 'exam_manager' : 'student_home');
-            }}
-          />
-        )}
-
-        {activeTab === 'review_submission' && reviewSubmission && (
-          <ExamResultView
-            submission={reviewSubmission}
-            exam={reviewExamOverride || exams.find((e) => e.id === reviewSubmission.examId)}
-            onBackToHome={() => {
-              clearExamUrlParam();
-              setActiveTab(currentUser.role === 'teacher' ? 'exam_manager' : 'student_home');
-            }}
-          />
-        )}
-
-        {/* --- ADMIN VIEW --- */}
-        {currentUser.role === 'admin' && (
-          <AdminDashboard
-            questions={questions}
-            exams={exams}
-            submissions={submissions}
-            folders={folders}
-            onDataResetOrRestored={reloadDataFromStorage}
-          />
-        )}
+          {/* --- ADMIN VIEW --- */}
+          {currentUser.role === 'admin' && (
+            <AdminDashboard
+              questions={questions}
+              exams={exams}
+              submissions={submissions}
+              folders={folders}
+              onDataResetOrRestored={reloadDataFromStorage}
+            />
+          )}
+        </ErrorBoundary>
       </main>
 
       {/* Footer */}

@@ -1,4 +1,4 @@
-import { initializeApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
@@ -6,6 +6,7 @@ import {
   signOut,
   onAuthStateChanged,
   User as FirebaseUser,
+  Auth,
 } from 'firebase/auth';
 import {
   getFirestore,
@@ -19,20 +20,58 @@ import {
   setDoc,
   writeBatch,
   serverTimestamp,
+  Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Exam, Question, StudentSubmission } from '../types';
 import { normalizeExamCode, normalizeExamCodeCompact } from '../utils/urlHelper';
 
-// Initialize Firebase SDK per provisioning config
-const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+function resolveFirebaseConfig() {
+  const env = (typeof import.meta !== 'undefined' ? (import.meta as any).env : {}) || {};
+  return {
+    projectId: env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
+    appId: env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
+    apiKey: env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
+    authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
+    firestoreDatabaseId: env.VITE_FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId,
+    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
+    messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
+    measurementId: firebaseConfig.measurementId || '',
+  };
+}
+
+const resolvedConfig = resolveFirebaseConfig();
+let app: FirebaseApp;
+let db: Firestore;
+let auth: Auth;
+let firebaseInitError: string | null = null;
+
+try {
+  if (!resolvedConfig.apiKey || !resolvedConfig.projectId || !resolvedConfig.appId) {
+    throw new Error('Thiếu cấu hình Firebase (apiKey / projectId / appId).');
+  }
+  app = getApps().length > 0 ? getApp() : initializeApp(resolvedConfig);
+  db = resolvedConfig.firestoreDatabaseId
+    ? getFirestore(app, resolvedConfig.firestoreDatabaseId)
+    : getFirestore(app);
+  auth = getAuth(app);
+} catch (initErr) {
+  firebaseInitError = initErr instanceof Error ? initErr.message : String(initErr);
+  console.error('[HQTest Firebase] Lỗi khởi tạo Firebase:', initErr);
+  // Keep fallback references safely unassigned only if totally broken
+  app = (getApps()[0] || {}) as FirebaseApp;
+  db = {} as Firestore;
+  auth = {} as Auth;
+}
+
+export { db, auth };
+
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // Required Firestore connectivity probe on startup
 async function testFirestoreConnection(): Promise<void> {
+  if (firebaseInitError) return;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
@@ -121,43 +160,48 @@ function stripUndefinedDeep<T>(value: T): T {
  * before sending it to student-facing views or public Firestore collections.
  */
 export function sanitizeQuestionForStudent(q: Question): Question {
+  const safeQ = (q || {}) as Partial<Question>;
   const sanitized: Question = {
-    id: q.id,
-    code: q.code,
-    content: q.content,
-    type: q.type,
-    grade: q.grade,
-    topic: q.topic,
-    level: q.level,
+    id: safeQ.id || `q_${Math.random().toString(36).slice(2, 8)}`,
+    code: safeQ.code || '',
+    content: safeQ.content || '',
+    type: safeQ.type || 'part1_single_choice',
+    grade: safeQ.grade || '12',
+    topic: safeQ.topic || 'hoa_dai_cuong',
+    level: safeQ.level || 'nhan_biet',
     authorId: '',
-    createdAt: q.createdAt,
-    updatedAt: q.updatedAt,
+    createdAt: safeQ.createdAt || '',
+    updatedAt: safeQ.updatedAt || '',
   };
 
-  if (q.imageUrl) sanitized.imageUrl = q.imageUrl;
+  if (safeQ.imageUrl) sanitized.imageUrl = safeQ.imageUrl;
 
-  if (q.options) {
-    sanitized.options = q.options.map((opt) => ({
-      id: opt.id,
-      text: opt.text,
-      // Explicitly omit isCorrect
-    }));
+  if (Array.isArray(safeQ.options)) {
+    sanitized.options = safeQ.options
+      .filter((opt) => opt && typeof opt === 'object')
+      .map((opt) => ({
+        id: opt.id || '',
+        text: opt.text || '',
+        // Explicitly omit isCorrect
+      }));
   }
 
-  if (q.statements) {
-    sanitized.statements = q.statements.map((stmt) => ({
-      id: stmt.id,
-      statement: stmt.statement,
-      correctAnswer: false, // Placeholder masked for type compatibility; never trusted client-side before review
-      // Explicitly omit real correctAnswer & explanation
-    }));
+  if (Array.isArray(safeQ.statements)) {
+    sanitized.statements = safeQ.statements
+      .filter((stmt) => stmt && typeof stmt === 'object')
+      .map((stmt) => ({
+        id: stmt.id || '',
+        statement: stmt.statement || '',
+        correctAnswer: false, // Placeholder masked for type compatibility; never trusted client-side before review
+        // Explicitly omit real correctAnswer & explanation
+      }));
   }
 
-  if (q.shortAnswerConfig) {
+  if (safeQ.shortAnswerConfig && typeof safeQ.shortAnswerConfig === 'object') {
     sanitized.shortAnswerConfig = {
       acceptableAnswers: [],
-      isNumeric: !!q.shortAnswerConfig.isNumeric,
-      ...(q.shortAnswerConfig.unit ? { unit: q.shortAnswerConfig.unit } : {}),
+      isNumeric: !!safeQ.shortAnswerConfig.isNumeric,
+      ...(safeQ.shortAnswerConfig.unit ? { unit: safeQ.shortAnswerConfig.unit } : {}),
     };
   }
 
@@ -168,31 +212,39 @@ export function sanitizeQuestionForStudent(q: Question): Question {
  * Produces a student-safe exam object with zero answer keys or solutions.
  */
 export function sanitizeExamForStudent(exam: Exam): Exam {
+  const rawQuestions = Array.isArray(exam?.questions) ? exam.questions : [];
+  const safeQuestions = rawQuestions.filter((q) => q && typeof q === 'object').map(sanitizeQuestionForStudent);
+
   return {
-    id: exam.id,
-    title: exam.title,
-    code: normalizeExamCode(exam.code),
-    grade: exam.grade,
-    ...(exam.topic ? { topic: exam.topic } : {}),
-    durationMinutes: exam.durationMinutes,
-    totalQuestions: exam.totalQuestions || exam.questions.length,
-    totalScore: exam.totalScore || 10.0,
-    questions: (exam.questions || []).map(sanitizeQuestionForStudent),
-    rules: exam.rules,
-    shuffleQuestions: !!exam.shuffleQuestions,
-    shuffleOptions: !!exam.shuffleOptions,
-    isPublished: !!exam.isPublished,
-    ...(exam.openAt ? { openAt: exam.openAt } : {}),
-    ...(exam.closeAt ? { closeAt: exam.closeAt } : {}),
-    maxAttempts: exam.maxAttempts ?? 1,
-    showScoreAfterSubmit: !!exam.showScoreAfterSubmit,
-    showAnswersAfterSubmit: !!exam.showAnswersAfterSubmit,
-    showSolutionsAfterSubmit: !!exam.showSolutionsAfterSubmit,
-    allowReviewLater: !!exam.allowReviewLater,
+    id: exam?.id || '',
+    title: (exam?.title || 'Bài kiểm tra HQTest').slice(0, 300),
+    code: normalizeExamCode(exam?.code || ''),
+    grade: exam?.grade || '12',
+    ...(exam?.topic ? { topic: exam.topic } : {}),
+    durationMinutes: exam?.durationMinutes || 45,
+    totalQuestions: exam?.totalQuestions || safeQuestions.length,
+    totalScore: exam?.totalScore || 10.0,
+    questions: safeQuestions,
+    rules: exam?.rules || {
+      part1ScorePerQuestion: 0.25,
+      part2GradingModel: 'standard_moet',
+      part3ScorePerQuestion: 0.25,
+      totalTargetScore: 10.0,
+    },
+    shuffleQuestions: !!exam?.shuffleQuestions,
+    shuffleOptions: !!exam?.shuffleOptions,
+    isPublished: !!exam?.isPublished,
+    ...(exam?.openAt ? { openAt: exam.openAt } : {}),
+    ...(exam?.closeAt ? { closeAt: exam.closeAt } : {}),
+    maxAttempts: exam?.maxAttempts ?? 1,
+    showScoreAfterSubmit: !!exam?.showScoreAfterSubmit,
+    showAnswersAfterSubmit: !!exam?.showAnswersAfterSubmit,
+    showSolutionsAfterSubmit: !!exam?.showSolutionsAfterSubmit,
+    allowReviewLater: !!exam?.allowReviewLater,
     authorId: '',
-    authorName: exam.authorName || 'Giáo viên',
-    createdAt: exam.createdAt,
-    updatedAt: exam.updatedAt,
+    authorName: (exam?.authorName || 'Giáo viên').slice(0, 150),
+    createdAt: exam?.createdAt || '',
+    updatedAt: exam?.updatedAt || '',
   };
 }
 
@@ -279,7 +331,17 @@ export function rehydrateExamWithAnswerKeys(
 
 // --- Auth Helpers ---
 export function subscribeAuthState(callback: (user: FirebaseUser | null) => void): () => void {
-  return onAuthStateChanged(auth, callback);
+  if (firebaseInitError || !auth || typeof onAuthStateChanged !== 'function') {
+    callback(null);
+    return () => {};
+  }
+  try {
+    return onAuthStateChanged(auth, callback);
+  } catch (err) {
+    console.warn('Auth state subscription failed:', err);
+    callback(null);
+    return () => {};
+  }
 }
 
 export async function signInWithGoogleForCloudSync(): Promise<FirebaseUser> {
@@ -340,9 +402,10 @@ export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean
 
   const examRef = doc(db, 'exams', safeId);
   const existingMaster = await getDoc(examRef).catch(() => null);
+  const existingCreatedAt = existingMaster?.exists() ? existingMaster.data()?.serverCreatedAt : null;
   batch.set(examRef, {
     ...masterPayload,
-    serverCreatedAt: existingMaster?.exists() ? existingMaster.data().serverCreatedAt : serverTimestamp(),
+    serverCreatedAt: existingCreatedAt || serverTimestamp(),
     serverUpdatedAt: serverTimestamp(),
   });
 
@@ -444,47 +507,106 @@ export async function fetchTeacherSubmissionsFromFirestore(uid: string): Promise
 }
 
 // --- Public Student Lookup & Submission ---
+export type CloudExamLookupStatus =
+  | 'found'
+  | 'not_found'
+  | 'not_published'
+  | 'not_started'
+  | 'expired'
+  | 'unauthorized'
+  | 'network_error'
+  | 'unexpected_error';
+
 export interface CloudExamLookupResult {
-  status: 'found' | 'not_found' | 'not_published' | 'not_started' | 'expired';
+  status: CloudExamLookupStatus;
   exam?: Exam;
   ownerId?: string;
   message?: string;
 }
 
+function classifyFirestoreError(error: unknown): {
+  status: 'unauthorized' | 'network_error' | 'unexpected_error';
+  message: string;
+} {
+  const errObj = error as { code?: string; message?: string } | undefined;
+  const code = (errObj?.code || '').toLowerCase();
+  const msg = (errObj?.message || String(error || '')).toLowerCase();
+
+  if (code.includes('permission-denied') || code.includes('unauthenticated') || msg.includes('missing or insufficient permissions')) {
+    return {
+      status: 'unauthorized',
+      message: 'Không đủ quyền truy cập dữ liệu bài thi này trên máy chủ. Vui lòng liên hệ giáo viên kiểm tra trạng thái mở thi.',
+    };
+  }
+
+  if (
+    code.includes('unavailable') ||
+    code.includes('deadline-exceeded') ||
+    msg.includes('offline') ||
+    msg.includes('network') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('timeout')
+  ) {
+    return {
+      status: 'network_error',
+      message: 'Không thể kết nối tới máy chủ bài thi (mạng yếu hoặc mất kết nối). Vui lòng kiểm tra Internet và thử lại.',
+    };
+  }
+
+  return {
+    status: 'unexpected_error',
+    message: 'Đã xảy ra lỗi hệ thống khi tải thông tin bài thi. Vui lòng thử lại sau giây lát.',
+  };
+}
+
 export async function fetchPublicExamFromFirestore(rawCode: string): Promise<CloudExamLookupResult> {
+  if (firebaseInitError) {
+    return {
+      status: 'unexpected_error',
+      message: `Lỗi cấu hình kết nối Firebase: ${firebaseInitError}`,
+    };
+  }
+
   const normalized = normalizeExamCode(rawCode);
   const compact = normalizeExamCodeCompact(rawCode);
   const candidateCodes = Array.from(new Set([normalized, compact].filter(Boolean)));
 
+  let lastNonNotFoundFailure: CloudExamLookupResult | null = null;
+
   for (const code of candidateCodes) {
-    if (!/^[A-Z0-9-]+$/.test(code)) continue;
+    if (!/^[A-Z0-9-]+$/.test(code) || code.length < 2 || code.length > 32) continue;
     try {
       const statusSnap = await getDoc(doc(db, 'examStatus', code));
       if (!statusSnap.exists()) continue;
 
       const statusData = statusSnap.data() as {
-        examCode: string;
-        examId: string;
-        title: string;
-        grade: Exam['grade'];
-        durationMinutes: number;
-        totalQuestions: number;
-        totalScore: number;
-        isPublished: boolean;
+        examCode?: string;
+        examId?: string;
+        title?: string;
+        grade?: Exam['grade'];
+        durationMinutes?: number;
+        totalQuestions?: number;
+        totalScore?: number;
+        isPublished?: boolean;
         openAt?: string;
         closeAt?: string;
-        authorName: string;
-        ownerId: string;
+        authorName?: string;
+        ownerId?: string;
       };
 
+      const recordExamCode = normalizeExamCode(statusData.examCode || code);
+      if (recordExamCode !== code && normalizeExamCodeCompact(recordExamCode) !== normalizeExamCodeCompact(code)) {
+        continue;
+      }
+
       const placeholderExam: Exam = {
-        id: statusData.examId,
-        code: statusData.examCode,
-        title: statusData.title,
-        grade: statusData.grade,
-        durationMinutes: statusData.durationMinutes,
-        totalQuestions: statusData.totalQuestions,
-        totalScore: statusData.totalScore,
+        id: statusData.examId || code,
+        code: recordExamCode,
+        title: statusData.title || `Bài thi ${recordExamCode}`,
+        grade: statusData.grade || '12',
+        durationMinutes: statusData.durationMinutes || 45,
+        totalQuestions: statusData.totalQuestions || 0,
+        totalScore: statusData.totalScore || 10.0,
         questions: [],
         rules: {
           part1ScorePerQuestion: 0.25,
@@ -494,7 +616,7 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
         },
         shuffleQuestions: false,
         shuffleOptions: false,
-        isPublished: statusData.isPublished,
+        isPublished: !!statusData.isPublished,
         openAt: statusData.openAt,
         closeAt: statusData.closeAt,
         maxAttempts: 1,
@@ -503,7 +625,7 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
         showSolutionsAfterSubmit: false,
         allowReviewLater: false,
         authorId: '',
-        authorName: statusData.authorName,
+        authorName: statusData.authorName || 'Giáo viên',
         createdAt: '',
         updatedAt: '',
       };
@@ -513,7 +635,7 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
           status: 'not_published',
           exam: placeholderExam,
           ownerId: statusData.ownerId,
-          message: `Bài thi "${statusData.title}" (Mã: ${statusData.examCode}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.`,
+          message: `Bài thi "${placeholderExam.title}" (Mã: ${placeholderExam.code}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.`,
         };
       }
 
@@ -544,7 +666,10 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
 
       const publicSnap = await getDoc(doc(db, 'publicExams', code));
       if (!publicSnap.exists()) {
-        return { status: 'not_found' };
+        return {
+          status: 'not_found',
+          message: `Không tìm thấy nội dung bài thi cho mã "${recordExamCode}".`,
+        };
       }
 
       const pubData = publicSnap.data() as Exam & { ownerId?: string };
@@ -554,9 +679,17 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
         ownerId: pubData.ownerId || statusData.ownerId,
       };
     } catch (error) {
-      // Do not fail fatally if Firestore is unreachable or permission denied on malformed ID
-      console.warn('Cloud exam lookup skipped for code', code, error);
+      console.warn('Cloud exam lookup error for code', code, error);
+      const classified = classifyFirestoreError(error);
+      lastNonNotFoundFailure = {
+        status: classified.status,
+        message: classified.message,
+      };
     }
+  }
+
+  if (lastNonNotFoundFailure) {
+    return lastNonNotFoundFailure;
   }
 
   return { status: 'not_found' };

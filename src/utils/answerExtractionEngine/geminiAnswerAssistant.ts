@@ -21,7 +21,10 @@ export async function deepScanWithGemini(
   aiPart2: ExtractedAnswerItem[];
   aiPart3: ExtractedAnswerItem[];
 }> {
-  const apiKey = process.env.GEMINI_API_KEY || (typeof window !== 'undefined' ? (window as unknown as { GEMINI_API_KEY?: string }).GEMINI_API_KEY : '');
+  const apiKey =
+    (typeof process !== 'undefined' ? process.env?.GEMINI_API_KEY : undefined) ||
+    (typeof window !== 'undefined' ? (window as unknown as { GEMINI_API_KEY?: string }).GEMINI_API_KEY : '') ||
+    '';
   
   if (!apiKey) {
     console.info('Gemini API key is not configured; AI Deep Scan skipped.');

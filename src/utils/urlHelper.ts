@@ -25,11 +25,28 @@ export function isPreviewOrLocalOrigin(origin: string): boolean {
       host === '127.0.0.1' ||
       host.endsWith('.internal') ||
       host.startsWith('ais-dev-') ||
-      // Vercel branch/commit preview subdomains typically contain '-git-' or random deployment hashes
+      // Vercel branch/commit preview subdomains typically contain '-git-' or deployment hash suffixes
       (host.endsWith('.vercel.app') && host.includes('-git-'))
     ) {
       return true;
     }
+
+    // If canonical production URL is configured at build time and differs from current vercel.app host,
+    // treat the current host as a Vercel Preview deployment URL.
+    const buildProd =
+      (typeof import.meta !== 'undefined' && (import.meta as any).env?.VITE_PUBLIC_APP_URL) ||
+      (typeof __PRODUCTION_APP_URL__ !== 'undefined' ? __PRODUCTION_APP_URL__ : '');
+    if (buildProd && host.endsWith('.vercel.app')) {
+      try {
+        const prodHost = new URL(normalizeOrigin(buildProd)).hostname.toLowerCase();
+        if (prodHost && host !== prodHost) {
+          return true;
+        }
+      } catch {
+        // ignore invalid buildProd
+      }
+    }
+
     return false;
   } catch {
     return true;
@@ -150,6 +167,14 @@ export function getExamQueryUrl(examCode: string): string {
   return getExamDirectUrl(examCode);
 }
 
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 /**
  * Extracts exam code from query params (?examCode=, ?c=, ?exam=, ?code=),
  * SPA paths (/c/:code, /exam/:code), or hash routes (#/c/:code).
@@ -170,19 +195,23 @@ export function extractExamCodeFromLocation(locationLike?: {
 
   // 1. Query string (?examCode=, ?c=, ?exam=, ?code=)
   if (search) {
-    const searchParams = new URLSearchParams(search);
-    targetCode =
-      searchParams.get('examCode') ||
-      searchParams.get('c') ||
-      searchParams.get('exam') ||
-      searchParams.get('code');
+    try {
+      const searchParams = new URLSearchParams(search);
+      targetCode =
+        searchParams.get('examCode') ||
+        searchParams.get('c') ||
+        searchParams.get('exam') ||
+        searchParams.get('code');
+    } catch {
+      targetCode = null;
+    }
   }
 
   // 2. Path routing (/c/:code or /exam/:code)
   if (!targetCode && pathname) {
     const pathMatch = pathname.match(/^\/(?:c|exam)\/([^/?#]+)/i);
     if (pathMatch && pathMatch[1]) {
-      targetCode = decodeURIComponent(pathMatch[1]);
+      targetCode = safeDecodeURIComponent(pathMatch[1]);
     }
   }
 
@@ -192,7 +221,7 @@ export function extractExamCodeFromLocation(locationLike?: {
       hash.match(/^#\/?(?:c|exam)\/([^/?#]+)/i) ||
       hash.match(/[?&#](?:examCode|c|exam|code)=([^&#]+)/i);
     if (hashMatch && hashMatch[1]) {
-      targetCode = decodeURIComponent(hashMatch[1]);
+      targetCode = safeDecodeURIComponent(hashMatch[1]);
     }
   }
 

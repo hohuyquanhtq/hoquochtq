@@ -15,6 +15,8 @@ import {
   SearchX,
   Lock,
   CalendarClock,
+  WifiOff,
+  AlertTriangle,
 } from 'lucide-react';
 import { Exam, User } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
@@ -25,14 +27,17 @@ export type ExamLandingStatus =
   | 'not_found'
   | 'not_published'
   | 'not_started'
-  | 'expired';
+  | 'expired'
+  | 'unauthorized'
+  | 'network_error'
+  | 'unexpected_error';
 
 interface ExamJoinLandingProps {
   exam: Exam | null;
   examCode?: string;
   status?: ExamLandingStatus;
   statusMessage?: string;
-  currentUser: User;
+  currentUser?: User | null;
   onStartExam: (exam: Exam, studentName: string, studentClass: string) => void;
   onRetryLookup?: () => void;
   onBackToHome: () => void;
@@ -48,8 +53,8 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   onRetryLookup,
   onBackToHome,
 }) => {
-  const [studentName, setStudentName] = useState(currentUser.name || '');
-  const [studentClass, setStudentClass] = useState(currentUser.className || '12 Hóa 1');
+  const [studentName, setStudentName] = useState(currentUser?.name || '');
+  const [studentClass, setStudentClass] = useState(currentUser?.className || '12 Hóa 1');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   if (status === 'loading') {
@@ -60,10 +65,10 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
             <RefreshCw className="w-6 h-6 animate-spin" />
           </div>
           <h2 className="text-lg font-extrabold text-slate-900">
-            Đang tải phòng thi {examCode ? `(${examCode})` : ''}...
+            Đang tải thông tin bài thi {examCode ? `(${examCode})` : ''}...
           </h2>
           <p className="text-xs text-slate-500">
-            Hệ thống đang kiểm tra thông tin bài thi và chuẩn bị đề thi cho bạn.
+            Hệ thống đang kiểm tra mã đề, trạng thái phòng thi và chuẩn bị dữ liệu cho bạn.
           </p>
         </div>
       </div>
@@ -73,26 +78,60 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   if (status !== 'found' || !exam) {
     const isLocked = status === 'not_published';
     const isSchedule = status === 'not_started' || status === 'expired';
+    const isUnauthorized = status === 'unauthorized';
+    const isNetwork = status === 'network_error';
+    const isUnexpected = status === 'unexpected_error';
     const displayCode = exam?.code || examCode || 'N/A';
+
+    const titleText =
+      status === 'not_published'
+        ? 'Phòng thi đang tạm đóng'
+        : status === 'not_started'
+        ? 'Bài thi chưa đến giờ mở'
+        : status === 'expired'
+        ? 'Bài thi đã kết thúc'
+        : status === 'unauthorized'
+        ? 'Không đủ quyền truy cập'
+        : status === 'network_error'
+        ? 'Lỗi kết nối máy chủ'
+        : status === 'unexpected_error'
+        ? 'Lỗi hệ thống'
+        : 'Không tìm thấy mã bài thi';
+
+    const defaultDetail =
+      status === 'unauthorized'
+        ? 'Bạn không có quyền truy cập phòng thi này hoặc bài thi chưa được mở công khai.'
+        : status === 'network_error'
+        ? 'Không thể kết nối tới máy chủ để tải dữ liệu bài thi. Vui lòng kiểm tra kết nối mạng và thử lại.'
+        : status === 'unexpected_error'
+        ? 'Hệ thống gặp sự cố không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.'
+        : `Không tìm thấy bài thi với mã "${displayCode}".`;
 
     return (
       <div className="max-w-2xl mx-auto py-8 px-4 space-y-5">
         <button
+          type="button"
           onClick={onBackToHome}
           className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 transition-colors"
         >
           <ArrowLeft className="w-4 h-4" />
-          <span>Quay lại trang chủ {APP_CONFIG.APP_NAME}</span>
+          <span>Quay về trang chủ {APP_CONFIG.APP_NAME}</span>
         </button>
 
         <div className="bg-white border border-slate-200 rounded-3xl shadow-xl overflow-hidden">
           <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-6 text-white flex items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center">
+              <div className="w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center shrink-0">
                 {isLocked ? (
                   <Lock className="w-6 h-6 text-amber-300" />
                 ) : isSchedule ? (
                   <CalendarClock className="w-6 h-6 text-amber-300" />
+                ) : isUnauthorized ? (
+                  <ShieldAlert className="w-6 h-6 text-rose-300" />
+                ) : isNetwork ? (
+                  <WifiOff className="w-6 h-6 text-amber-300" />
+                ) : isUnexpected ? (
+                  <AlertTriangle className="w-6 h-6 text-rose-300" />
                 ) : (
                   <SearchX className="w-6 h-6 text-rose-300" />
                 )}
@@ -102,13 +141,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
                   {APP_CONFIG.APP_NAME} • TRẠNG THÁI PHÒNG THI
                 </span>
                 <h1 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
-                  {status === 'not_published'
-                    ? 'Phòng thi đang tạm đóng'
-                    : status === 'not_started'
-                    ? 'Bài thi chưa đến giờ mở'
-                    : status === 'expired'
-                    ? 'Bài thi đã kết thúc'
-                    : 'Không tìm thấy bài thi'}
+                  {titleText}
                 </h1>
               </div>
             </div>
@@ -136,12 +169,11 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
               <div className="space-y-1">
                 <p className="font-bold">
-                  {statusMessage ||
-                    `Không tìm thấy bài thi với mã "${displayCode}".`}
+                  {statusMessage || defaultDetail}
                 </p>
-                {status === 'not_found' && (
+                {(status === 'not_found' || status === 'unauthorized') && (
                   <p className="text-xs text-amber-800 leading-relaxed">
-                    Nếu giáo viên vừa mới tạo đề thi trên thiết bị khác, vui lòng kiểm tra lại mã đề hoặc nhờ giáo viên bấm &ldquo;Đồng bộ Cloud&rdquo; trong mục Chia sẻ &amp; QR.
+                    Nếu giáo viên vừa mới tạo đề thi trên thiết bị khác, vui lòng kiểm tra lại mã đề hoặc nhờ giáo viên bấm &ldquo;Đồng bộ Cloud&rdquo; (đồng thời bật công tắc Mở phòng thi) trong mục Quản lý bài thi / Chia sẻ &amp; QR.
                   </p>
                 )}
               </div>
@@ -155,7 +187,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
                   className="px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors"
                 >
                   <RefreshCw className="w-4 h-4 text-blue-600" />
-                  <span>Kiểm tra lại</span>
+                  <span>Thử tải lại</span>
                 </button>
               )}
               <button
@@ -163,7 +195,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
                 onClick={onBackToHome}
                 className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-colors"
               >
-                Về trang nhập mã thi
+                Quay về trang chủ
               </button>
             </div>
           </div>
@@ -172,8 +204,16 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
     );
   }
 
+  const safeQuestions = Array.isArray(exam.questions) ? exam.questions : [];
+  const hasQuestions = safeQuestions.length > 0;
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!hasQuestions) {
+      setErrorMsg('Đề thi này hiện chưa có câu hỏi nào. Vui lòng liên hệ giáo viên kiểm tra lại.');
+      return;
+    }
+
     if (!studentName.trim() || !studentClass.trim()) {
       setErrorMsg('Vui lòng nhập đầy đủ Họ tên và Lớp của bạn trước khi làm bài!');
       return;
@@ -187,15 +227,16 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
     onStartExam(exam, studentName.trim(), studentClass.trim());
   };
 
-  // Count question types
-  const p1Count = exam.questions.filter((q) => q.type === 'part1_single_choice').length;
-  const p2Count = exam.questions.filter((q) => q.type === 'part2_true_false').length;
-  const p3Count = exam.questions.filter((q) => q.type === 'part3_short_answer').length;
+  // Count question types safely
+  const p1Count = safeQuestions.filter((q) => q?.type === 'part1_single_choice').length;
+  const p2Count = safeQuestions.filter((q) => q?.type === 'part2_true_false').length;
+  const p3Count = safeQuestions.filter((q) => q?.type === 'part3_short_answer').length;
 
   return (
     <div className="max-w-3xl mx-auto py-6 px-4 space-y-6">
       {/* Top Navigation */}
       <button
+        type="button"
         onClick={onBackToHome}
         className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 transition-colors"
       >
@@ -215,10 +256,10 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl md:text-3xl font-black text-white tracking-tight">
-                {exam.title}
+                {exam.title || `Bài thi ${exam.code || examCode || ''}`}
               </h1>
               <p className="text-xs text-blue-200 mt-1">
-                Giáo viên ra đề: <strong className="text-white">{exam.authorName}</strong> • {APP_CONFIG.APP_SCHOOL}
+                Giáo viên ra đề: <strong className="text-white">{exam.authorName || 'Giáo viên'}</strong> • {APP_CONFIG.APP_SCHOOL}
               </p>
             </div>
 
@@ -227,7 +268,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
                 MÃ BÀI THI
               </span>
               <span className="text-2xl font-black font-mono tracking-widest text-white">
-                {exam.code}
+                {exam.code || examCode || 'N/A'}
               </span>
             </div>
           </div>
@@ -254,6 +295,18 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
             </div>
           )}
 
+          {exam.isPublished && !hasQuestions && (
+            <div className="p-4 bg-rose-50 border border-rose-200 text-rose-900 rounded-2xl flex items-center gap-3 text-xs font-semibold">
+              <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+              <div>
+                <p className="font-bold">Đề thi chưa có câu hỏi</p>
+                <p className="text-rose-700 mt-0.5">
+                  Dữ liệu câu hỏi của mã &ldquo;{exam.code}&rdquo; hiện đang trống. Vui lòng báo lại cho giáo viên để cập nhật đề thi.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Quick Stats Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div className="p-3.5 rounded-2xl bg-blue-50/60 border border-blue-100 flex items-center gap-3">
@@ -262,7 +315,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               </div>
               <div>
                 <p className="text-[11px] text-slate-500 font-medium">Thời gian</p>
-                <p className="text-base font-extrabold text-slate-900">{exam.durationMinutes} phút</p>
+                <p className="text-base font-extrabold text-slate-900">{exam.durationMinutes || 45} phút</p>
               </div>
             </div>
 
@@ -272,7 +325,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               </div>
               <div>
                 <p className="text-[11px] text-slate-500 font-medium">Số câu hỏi</p>
-                <p className="text-base font-extrabold text-slate-900">{exam.totalQuestions || exam.questions.length} câu</p>
+                <p className="text-base font-extrabold text-slate-900">{exam.totalQuestions || safeQuestions.length} câu</p>
               </div>
             </div>
 
@@ -370,15 +423,21 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
 
             <button
               type="submit"
-              disabled={!exam.isPublished}
+              disabled={!exam.isPublished || !hasQuestions}
               className={`w-full py-4 text-white font-extrabold text-sm rounded-2xl shadow-lg transition-all flex items-center justify-center gap-2 ${
-                exam.isPublished
+                exam.isPublished && hasQuestions
                   ? 'bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 shadow-blue-500/25 cursor-pointer'
                   : 'bg-slate-400 cursor-not-allowed shadow-none opacity-80'
               }`}
             >
               <Play className="w-5 h-5 fill-white" />
-              <span>{exam.isPublished ? `BẮT ĐẦU LÀM BÀI THI (${exam.durationMinutes} PHÚT)` : 'PHÒNG THI ĐANG TẠM KHÓA'}</span>
+              <span>
+                {!exam.isPublished
+                  ? 'PHÒNG THI ĐANG TẠM KHÓA'
+                  : !hasQuestions
+                  ? 'ĐỀ THI CHƯA CÓ CÂU HỎI'
+                  : `BẮT ĐẦU LÀM BÀI THI (${exam.durationMinutes || 45} PHÚT)`}
+              </span>
             </button>
           </form>
         </div>
@@ -386,3 +445,4 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
     </div>
   );
 };
+
