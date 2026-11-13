@@ -88,6 +88,8 @@ export interface Question {
   // Trạng thái kiểm tra (cho parser)
   parseStatus?: 'verified' | 'needs_review' | 'error';
   parseWarning?: string;
+  equationWarnings?: string[];
+  ommlSources?: string[];
   teacherVerified?: boolean;
   recognitionSource?: RecognitionSource;
   sectionId?: string;
@@ -287,6 +289,10 @@ export interface ParsedExamResult {
   detectedSections?: DetectedExamSection[];
   hasAmbiguousSections?: boolean;
   sectionsConfirmed?: boolean;
+
+  // Equation & OMML Parse Diagnostics
+  equationWarnings?: string[];
+  unsupportedEquationCount?: number;
 }
 
 declare global {

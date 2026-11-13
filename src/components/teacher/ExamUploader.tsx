@@ -28,7 +28,7 @@ import {
   Copy
 } from 'lucide-react';
 import {
-  extractTextFromDocx,
+  parseDocxExam,
   extractTextFromPdf,
   parseExamContent,
   reclassifyQuestionType,
@@ -83,9 +83,8 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       const fileNameLower = file.name.toLowerCase();
       if (fileNameLower.endsWith('.docx')) {
         const buffer = await file.arrayBuffer();
-        const extracted = await extractTextFromDocx(buffer);
-        setInputText(extracted);
-        const result = parseExamContent(extracted, selectedGrade);
+        const { text, result } = await parseDocxExam(buffer, selectedGrade);
+        setInputText(text);
         setParsedResult(result);
       } else if (fileNameLower.endsWith('.pdf')) {
         const buffer = await file.arrayBuffer();
@@ -205,10 +204,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       const res = await fetch('/assets/test_chem_equations.docx');
       if (res.ok) {
         const buffer = await res.arrayBuffer();
-        const text = await extractTextFromDocx(buffer);
+        const { text, result } = await parseDocxExam(buffer, '12');
         if (text && text.trim().length > 20) {
           setInputText(text);
-          const result = parseExamContent(text, '12');
           setParsedResult(result);
           showToast('Đã đọc và nhận dạng file Word test_chem_equations.docx với OMML Equations!');
           return;
@@ -229,10 +227,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       const res = await fetch('/assets/test_chem_3parts.docx');
       if (res.ok) {
         const buffer = await res.arrayBuffer();
-        const text = await extractTextFromDocx(buffer);
+        const { text, result } = await parseDocxExam(buffer, '12');
         if (text && text.trim().length > 20) {
           setInputText(text);
-          const result = parseExamContent(text, '12');
           setParsedResult(result);
           showToast('Đã đọc và nhận dạng file Word test_chem_3parts.docx (Chuẩn 3 Phần GDPT 2018)!');
           return;
@@ -847,6 +844,20 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               </div>
             </div>
 
+            {parsedResult.equationWarnings && parsedResult.equationWarnings.length > 0 && (
+              <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs space-y-1">
+                <div className="font-bold flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Lưu ý khi đọc Word Equation ({parsedResult.equationWarnings.length} cảnh báo — dữ liệu gốc vẫn được bảo toàn):</span>
+                </div>
+                <ul className="list-disc list-inside text-[11px] space-y-0.5 text-amber-800">
+                  {parsedResult.equationWarnings.slice(0, 4).map((w, idx) => (
+                    <li key={idx}>{w}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {pendingActionNotice && parsedResult.hasAmbiguousSections && !parsedResult.sectionsConfirmed && (
               <div className="p-2.5 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                 <span className="font-semibold flex items-center gap-1.5">
@@ -1109,6 +1120,13 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                   <div className="text-sm text-slate-900 font-medium my-2">
                     <ChemRenderer text={q.content} />
                   </div>
+
+                  {q.equationWarnings && q.equationWarnings.length > 0 && (
+                    <div className="mb-2 px-2.5 py-1.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 flex items-start gap-1.5">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+                      <span>{q.equationWarnings.join(' ')}</span>
+                    </div>
+                  )}
 
                   {/* Render Options for Part I */}
                   {q.type === 'part1_single_choice' && q.options && (

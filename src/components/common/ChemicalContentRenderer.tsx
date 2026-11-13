@@ -2,18 +2,19 @@
  * CHEMICAL CONTENT RENDERER (HQTest Unified Formula & Equation Engine)
  * Component hiển thị thống nhất cho toàn bộ hệ thống HQTest:
  * - Văn bản tiếng Việt có dấu
- * - Biểu thức toán học KaTeX ($...$ và $$...$$)
- * - Công thức hóa học chỉ số trên/dưới tự động (H2SO4, Fe3+, SO4 2-, [Cu(NH3)4]2+)
- * - Phương trình hóa học (mũi tên, điều kiện t°, thuận nghịch ⇌, khí ↑, kết tủa ↓)
+ * - Biểu thức toán học KaTeX ($...$, $$...$$, \(...\), \[...\]) & mhchem (\ce{...}, \pu{...})
+ * - Công thức hóa học chỉ số trên/dưới tự động (H2SO4, 4HNO3, Fe(NO3)3, Al2(SO4)3, SO4 2-, [Cu(NH3)4]2+)
+ * - Phương trình hóa học (mũi tên, điều kiện t°/xt trên & dưới mũi tên, thuận nghịch ⇌, khí ↑, kết tủa ↓)
  * - Công thức hữu cơ (liên kết đơn -, đôi =, ba ≡, nhóm chức)
- * - Bảng Markdown (|...|)
- * - Thẻ HTML an toàn (sub, sup, b, i, u, br)
+ * - Bảng Markdown đa cột (|...|) chứa công thức & Equation
+ * - Thẻ định dạng an toàn (sub, sup, b, strong, i, em, u, s, br, **bold**, *italic*)
  * - Hình ảnh minh họa nhúng từ DOCX (data URL hoặc ảnh web)
  * - Bảo toàn ký hiệu %, ‰, °C, kJ/mol, mol/L, ±, ≥, ≤, ≠, ≈, Δ
  */
 
 import React from 'react';
 import katex from 'katex';
+import 'katex/contrib/mhchem';
 
 export interface ChemicalContentRendererProps {
   content?: string;
@@ -31,8 +32,8 @@ export const ChemicalContentRenderer: React.FC<ChemicalContentRendererProps> = (
   const rawText = content !== undefined ? content : text || '';
   if (!rawText) return null;
 
-  // 1. Check if text contains Markdown table
-  if (hasMarkdownTable(rawText)) {
+  // 1. Check if text contains Markdown table (including multi-column tables |---|---|)
+  if (!inline && hasMarkdownTable(rawText)) {
     return <RenderContentWithTables text={rawText} className={className} inline={inline} />;
   }
 
@@ -41,10 +42,10 @@ export const ChemicalContentRenderer: React.FC<ChemicalContentRendererProps> = (
 };
 
 /**
- * Checks if text contains a markdown table (| ... |)
+ * Checks if text contains a single- or multi-column markdown table
  */
 function hasMarkdownTable(text: string): boolean {
-  return /\|[^\n]+\|\r?\n\|[\s\-:]+\|\r?\n\|[^\n]+\|/m.test(text);
+  return /^\s*\|[^\n]+\|\r?\n\s*\|[\s\-:|]+\|\r?\n\s*\|[^\n]+\|/m.test(text);
 }
 
 /**
@@ -63,8 +64,8 @@ const RenderContentWithTables: React.FC<{ text: string; className?: string; inli
   let inTable = false;
 
   for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const isTableLine = line.trim().startsWith('|') && line.trim().endsWith('|');
+    const trimmed = lines[i].trim();
+    const isTableLine = trimmed.startsWith('|') && trimmed.endsWith('|') && trimmed.length >= 3;
 
     if (isTableLine) {
       if (!inTable) {
@@ -74,14 +75,14 @@ const RenderContentWithTables: React.FC<{ text: string; className?: string; inli
         }
         inTable = true;
       }
-      currentTableLines.push(line.trim());
+      currentTableLines.push(trimmed);
     } else {
       if (inTable) {
         blocks.push({ type: 'table', content: currentTableLines });
         currentTableLines = [];
         inTable = false;
       }
-      currentTextLines.push(line);
+      currentTextLines.push(lines[i]);
     }
   }
 
@@ -97,33 +98,31 @@ const RenderContentWithTables: React.FC<{ text: string; className?: string; inli
         if (block.type === 'table') {
           return <TableRenderer key={idx} tableLines={block.content as string[]} />;
         }
-        return (
-          <div key={idx}>
-            {renderTextBlocks(block.content as string, '', !!inline)}
-          </div>
-        );
+        const txt = (block.content as string).trim();
+        if (!txt) return null;
+        return <div key={idx}>{renderTextBlocks(txt, '', !!inline)}</div>;
       })}
     </div>
   );
 };
 
 /**
- * Renders Markdown Table as clean styled HTML Table
+ * Renders Markdown Table as clean styled HTML Table (preserving math & chemistry inside every cell)
  */
 const TableRenderer: React.FC<{ tableLines: string[] }> = ({ tableLines }) => {
-  if (tableLines.length < 2) return null;
+  if (tableLines.length < 2) {
+    return <div>{renderTextBlocks(tableLines.join('\n'), '', false)}</div>;
+  }
 
   const headerLine = tableLines[0];
-  const separatorLine = tableLines[1];
-  const dataLines = tableLines.slice(2);
+  const isSeparator = /^\|[\s\-:|]+\|$/.test(tableLines[1].trim());
+  const dataLines = isSeparator ? tableLines.slice(2) : tableLines.slice(1);
 
-  // Split pipes
-  const parseRow = (line: string) => {
-    return line
+  const parseRow = (line: string) =>
+    line
       .slice(1, -1)
       .split('|')
       .map(cell => cell.trim());
-  };
 
   const headers = parseRow(headerLine);
   const dataRows = dataLines.map(parseRow);
@@ -157,143 +156,281 @@ const TableRenderer: React.FC<{ tableLines: string[] }> = ({ tableLines }) => {
 };
 
 /**
- * Splits text into LaTeX segments ($...$ and $$...$$), HTML tags (sub, sup, img), and plain chemical text
+ * Splits text into LaTeX segments, safe HTML tags, Markdown formatting, images, and smart plain chemistry
  */
 function renderTextBlocks(text: string, className: string, inline: boolean): React.ReactElement {
-  // Regex splitting:
-  // 1. Display Math: $$...$$ or \[...\]
-  // 2. Inline Math: $...$ or \(...\)
-  // 3. HTML tags: <sub>...</sub>, <sup>...</sup>, <img.../>, <b>...</b>, <i>...</i>
-  // 4. Markdown images: ![alt](url)
-  const masterSplitRegex = /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|\$[^$\n]+\$|\\\([\s\S]*?\\\)|<sub>[\s\S]*?<\/sub>|<sup>[\s\S]*?<\/sup>|<img\b[^>]*\/>|!\[[^\]]*\]\([^\)]+\))/gi;
-
-  const parts = text.split(masterSplitRegex);
-
   const Component = inline ? 'span' : 'div';
-
   return (
     <Component className={`leading-relaxed ${className}`}>
-      {parts.map((part, index) => {
-        if (!part) return null;
-
-        // 1. Display Math: $$ ... $$ or \[ ... \]
-        if ((part.startsWith('$$') && part.endsWith('$$')) || (part.startsWith('\\[') && part.endsWith('\\]'))) {
-          const rawMath = part.startsWith('$$') ? part.slice(2, -2) : part.slice(2, -2);
-          return <KatexMathBlock key={index} math={rawMath} displayMode={true} />;
-        }
-
-        // 2. Inline Math: $ ... $ or \( ... \)
-        if ((part.startsWith('$') && part.endsWith('$')) || (part.startsWith('\\(') && part.endsWith('\\)'))) {
-          const rawMath = part.startsWith('$') ? part.slice(1, -1) : part.slice(2, -2);
-          return <KatexMathBlock key={index} math={rawMath} displayMode={false} />;
-        }
-
-        // 3. HTML Subscript: <sub>...</sub>
-        if (/^<sub>([\s\S]*?)<\/sub>$/i.test(part)) {
-          const match = part.match(/^<sub>([\s\S]*?)<\/sub>$/i);
-          return (
-            <sub key={index} className="text-[0.72em] font-semibold text-slate-800">
-              {match ? match[1] : ''}
-            </sub>
-          );
-        }
-
-        // 4. HTML Superscript: <sup>...</sup>
-        if (/^<sup>([\s\S]*?)<\/sup>$/i.test(part)) {
-          const match = part.match(/^<sup>([\s\S]*?)<\/sup>$/i);
-          return (
-            <sup key={index} className="text-[0.72em] font-bold text-blue-800">
-              {match ? match[1] : ''}
-            </sup>
-          );
-        }
-
-        // 5. Markdown Image: ![alt](url)
-        if (/^!\[([^\]]*)\]\(([^\)]+)\)$/i.test(part)) {
-          const m = part.match(/^!\[([^\]]*)\]\(([^\)]+)\)$/i);
-          if (m) {
-            return (
-              <span key={index} className="my-2 block text-center">
-                <img 
-                  src={m[2]} 
-                  alt={m[1] || 'Hình ảnh minh họa'} 
-                  className="max-h-72 max-w-full rounded-xl border border-slate-200 shadow-xs inline-block bg-white p-1" 
-                />
-              </span>
-            );
-          }
-        }
-
-        // 6. HTML Image: <img ... />
-        if (/^<img\b/i.test(part)) {
-          const srcMatch = part.match(/src="([^"]+)"/i);
-          const altMatch = part.match(/alt="([^"]*)"/i);
-          if (srcMatch) {
-            return (
-              <span key={index} className="my-2 block text-center">
-                <img 
-                  src={srcMatch[1]} 
-                  alt={altMatch ? altMatch[1] : 'Hình ảnh'} 
-                  className="max-h-72 max-w-full rounded-xl border border-slate-200 shadow-xs inline-block bg-white p-1" 
-                />
-              </span>
-            );
-          }
-        }
-
-        // 7. Plain text with Chemistry Auto-Formatter
-        return <span key={index}>{renderSmartChemistry(part)}</span>;
-      })}
+      {renderInlineTokens(text, 0)}
     </Component>
   );
 }
 
+function renderInlineTokens(text: string, depth: number): React.ReactNode {
+  if (!text) return null;
+  if (depth > 6) return renderSmartChemistry(text);
+
+  const masterSplitRegex =
+    /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|(?<!\\)\$[^$\n]+(?<!\\)\$|\\\([\s\S]*?\\\)|\\x(?:right|left|leftrightarrow|rightleftharpoons|rightleftarrows|Rightarrow|Leftarrow|Leftrightarrow|longequal)(?:\[[^\]]*\])?\{[^}]*\}|<sub>[\s\S]*?<\/sub>|<sup>[\s\S]*?<\/sup>|<u>[\s\S]*?<\/u>|<s>[\s\S]*?<\/s>|<b>[\s\S]*?<\/b>|<strong>[\s\S]*?<\/strong>|<i>[\s\S]*?<\/i>|<em>[\s\S]*?<\/em>|<br\s*\/?>|<img\b[^>]*\/>|!\[[^\]]*\]\([^\)]+\)|\*\*\*[^\s*](?:[^*\n]*?[^\s*])?\*\*\*|\*\*[^\s*](?:[^*\n]*?[^\s*])?\*\*)/gi;
+
+  const parts = text.split(masterSplitRegex);
+
+  return parts.map((part, index) => {
+    if (!part) return null;
+
+    // 1. Display Math: $$ ... $$ or \[ ... \]
+    if ((part.startsWith('$$') && part.endsWith('$$')) || (part.startsWith('\\[') && part.endsWith('\\]'))) {
+      const rawMath = part.slice(2, -2);
+      return <KatexMathBlock key={index} math={rawMath} displayMode={true} />;
+    }
+
+    // 2. Inline Math: $ ... $ or \( ... \)
+    if ((part.startsWith('$') && part.endsWith('$')) || (part.startsWith('\\(') && part.endsWith('\\)'))) {
+      const rawMath = part.startsWith('$') ? part.slice(1, -1) : part.slice(2, -2);
+      return <KatexMathBlock key={index} math={rawMath} displayMode={false} />;
+    }
+
+    // 2b. Unwrapped extensible arrow command e.g. \xrightarrow{t^\circ}
+    if (/^\\x(?:right|left|leftrightarrow|rightleftharpoons|rightleftarrows|Rightarrow|Leftarrow|Leftrightarrow|longequal)/i.test(part)) {
+      return <KatexMathBlock key={index} math={part} displayMode={false} />;
+    }
+
+    // 3. HTML Subscript: <sub>...</sub>
+    const subMatch = part.match(/^<sub>([\s\S]*?)<\/sub>$/i);
+    if (subMatch) {
+      return (
+        <sub key={index} className="text-[0.73em] font-semibold text-slate-800">
+          {subMatch[1].replace(/<[^>]+>/g, '')}
+        </sub>
+      );
+    }
+
+    // 4. HTML Superscript: <sup>...</sup>
+    const supMatch = part.match(/^<sup>([\s\S]*?)<\/sup>$/i);
+    if (supMatch) {
+      return (
+        <sup key={index} className="text-[0.73em] font-bold text-blue-800">
+          {supMatch[1].replace(/<[^>]+>/g, '')}
+        </sup>
+      );
+    }
+
+    // 5. HTML Underline / Strike / Bold / Italic / Break
+    const uMatch = part.match(/^<u>([\s\S]*?)<\/u>$/i);
+    if (uMatch) {
+      return (
+        <u key={index} className="underline decoration-slate-500 underline-offset-2">
+          {renderInlineTokens(uMatch[1], depth + 1)}
+        </u>
+      );
+    }
+
+    const sMatch = part.match(/^<s>([\s\S]*?)<\/s>$/i);
+    if (sMatch) {
+      return (
+        <s key={index} className="line-through text-slate-500">
+          {renderInlineTokens(sMatch[1], depth + 1)}
+        </s>
+      );
+    }
+
+    const bMatch = part.match(/^<(?:b|strong)>([\s\S]*?)<\/(?:b|strong)>$/i);
+    if (bMatch) {
+      return (
+        <strong key={index} className="font-bold">
+          {renderInlineTokens(bMatch[1], depth + 1)}
+        </strong>
+      );
+    }
+
+    const iMatch = part.match(/^<(?:i|em)>([\s\S]*?)<\/(?:i|em)>$/i);
+    if (iMatch) {
+      return (
+        <em key={index} className="italic">
+          {renderInlineTokens(iMatch[1], depth + 1)}
+        </em>
+      );
+    }
+
+    if (/^<br\s*\/?>$/i.test(part)) {
+      return <br key={index} />;
+    }
+
+    // 6. Markdown Bold+Italic (***...***) and Bold (**...**)
+    if (part.startsWith('***') && part.endsWith('***') && part.length > 6) {
+      return (
+        <strong key={index} className="font-bold italic">
+          {renderInlineTokens(part.slice(3, -3), depth + 1)}
+        </strong>
+      );
+    }
+
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      return (
+        <strong key={index} className="font-bold">
+          {renderInlineTokens(part.slice(2, -2), depth + 1)}
+        </strong>
+      );
+    }
+
+    // 7. Markdown Image: ![alt](url)
+    const mdImgMatch = part.match(/^!\[([^\]]*)\]\(([^\)]+)\)$/i);
+    if (mdImgMatch) {
+      return (
+        <span key={index} className="my-2 block text-center">
+          <img
+            src={mdImgMatch[2]}
+            alt={mdImgMatch[1] || 'Hình ảnh minh họa'}
+            className="max-h-72 max-w-full rounded-xl border border-slate-200 shadow-xs inline-block bg-white p-1"
+          />
+        </span>
+      );
+    }
+
+    // 8. HTML Image: <img ... />
+    if (/^<img\b/i.test(part)) {
+      const srcMatch = part.match(/src="([^"]+)"/i);
+      const altMatch = part.match(/alt="([^"]*)"/i);
+      if (srcMatch) {
+        return (
+          <span key={index} className="my-2 block text-center">
+            <img
+              src={srcMatch[1]}
+              alt={altMatch ? altMatch[1] : 'Hình ảnh'}
+              className="max-h-72 max-w-full rounded-xl border border-slate-200 shadow-xs inline-block bg-white p-1"
+            />
+          </span>
+        );
+      }
+    }
+
+    // 9. Plain text with Chemistry Auto-Formatter (unescape literal \$ if present)
+    return <span key={index}>{renderSmartChemistry(part.replace(/\\\$/g, '$'))}</span>;
+  });
+}
+
 /**
- * KaTeX Safe Math Element (Handles KaTeX errors gracefully)
+ * KaTeX Safe Math Element (Handles KaTeX errors gracefully and supports mhchem \ce / \pu)
  */
 const KatexMathBlock: React.FC<{ math: string; displayMode: boolean }> = ({ math, displayMode }) => {
   const cleanMath = math.trim();
   if (!cleanMath) return null;
 
-  try {
-    const html = katex.renderToString(cleanMath, {
+  const renderWithKatex = (expr: string) =>
+    katex.renderToString(expr, {
       displayMode,
-      throwOnError: false,
+      throwOnError: true,
       strict: false,
+      trust: false,
     });
+
+  try {
+    let html: string;
+    try {
+      html = renderWithKatex(cleanMath);
+    } catch {
+      // Retry after escaping unescaped '%' which would otherwise comment out trailing braces
+      const repaired = cleanMath.replace(/(?<!\\)%/g, '\\%');
+      try {
+        html = renderWithKatex(repaired);
+      } catch {
+        html = katex.renderToString(repaired, {
+          displayMode,
+          throwOnError: false,
+          strict: false,
+        });
+      }
+    }
 
     const Tag = displayMode ? 'div' : 'span';
     return (
       <Tag
-        className={`${displayMode ? 'my-2 block overflow-x-auto text-center' : 'inline-block px-0.5'} text-slate-900 font-serif select-text`}
+        className={`${
+          displayMode ? 'my-2 block overflow-x-auto text-center hq-katex-display' : 'inline-block px-0.5 align-middle hq-katex-inline'
+        } text-slate-900 select-text`}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     );
   } catch {
-    // Fallback: render text without throwing
-    return <span className="font-mono text-purple-700 font-medium px-1 bg-purple-50 rounded">${cleanMath}$</span>;
+    return (
+      <span className="font-mono text-purple-700 font-medium px-1 bg-purple-50 rounded">
+        ${cleanMath}$
+      </span>
+    );
   }
 };
 
 /**
  * Chemistry Plain-Text Formatter:
  * Formats:
- * - Reaction arrows (->, -->, →, <=>, ⇌, ⇄, \xrightarrow{t^\circ})
+ * - Conditional reaction arrows: ->[t°], -->[xt, t°], <=>[Fe][t°]
+ * - Plain reaction arrows: ->, -->, →, <=>, ⇌, ⇄
  * - Gas ↑ and precipitate ↓
- * - Chemical formulas: H2SO4, Fe2O3, Al2(SO4)3, Ca(OH)2, CH3COOH, C6H12O6
- * - Ion charges: Fe3+, Cu2+, SO4 2-, PO4 3-, NH4+, [Cu(NH3)4]2+, [Ag(NH3)2]+
+ * - Chemical formulas (preserving parentheses & brackets!): H2SO4, 4HNO3, Fe(NO3)3, Al2(SO4)3, Ca(OH)2
+ * - Ion charges (including spaced): Fe3+, Cu2+, SO4 2-, PO4^3-, [Cu(NH3)4]2+, [Ag(NH3)2]+
  * - Organic bonds: CH3-CH2-OH, CH2=CH2, CH≡CH
- * - Temperature and reaction conditions: t°, 25°C, xt, đun nóng
- * - Percent %, ‰, ±, ≥, ≤, ≠, ≈, Δ, α, β, γ
+ * - Units & symbols: %, ‰, °C, kJ/mol, mol/L, ±, ≥, ≤, ≠, ≈, Δ
  */
 function renderSmartChemistry(content: string): React.ReactNode {
-  // Normalize arrows and symbols
+  // Handle inline conditional arrow syntax first: e.g. ->[t°], -->[xt], <=>[Fe][t°]
+  const condArrowSplit = /((?:<==>|<=>|⇄|⇆|-->|->|→)\[[^\]\n]+\](?:\[[^\]\n]+\])?)/g;
+  if (condArrowSplit.test(content)) {
+    const segs = content.split(condArrowSplit);
+    return (
+      <>
+        {segs.map((seg, i) => {
+          if (!seg) return null;
+          const revMatch = seg.match(/^(?:<==>|<=>|⇄|⇆)\[([^\]]+)\](?:\[([^\]]+)\])?$/);
+          if (revMatch) {
+            const top = formatArrowCondLatex(revMatch[1]);
+            const bot = revMatch[2] ? formatArrowCondLatex(revMatch[2]) : '';
+            return (
+              <KatexMathBlock
+                key={i}
+                math={bot ? `\\xrightleftharpoons[${bot}]{${top}}` : `\\xrightleftharpoons{${top}}`}
+                displayMode={false}
+              />
+            );
+          }
+          const fwdMatch = seg.match(/^(?:-->|->|→)\[([^\]]+)\](?:\[([^\]]+)\])?$/);
+          if (fwdMatch) {
+            const top = formatArrowCondLatex(fwdMatch[1]);
+            const bot = fwdMatch[2] ? formatArrowCondLatex(fwdMatch[2]) : '';
+            return (
+              <KatexMathBlock
+                key={i}
+                math={bot ? `\\xrightarrow[${bot}]{${top}}` : `\\xrightarrow{${top}}`}
+                displayMode={false}
+              />
+            );
+          }
+          return <React.Fragment key={i}>{renderPlainChemistryCore(seg)}</React.Fragment>;
+        })}
+      </>
+    );
+  }
+
+  return renderPlainChemistryCore(content);
+}
+
+function formatArrowCondLatex(cond: string): string {
+  const c = cond.trim();
+  if (/^t[°o]$/i.test(c)) return 't^\\circ';
+  return c
+    .replace(/t°/g, 't^\\circ')
+    .replace(/°C/g, '^\\circ\\text{C}')
+    .replace(/°/g, '^\\circ')
+    .replace(/([àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđĐ][A-Za-zÀ-ỹ\s,]*)/gi, '\\text{$1}');
+}
+
+function renderPlainChemistryCore(content: string): React.ReactNode {
   const normalized = content
     .replace(/<===>|<=>|⇄|⇆/g, ' ⇌ ')
     .replace(/-->|->/g, ' → ')
-    .replace(/\\Delta|delta H|ΔH/gi, 'ΔᵣH')
-    .replace(/\\uparrow/gi, '↑')
-    .replace(/\\downarrow/gi, '↓');
+    .replace(/\\Delta\b/g, 'Δ')
+    .replace(/\\uparrow\b/gi, '↑')
+    .replace(/\\downarrow\b/gi, '↓');
 
   const lines = normalized.split('\n');
 
@@ -310,12 +447,21 @@ function renderSmartChemistry(content: string): React.ReactNode {
 }
 
 function formatLineChemistry(line: string): React.ReactNode {
-  if (!line.trim()) return null;
+  if (!line) return null;
+  if (!line.trim()) return line;
 
-  // Split by reaction arrow segments: ' → ' or ' ⇌ '
-  const arrowParts = line.split(/(\s*→\s*|\s*⇌\s*)/g);
+  // Pre-merge spaced ion charges safely: e.g. "SO4 2-" -> "SO4^2-", "[Cu(NH3)4] 2+" -> "[Cu(NH3)4]^2+"
+  const withMergedCharges = line.replace(
+    /\b([A-Z][A-Za-z0-9()]*\d+|\[[A-Za-z0-9()]+\])[ \t]+([1-4]?[+-])(?=\s|$|[.,;:)\]])/g,
+    '$1^$2'
+  );
+
+  // Split by reaction arrows ONLY, keeping spaces intact
+  const arrowParts = withMergedCharges.split(/(\s*→\s*|\s*⇌\s*)/g);
 
   return arrowParts.map((part, pIdx) => {
+    if (!part) return null;
+
     if (part.includes('→')) {
       return (
         <span key={pIdx} className="font-bold text-blue-700 px-1.5 select-none text-sm inline-block">
@@ -331,28 +477,44 @@ function formatLineChemistry(line: string): React.ReactNode {
       );
     }
 
-    // Split into words/tokens, separating punctuation but keeping chemical formulas intact
-    // Keep units like %, °C, kJ/mol, mol/L intact
-    const words = part.split(/(\s+|[,;()\[\]])/g);
+    // Split STRICTLY on whitespace so parentheses inside Fe(NO3)3, Al2(SO4)3, [Cu(NH3)4]2+ stay intact!
+    const chunks = part.split(/(\s+)/g);
 
     return (
       <span key={pIdx}>
-        {words.map((word, wIdx) => {
-          if (!word) return null;
-          if (word.startsWith(' ') || word === ',' || word === ';' || word === '(' || word === ')' || word === '[' || word === ']') {
-            return <span key={wIdx}>{word}</span>;
+        {chunks.map((chunk, cIdx) => {
+          if (!chunk) return null;
+          if (/^\s+$/.test(chunk)) {
+            return <span key={cIdx}>{chunk}</span>;
           }
 
-          if (isChemicalFormulaToken(word)) {
-            return <FormattedChemicalFormula key={wIdx} formula={word} />;
+          const { lead, core, trail } = peelOuterPunctuation(chunk);
+
+          if (!core) {
+            return <span key={cIdx}>{chunk}</span>;
           }
 
-          // Check for units with numbers e.g. 10%, 25°C, 100kJ/mol
-          if (/^\d+(?:[,.]\d+)?(?:%|‰|°C|M|g|kg|mol|mL|L)$/i.test(word)) {
-            return <span key={wIdx} className="font-medium text-slate-900">{word}</span>;
+          if (isChemicalFormulaToken(core)) {
+            return (
+              <React.Fragment key={cIdx}>
+                {lead && <span>{lead}</span>}
+                <FormattedChemicalFormula formula={core} />
+                {trail && <span>{trail}</span>}
+              </React.Fragment>
+            );
           }
 
-          return <span key={wIdx}>{word}</span>;
+          if (/^\d+(?:[,.]\d+)?(?:%|‰|°C|M|g|kg|mol|mL|L)$/i.test(core)) {
+            return (
+              <React.Fragment key={cIdx}>
+                {lead && <span>{lead}</span>}
+                <span className="font-medium text-slate-900">{core}</span>
+                {trail && <span>{trail}</span>}
+              </React.Fragment>
+            );
+          }
+
+          return <span key={cIdx}>{chunk}</span>;
         })}
       </span>
     );
@@ -360,136 +522,249 @@ function formatLineChemistry(line: string): React.ReactNode {
 }
 
 /**
- * Checks if a word token looks like a chemical formula:
- * e.g. H2O, H2SO4, Fe2O3, Al2(SO4)3, Ca(OH)2, CH3COOH, C6H12O6, Fe3+, Cu2+, SO4^2-, [Cu(NH3)4]2+, CH3-CH2-OH, CH2=CH2, CH≡CH
+ * Peels only outer sentence punctuation (.,;:!?) and UNMATCHED outer parentheses/brackets
+ * without breaking balanced chemical formulas like Fe(NO3)3, Ca(OH)2, or [Cu(NH3)4]2+.
  */
-function isChemicalFormulaToken(token: string): boolean {
+function peelOuterPunctuation(token: string): { lead: string; core: string; trail: string } {
+  let lead = '';
+  let core = token;
+  let trail = '';
+
+  // Peel leading quotes or opening parens when the token doesn't start with a complex bracket [Cu(...)
+  while (core.length > 0 && /^["'“‘(]/.test(core)) {
+    lead += core[0];
+    core = core.slice(1);
+  }
+
+  // Peel trailing sentence punctuation .,;:!?"'”’
+  while (core.length > 0 && /[.,;:!?"'”’]$/.test(core)) {
+    trail = core[core.length - 1] + trail;
+    core = core.slice(0, -1);
+  }
+
+  // Peel trailing ')' only if there are more ')' than '(' inside core (i.e. it closed an outer paren!)
+  while (core.endsWith(')')) {
+    const openCount = (core.match(/\(/g) || []).length;
+    const closeCount = (core.match(/\)/g) || []).length;
+    if (closeCount > openCount) {
+      trail = ')' + trail;
+      core = core.slice(0, -1);
+      // Also peel any inner trailing punctuation exposed after removing ')'
+      while (core.length > 0 && /[.,;:!?]$/.test(core)) {
+        trail = core[core.length - 1] + trail;
+        core = core.slice(0, -1);
+      }
+    } else {
+      break;
+    }
+  }
+
+  return { lead, core, trail };
+}
+
+/**
+ * Checks if a token looks like a chemical formula (with optional leading stoichiometric coefficient and trailing ↑/↓)
+ */
+function isChemicalFormulaToken(rawToken: string): boolean {
+  if (!rawToken || rawToken.length < 2) return false;
+
+  // Strip trailing gas/precipitate arrow if attached: e.g. H2↑, CO2↑, CaCO3↓
+  const noArrow = rawToken.replace(/[↑↓]+$/, '');
+  if (noArrow.length < 2) return false;
+
+  // Allow optional leading stoichiometric coefficient: e.g. 4HNO3, 2H2O, 3H2, 2Fe(OH)3
+  const coeffMatch = noArrow.match(/^(\d+)([A-Z\[].*)$/);
+  const token = coeffMatch ? coeffMatch[2] : noArrow;
+
   if (!token || token.length < 2) return false;
 
-  // Discard pure Vietnamese or English words starting with capital letter
-  if (/^(Khi|Trong|Cho|Chất|Dung|Biết|Sau|Tính|Nếu|Hãy|Thí|Đề|Mỗi|Phần|Câu|Các|Có|Lấy|Hòa|Đốt|Kim|Nước|Muối|Dầu|Axit|Aces|Acid|Base|Anion|Cation|Mol|Gam|Lít|Học|Sinh|Giáo|Viên|Nam|Bắc)$/i.test(token)) {
+  // Discard Vietnamese/English prose words
+  if (
+    /^(Khi|Trong|Cho|Chất|Dung|Biết|Sau|Tính|Nếu|Hãy|Thí|Đề|Mỗi|Phần|Câu|Các|Có|Lấy|Hòa|Đốt|Kim|Nước|Muối|Dầu|Axit|Aces|Acid|Base|Anion|Cation|Mol|Gam|Lít|Học|Sinh|Giáo|Viên|Nam|Bắc|The|And|With|For|From|That|This|Then|When|What|Which)$/i.test(
+      token
+    )
+  ) {
     return false;
   }
-  if (/^(The|And|With|For|From|That|This|Then|When|What|Which)$/i.test(token)) {
-    return false;
+
+  // Polymer brackets / structural formula like [C6H7O2(OOCCH3)3]n or (C6H10O5)n
+  if (/^[\[\(][A-Z][A-Za-z0-9()\[\]]+[\]\)]n?$/.test(token) && /\d/.test(token)) {
+    return true;
   }
 
   // Organic structural formulas with hyphens, equals, triples e.g. CH3-CH2-OH, CH2=CH2, CH≡CH
-  if (/[A-Z][a-z0-9]*[–\-=≡][A-Z]/.test(token)) {
+  if (/[A-Z][a-z0-9]*[–\-=≡][A-Z]/.test(token) && /^[A-Za-z0-9()\[\]–\-=≡+^]+$/.test(token)) {
     return true;
   }
 
-  // Complex ions e.g. [Cu(NH3)4]2+ or [Ag(NH3)2]+
-  if (/^\[[A-Z][a-z0-9()]+\][0-9]*[+-]?$/i.test(token)) {
+  // Complex ions e.g. [Cu(NH3)4]2+, [Cu(NH3)4]^2+, [Ag(NH3)2]+
+  if (/^\[[A-Z][A-Za-z0-9()]+\](?:\^?[0-9]*[+-]?)$/.test(token)) {
     return true;
   }
 
-  // Element with digits e.g. H2, CO2, H2SO4, C6H12O6, Fe2O3, KMnO4
-  const hasElementAndDigits = /^[A-Z][a-z]?[0-9]/.test(token) || /[A-Z][a-z]?[0-9]+[A-Z]/.test(token);
+  // Element with digits e.g. H2, CO2, H2SO4, C6H12O6, Fe2O3, KMnO4, Fe(NO3)3
+  const hasElementAndDigits = /^[A-Z][a-z]?[0-9]/.test(token) || /[A-Z][a-z]?[0-9]+[A-Z\)]/.test(token) || /\)[0-9]+/.test(token);
 
   // Element with charges e.g. Fe3+, Cu2+, Al3+, Cl-, Na+, SO42-, SO4^2-
-  const hasCharge = /[0-9]*[+-]$/.test(token) || /\^[0-9]*[+-]/.test(token);
+  const hasCharge = /(?:[0-9]*[+-]|\^[0-9]*[+-])$/.test(token);
 
-  // Parentheses in formula e.g. Ca(OH)2, Ba(NO3)2, Al2(SO4)3
-  const hasFormulaParens = /^[A-Z][a-z]?\([A-Za-z0-9]+\)[0-9]*/.test(token);
+  // Parentheses in formula e.g. Ca(OH)2, Ba(NO3)2, Al2(SO4)3, Fe(NO3)3
+  const hasFormulaParens = /^[A-Z][a-z]?\d*\([A-Za-z0-9]+\)\d*/.test(token);
 
-  // Valid chemical formula characters
-  const validCharsOnly = /^[A-Z][a-z0-9()\[\]+\-^–=≡]+$/.test(token);
+  // Valid chemical formula characters (also allow leading/trailing stoichiometry or caret charges)
+  const validCharsOnly = /^[A-Z\[][A-Za-z0-9()\[\]+\-^–=≡]+$/.test(token);
 
   return validCharsOnly && (hasElementAndDigits || hasCharge || hasFormulaParens);
 }
 
 /**
- * Formats a chemical token into JSX with accurate subscripts and superscripts:
- * e.g. H2SO4 -> H<sub>2</sub>SO<sub>4</sub>
- * Fe3+ -> Fe<sup>3+</sup>
- * SO4 2- or SO4^2- -> SO<sub>4</sub><sup>2-</sup>
- * [Cu(NH3)4]2+ -> [Cu(NH<sub>3</sub>)<sub>4</sub>]<sup>2+</sup>
- * CH3-CH2-OH -> CH<sub>3</sub>–CH<sub>2</sub>–OH
+ * Formats a chemical token (including optional leading coefficient & trailing ↑/↓) into JSX with accurate subscripts and superscripts
  */
 const FormattedChemicalFormula: React.FC<{ formula: string }> = ({ formula }) => {
+  const arrowMatch = formula.match(/([↑↓]+)$/);
+  const trailingArrow = arrowMatch ? arrowMatch[1] : '';
+  const withoutArrow = trailingArrow ? formula.slice(0, -trailingArrow.length) : formula;
+
+  const coeffMatch = withoutArrow.match(/^(\d+)([A-Z\[].*)$/);
+  const leadingCoeff = coeffMatch ? coeffMatch[1] : '';
+  const coreFormula = coeffMatch ? coeffMatch[2] : withoutArrow;
+
   const elements: React.ReactNode[] = [];
   let i = 0;
 
-  while (i < formula.length) {
-    const char = formula[i];
+  while (i < coreFormula.length) {
+    const char = coreFormula[i];
 
     // Explicit caret superscript: ^2+, ^-, ^{2-}
     if (char === '^') {
       i++;
       let supText = '';
-      if (formula[i] === '{') {
+      if (coreFormula[i] === '{') {
         i++;
-        while (i < formula.length && formula[i] !== '}') {
-          supText += formula[i];
+        while (i < coreFormula.length && coreFormula[i] !== '}') {
+          supText += coreFormula[i];
           i++;
         }
-        if (formula[i] === '}') i++;
+        if (coreFormula[i] === '}') i++;
       } else {
-        while (i < formula.length && /[0-9+\-]/.test(formula[i])) {
-          supText += formula[i];
+        while (i < coreFormula.length && /[0-9+\-]/.test(coreFormula[i])) {
+          supText += coreFormula[i];
           i++;
         }
       }
-      elements.push(<sup key={`sup-${i}`} className="text-[0.72em] font-bold text-blue-800">{supText}</sup>);
+      elements.push(
+        <sup key={`sup-${i}`} className="text-[0.73em] font-bold text-blue-800">
+          {supText}
+        </sup>
+      );
       continue;
     }
 
-    // Trailing ion charge e.g. 2+, 3+, 2-, +, -
-    if ((char === '+' || char === '-') || (/\d/.test(char) && (formula[i+1] === '+' || formula[i+1] === '-'))) {
-      if (/\d/.test(char) && (formula[i+1] === '+' || formula[i+1] === '-')) {
-        elements.push(<sup key={`charge-${i}`} className="text-[0.72em] font-bold text-blue-800">{char + formula[i+1]}</sup>);
-        i += 2;
-        continue;
-      } else {
-        elements.push(<sup key={`charge-${i}`} className="text-[0.72em] font-bold text-blue-800">{char}</sup>);
-        i++;
-        continue;
-      }
+    // Trailing ion charge e.g. 2+, 3+, 2-, +, - (only at end of formula or followed by non-letter)
+    if (
+      (char === '+' || char === '-') &&
+      (i === coreFormula.length - 1 || !/[A-Z]/.test(coreFormula[i + 1]))
+    ) {
+      elements.push(
+        <sup key={`charge-${i}`} className="text-[0.73em] font-bold text-blue-800">
+          {char}
+        </sup>
+      );
+      i++;
+      continue;
     }
 
-    // Numbers in formula: subscripts (e.g. H2 -> H<sub>2</sub>)
+    if (
+      /\d/.test(char) &&
+      (coreFormula[i + 1] === '+' || coreFormula[i + 1] === '-') &&
+      (i + 2 === coreFormula.length || !/[a-zA-Z]/.test(coreFormula[i + 2]))
+    ) {
+      elements.push(
+        <sup key={`charge-${i}`} className="text-[0.73em] font-bold text-blue-800">
+          {char + coreFormula[i + 1]}
+        </sup>
+      );
+      i += 2;
+      continue;
+    }
+
+    // Numbers in formula: subscripts (e.g. H2 -> H<sub>2</sub>, Fe(NO3)3 -> Fe(NO<sub>3</sub>)<sub>3</sub>)
     if (/\d/.test(char)) {
       let num = '';
-      while (i < formula.length && /\d/.test(formula[i])) {
-        // Look ahead: If followed immediately by + or - at end of formula, it's a charge, not a subscript!
-        if ((formula[i+1] === '+' || formula[i+1] === '-') && (i + 2 === formula.length || !/[a-zA-Z]/.test(formula[i+2]))) {
+      while (i < coreFormula.length && /\d/.test(coreFormula[i])) {
+        if (
+          (coreFormula[i + 1] === '+' || coreFormula[i + 1] === '-') &&
+          (i + 2 === coreFormula.length || !/[a-zA-Z]/.test(coreFormula[i + 2]))
+        ) {
           break;
         }
-        num += formula[i];
+        num += coreFormula[i];
         i++;
       }
       if (num) {
-        elements.push(<sub key={`sub-${i}`} className="text-[0.72em] font-semibold text-slate-800">{num}</sub>);
+        elements.push(
+          <sub key={`sub-${i}`} className="text-[0.73em] font-semibold text-slate-800">
+            {num}
+          </sub>
+        );
       }
+      continue;
+    }
+
+    // Trailing polymer index 'n' after closing paren/bracket: (C6H10O5)n -> (C6H10O5)<sub>n</sub>
+    if (
+      char === 'n' &&
+      i === coreFormula.length - 1 &&
+      i > 0 &&
+      (coreFormula[i - 1] === ')' || coreFormula[i - 1] === ']')
+    ) {
+      elements.push(
+        <sub key={`poly-${i}`} className="text-[0.73em] italic font-semibold text-slate-800">
+          n
+        </sub>
+      );
+      i++;
       continue;
     }
 
     // Organic bonds: hyphen -, en-dash –, double bond =, triple bond ≡
     if (char === '-' || char === '–') {
-      elements.push(<span key={`bond-${i}`} className="px-0.5 text-slate-500 font-bold select-none">–</span>);
+      elements.push(
+        <span key={`bond-${i}`} className="px-0.5 text-slate-500 font-bold select-none">
+          –
+        </span>
+      );
       i++;
       continue;
     }
     if (char === '=') {
-      elements.push(<span key={`double-${i}`} className="px-0.5 text-blue-600 font-bold select-none">=</span>);
+      elements.push(
+        <span key={`double-${i}`} className="px-0.5 text-blue-600 font-bold select-none">
+          =
+        </span>
+      );
       i++;
       continue;
     }
     if (char === '≡') {
-      elements.push(<span key={`triple-${i}`} className="px-0.5 text-indigo-600 font-bold select-none">≡</span>);
+      elements.push(
+        <span key={`triple-${i}`} className="px-0.5 text-indigo-600 font-bold select-none">
+          ≡
+        </span>
+      );
       i++;
       continue;
     }
 
-    // Normal chemical character
     elements.push(<span key={`c-${i}`}>{char}</span>);
     i++;
   }
 
   return (
-    <span className="font-semibold text-slate-900 tracking-tight px-0.5 inline-block chem-formula">
+    <span className="font-semibold text-slate-900 tracking-tight inline-block chem-formula">
+      {leadingCoeff && <span className="font-semibold text-slate-900">{leadingCoeff}</span>}
       {elements}
+      {trailingArrow && <span className="text-slate-700 font-bold">{trailingArrow}</span>}
     </span>
   );
 };

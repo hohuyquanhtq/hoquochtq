@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "katex/dist/katex.min.css";
 
 @layer base {
   body {
@@ -22,8 +23,19 @@
   background: #94a3b8;
 }
 
-/* Chemical notation helpers */
+/* Chemical notation & KaTeX display helpers */
 .chem-formula {
   font-variant-numeric: normal;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.015em;
+}
+
+.hq-katex-inline .katex {
+  font-size: 1.04em;
+}
+
+.hq-katex-display .katex-display {
+  margin: 0.35rem 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 0.15rem;
 }

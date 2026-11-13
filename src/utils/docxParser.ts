@@ -10,7 +10,7 @@ import {
 } from '../types';
 import { extractComprehensiveAnswerKeys, buildAnswerRecognitionItems } from './answerRecognizer';
 import { isolateAnswerBlock } from './answerExtractionEngine/documentTableReader';
-import { parseDocxWithEquations } from './docxEquationParser';
+import { parseDocxWithEquations, DocxEquationWarning } from './docxEquationParser';
 import {
   detectSectionHeader,
   detectSectionHeaderDetailed,
@@ -42,6 +42,30 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
     console.error('Mammoth docx extraction error:', err);
     throw new Error('Không thể đọc nội dung file Word (.docx). Vui lòng thử lại.');
   }
+}
+
+/**
+ * Extracts and parses a DOCX exam in one pass while preserving OMML conversion warnings
+ * and unsupported equation XML fragments.
+ */
+export async function parseDocxExam(
+  arrayBuffer: ArrayBuffer,
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+): Promise<{ text: string; result: ParsedExamResult }> {
+  try {
+    const res = await parseDocxWithEquations(arrayBuffer);
+    if (res && res.fullMarkdownText && res.fullMarkdownText.trim().length > 20) {
+      const result = parseExamContent(res.fullMarkdownText, defaultGrade, {
+        equationWarnings: res.warnings,
+      });
+      return { text: res.fullMarkdownText, result };
+    }
+  } catch (err) {
+    console.warn('parseDocxExam fallback to mammoth:', err);
+  }
+
+  const fallbackText = await extractTextFromDocx(arrayBuffer);
+  return { text: fallbackText, result: parseExamContent(fallbackText, defaultGrade) };
 }
 
 /**
@@ -560,7 +584,8 @@ export function recalculateParsedExamResult(
  */
 export function parseExamContent(
   rawText: string,
-  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12',
+  extraMeta?: { equationWarnings?: DocxEquationWarning[] }
 ): ParsedExamResult {
   // 1. Isolate question content from answer keys and solutions
   const { answerSectionText } = isolateAnswerBlock(rawText);
@@ -989,6 +1014,24 @@ export function parseExamContent(
     answerItems.length > 0 && answerItems.every(item => item.recognitionStatus === 'verified');
   const hasAmbiguousSections = detectedSections.some(s => s.needsConfirmation);
 
+  const eqWarnings = extraMeta?.equationWarnings || [];
+  if (eqWarnings.length > 0) {
+    const normMatchStr = (s: string) => s.replace(/\*\*|\*|<u>|<\/u>|<s>|<\/s>|\s+/g, ' ').trim();
+    questions.forEach(q => {
+      const qHaystack = normMatchStr(`${q.content} ${q.rawSourceText || ''}`);
+      const matched = eqWarnings.filter(w => {
+        const needle = w.blockSnippet
+          ? normMatchStr(w.blockSnippet.replace(/^(?:Câu|Bài)\s+\d+[.:–—\-]*\s*/i, '')).slice(-35)
+          : '';
+        return !!needle && qHaystack.includes(needle);
+      });
+      if (matched.length > 0) {
+        q.equationWarnings = matched.map(w => w.message);
+        q.ommlSources = matched.map(w => w.rawXml).filter(Boolean);
+      }
+    });
+  }
+
   return {
     title,
     grade: defaultGrade,
@@ -1013,6 +1056,12 @@ export function parseExamContent(
     detectedSections,
     hasAmbiguousSections,
     sectionsConfirmed: !hasAmbiguousSections,
+    ...(eqWarnings.length > 0
+      ? {
+          equationWarnings: eqWarnings.map(w => w.message),
+          unsupportedEquationCount: eqWarnings.length,
+        }
+      : {}),
   };
 }
 

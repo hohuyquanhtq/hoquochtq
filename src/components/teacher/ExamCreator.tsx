@@ -585,7 +585,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                           }`}
                         >
                           <span className="font-bold">{o.id}.</span>
-                          <span className="truncate"><ChemRenderer text={o.text} inline /></span>
+                          <span className="flex-1 break-words"><ChemRenderer text={o.text} inline /></span>
                         </div>
                       ))}
                     </div>
