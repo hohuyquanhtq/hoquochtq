@@ -1,8 +1,25 @@
 import mammoth from 'mammoth';
-import { Question, QuestionType, ParsedExamResult, MultipleChoiceOption, TrueFalseStatement } from '../types';
+import {
+  Question,
+  QuestionType,
+  ParsedExamResult,
+  MultipleChoiceOption,
+  TrueFalseStatement,
+  DetectedExamSection,
+  SectionDetectionMethod,
+} from '../types';
 import { extractComprehensiveAnswerKeys, buildAnswerRecognitionItems } from './answerRecognizer';
-import { isolateAnswerBlock, readDocxStructure } from './answerExtractionEngine/documentTableReader';
+import { isolateAnswerBlock } from './answerExtractionEngine/documentTableReader';
 import { parseDocxWithEquations } from './docxEquationParser';
+import {
+  detectSectionHeader,
+  detectSectionHeaderDetailed,
+  isSectionSubtitleLine,
+  SectionDetectionCandidate,
+} from './sectionDetector';
+
+export { detectSectionHeader, detectSectionHeaderDetailed };
+export type { SectionDetectionCandidate };
 
 /**
  * Extracts rich markdown text from a DOCX ArrayBuffer,
@@ -28,7 +45,8 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
 }
 
 /**
- * Extracts text from a PDF ArrayBuffer using pdfjs-dist
+ * Extracts text from a PDF ArrayBuffer using pdfjs-dist,
+ * reconstructing line breaks from Y-coordinates and hasEOL markers so section headers stay on separate lines.
  */
 export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
@@ -39,9 +57,30 @@ export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<stri
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items
-        .map((item: any) => item.str || '')
-        .join(' ');
+      let pageText = '';
+      let lastY: number | null = null;
+      for (const item of textContent.items as any[]) {
+        const str = typeof item.str === 'string' ? item.str : '';
+        const y = Array.isArray(item.transform) ? item.transform[5] : null;
+        if (lastY !== null && y !== null && Math.abs(y - lastY) > 4) {
+          pageText += '\n';
+        } else if (
+          pageText.length > 0 &&
+          !pageText.endsWith('\n') &&
+          !pageText.endsWith(' ') &&
+          str &&
+          !str.startsWith(' ')
+        ) {
+          pageText += ' ';
+        }
+        pageText += str;
+        if (item.hasEOL) {
+          pageText += '\n';
+          lastY = null;
+        } else if (y !== null && str.trim()) {
+          lastY = y;
+        }
+      }
       fullText += pageText + '\n\n';
     }
     return fullText;
@@ -52,65 +91,61 @@ export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<stri
 }
 
 /**
- * Normalizes text to lower-case without diacritics for ultra-flexible section title matching
+ * Cleans trailing unmatched markdown bold markers (e.g. from Word run splitting "**Câu 1.** **Text**" or "**Câu 1. Text**")
  */
-function removeDiacritics(str: string): string {
-  return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
+function cleanStrayBoldEdge(text: string): string {
+  let cleaned = text.trim();
+  const boldMarkerCount = (cleaned.match(/\*\*/g) || []).length;
+  if (boldMarkerCount % 2 === 1) {
+    if (cleaned.startsWith('**')) {
+      cleaned = cleaned.slice(2).trim();
+    } else if (cleaned.endsWith('**')) {
+      cleaned = cleaned.slice(0, -2).trim();
+    }
+  }
+  return cleaned;
 }
 
 /**
- * Detects section header across all variations in Vietnamese exams
+ * Matches question headers across Word formatting (bold, italic, underline, markdown headings, single-cell tables)
+ * e.g. "Câu 1.", "**Câu 1.**", "<u>Câu 2:</u>", "Câu 3 (Biết):", "Bài 1:"
  */
-export function detectSectionHeader(rawLine: string): QuestionType | null {
-  const line = rawLine.trim().replace(/^[#*_\s\-–—:]+|[#*_\s\-–—:]+$/g, '');
-  if (!line || line.length > 150) return null;
+function matchQuestionStart(rawLine: string): { num: number; rest: string } | null {
+  let line = rawLine.trim();
+  if (!line || /^[\-–—=_|.\s]+$/.test(line)) return null;
 
-  const norm = removeDiacritics(line);
-
-  // Section III: Short Answer (check Part III first so Roman numeral III is not matched as II or I)
-  if (
-    /^(?:phan\s+(?:iii|3)\b|iii\b)[\s.:\-–—]*(?:cau\s+trac\s+nghiem\s+tra\s+loi\s+ngan|trac\s+nghiem\s+tra\s+loi\s+ngan|tra\s+loi\s+ngan|cau\s+hoi\s+tra\s+loi\s+ngan|dien\s+khuyet)?.*$/i.test(norm) ||
-    /^(?:phan\s+(?:iii|3)\b)$/i.test(norm) ||
-    /^(?:cau\s+trac\s+nghiem\s+tra\s+loi\s+ngan|trac\s+nghiem\s+tra\s+loi\s+ngan|tra\s+loi\s+ngan|cau\s+hoi\s+tra\s+loi\s+ngan)\b/i.test(norm)
-  ) {
-    return 'part3_short_answer';
+  // Unwrap outer table pipe for single-cell or table-laid-out questions
+  if (line.startsWith('|') && line.endsWith('|')) {
+    const innerCells = line.slice(1, -1).split('|').map(c => c.trim()).filter(Boolean);
+    if (innerCells.length === 1) {
+      line = innerCells[0];
+    }
   }
 
-  // Section II: True / False (strictly require word boundary \b after ii/2)
-  if (
-    /^(?:phan\s+(?:ii|2)\b|ii\b)[\s.:\-–—]*(?:cau\s+trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|dung\s*[-–—/]?\s*sai|cau\s+hoi\s+dung\s*[-–—/]?\s*sai)?.*$/i.test(norm) ||
-    /^(?:phan\s+(?:ii|2)\b)$/i.test(norm) ||
-    /^(?:cau\s+trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|trac\s+nghiem\s+dung\s*[-–—/]?\s*sai|dung\s*[-–—/]\s*sai)\b/i.test(norm)
-  ) {
-    return 'part2_true_false';
-  }
+  const regex =
+    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|Bài)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:\s*[\(\[][^\)\]]*[\)\]])?(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:[.:–—\-]+\s*|\s*$)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(.*)$/i;
+  const m = line.match(regex);
+  if (!m) return null;
 
-  // Section I: Multiple Choice (strictly require word boundary \b after i/1)
-  if (
-    /^(?:phan\s+(?:i|1)\b|i\b)[\s.:\-–—]*(?:cau\s+trac\s+nghiem\s+nhieu\s+phuong\s+an|trac\s+nghiem\s+4\s+lua\s+chon|nhieu\s+phuong\s+an|4\s+lua\s+chon|lua\s+chon|trac\s+nghiem)?.*$/i.test(norm) ||
-    /^(?:phan\s+(?:i|1)\b)$/i.test(norm) ||
-    /^(?:cau\s+trac\s+nghiem\s+nhieu\s+phuong\s+an|trac\s+nghiem\s+4\s+lua\s+chon|4\s+lua\s+chon)\b/i.test(norm)
-  ) {
-    return 'part1_single_choice';
-  }
-
-  return null;
+  const num = parseInt(m[1], 10);
+  if (isNaN(num)) return null;
+  const rest = cleanStrayBoldEdge(m[2] || '');
+  return { num, rest };
 }
 
 /**
  * Robust extractor for Part II statements (a, b, c, d)
- * Handles multiline, inline, Word list prefixes, table rows, and trailing inline truth values
+ * Handles multiline, inline, Word bold/underline formatting, table rows, and trailing inline truth values
  */
 export function extractPart2Statements(fullText: string): {
   prompt: string;
   statements: TrueFalseStatement[];
 } {
-  // Marker regex for a, b, c, d (strictly lowercase so uppercase A-D are not confused):
-  // e.g. "a)", "a.", "(a)", "a/", "a -", "a:", "Ý a)", "ý a:"
-  const markerRegex = /(?:^|\n|[\s;,])(?:[Ýý]\s*)?(?:\(?([a-d])[\)\].:\/–—]|\(([a-d])\))\s+/g;
+  // Marker regex for lowercase a, b, c, d (allows optional Word bold/HTML wrappers around markers)
+  const markerRegex =
+    /(?:^|\n|[\s;,])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:[Ýý]\s*)?(?:\(?([a-d])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:[\)\]]\s*|[\].:\/–—]\s+)|\(([a-d])\)\s+)(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*\s*/g;
   const matches = [...fullText.matchAll(markerRegex)];
 
-  // Order validation: must follow sequential order a, b, c, d
   const subMatches: { letter: 'a' | 'b' | 'c' | 'd'; index: number; fullMatchLength: number }[] = [];
   const expectedOrder: ('a' | 'b' | 'c' | 'd')[] = ['a', 'b', 'c', 'd'];
   let currentExpectedIdx = 0;
@@ -134,16 +169,16 @@ export function extractPart2Statements(fullText: string): {
   }
 
   const firstSub = subMatches[0];
-  const prompt = fullText.slice(0, firstSub.index).trim();
+  const prompt = cleanStrayBoldEdge(fullText.slice(0, firstSub.index));
   const statements: TrueFalseStatement[] = [];
 
   for (let i = 0; i < subMatches.length; i++) {
     const curr = subMatches[i];
     const textStart = curr.index + curr.fullMatchLength;
     const textEnd = i + 1 < subMatches.length ? subMatches[i + 1].index : fullText.length;
-    let stmtText = fullText.slice(textStart, textEnd).trim();
+    let stmtText = cleanStrayBoldEdge(fullText.slice(textStart, textEnd));
 
-    // Check for inline answer tag: "[Đúng]", "(Đ)", "- Đúng", ": Đúng", "Đúng", "[Sai]", "(S)", "- Sai", ": Sai", "Sai"
+    // Check for inline answer tag: "[Đúng]", "(Đ)", "- Đúng", ": Đúng", "[Sai]", "(S)", "- Sai", ": Sai"
     let inlineAnswer: boolean | undefined = undefined;
     const tfMatch = stmtText.match(/(?:[\s\-–—:]+|\s*[\[\(])\s*(Đúng|Sai|True|False|Đ|S)\s*[\]\)]?\s*$/i);
     if (tfMatch) {
@@ -165,14 +200,15 @@ export function extractPart2Statements(fullText: string): {
 
 /**
  * Robust extractor for Part I options (A, B, C, D)
- * Handles multiline, inline, asterisks (*), and tags
+ * Handles multiline, inline, Word bold/underline formatting, single-asterisk (*), and tags
  */
 export function extractPart1Options(fullText: string): {
   prompt: string;
   options: MultipleChoiceOption[];
   correctOptionId?: string;
 } {
-  const markerRegex = /(?:^|\n|[\s;,])(?:\(?([A-D])[\)\].:\/–—]|\(([A-D])\))\s+/g;
+  const markerRegex =
+    /(?:^|\n|[\s;,])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:\(?([A-D])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:[\)\]]\s*|[\].:\/–—]\s+)|\(([A-D])\)\s+)(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*\s*/g;
   const matches = [...fullText.matchAll(markerRegex)];
 
   const optMatches: { letter: string; index: number; fullMatchLength: number }[] = [];
@@ -197,7 +233,7 @@ export function extractPart1Options(fullText: string): {
   }
 
   const firstOpt = optMatches[0];
-  const prompt = fullText.slice(0, firstOpt.index).trim();
+  const prompt = cleanStrayBoldEdge(fullText.slice(0, firstOpt.index));
   const options: MultipleChoiceOption[] = [];
   let correctOptionId: string | undefined = undefined;
 
@@ -205,10 +241,16 @@ export function extractPart1Options(fullText: string): {
     const curr = optMatches[i];
     const textStart = curr.index + curr.fullMatchLength;
     const textEnd = i + 1 < optMatches.length ? optMatches[i + 1].index : fullText.length;
-    let optText = fullText.slice(textStart, textEnd).trim();
+    let optText = cleanStrayBoldEdge(fullText.slice(textStart, textEnd));
 
-    const isCorrect = optText.startsWith('*') || optText.endsWith('*') || /\[Đúng\]|\(Đúng\)/i.test(optText);
-    optText = optText.replace(/^\*|\*$|\[Đúng\]|\(Đúng\)/gi, '').trim();
+    // Only treat single '*' (not Word bold '**') or explicit [Đúng]/(Đúng) as inline answer marker
+    const isCorrect =
+      /^\*(?!\*)/.test(optText) ||
+      /(?<!\*)\*$/.test(optText) ||
+      /\[Đúng\]|\(Đúng\)/i.test(optText);
+    optText = optText
+      .replace(/^\*(?!\*)|(?<!\*)\*$|\[Đúng\]|\(Đúng\)/gi, '')
+      .trim();
 
     if (isCorrect) {
       correctOptionId = curr.letter;
@@ -234,7 +276,9 @@ export function extractPart3Data(fullText: string): {
   let prompt = fullText.trim();
   let inlineAnswer: string | undefined = undefined;
 
-  const ansMatch = prompt.match(/(?:^|\n)\s*(?:Đáp\s*án|Trả\s*lời|KQ|Kết\s*quả)[\s.:\-–—=]+([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]+)?)\s*$/i);
+  const ansMatch = prompt.match(
+    /(?:^|\n)\s*(?:Đáp\s*án|Trả\s*lời|KQ|Kết\s*quả)[\s.:\-–—=]+([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]+)?)\s*$/i
+  );
   if (ansMatch) {
     inlineAnswer = ansMatch[1].trim();
     prompt = prompt.slice(0, ansMatch.index).trim();
@@ -243,22 +287,287 @@ export function extractPart3Data(fullText: string): {
   return { prompt, inlineAnswer };
 }
 
+interface InternalSectionTracker {
+  id: string;
+  rawTitle: string;
+  candidateType: QuestionType | 'ambiguous';
+  detectionMethod: SectionDetectionMethod;
+  confidence: number;
+  needsConfirmation: boolean;
+  warning?: string;
+}
+
 interface RawQuestionBlock {
   promptNum: number;
-  sectionHint: QuestionType;
+  sectionId: string;
   rawText: string;
+}
+
+/**
+ * Rebuilds a Question object when its QuestionType is manually changed by the teacher,
+ * using its rawSourceText (without inventing fake A/B/C/D options for Part III).
+ */
+export function reclassifyQuestionType(q: Question, targetType: QuestionType): Question {
+  const sourceText = q.rawSourceText || rebuildSourceFromQuestion(q);
+  const now = new Date().toISOString();
+  const prefix = targetType === 'part1_single_choice' ? 'P1' : targetType === 'part2_true_false' ? 'P2' : 'P3';
+  const promptNumMatch = q.code.match(/_C(\d+)$/i);
+  const promptNum = promptNumMatch ? promptNumMatch[1] : '1';
+  const newCode = `H_${q.grade}_${prefix}_C${promptNum}`;
+
+  if (targetType === 'part1_single_choice') {
+    const mc = extractPart1Options(sourceText);
+    const correctOptId = q.correctOptionId || mc.correctOptionId;
+    const options = mc.options.map(o => ({ ...o, isCorrect: correctOptId ? o.id === correctOptId : o.isCorrect }));
+    const isOk = options.length >= 2 && !!correctOptId;
+    return {
+      ...q,
+      code: newCode,
+      type: 'part1_single_choice',
+      content: mc.prompt || sourceText,
+      options,
+      correctOptionId: correctOptId,
+      statements: undefined,
+      shortAnswerConfig: undefined,
+      rawSourceText: sourceText,
+      parseStatus: isOk ? 'verified' : 'needs_review',
+      parseWarning: options.length < 2
+        ? 'Không tìm thấy đủ các lựa chọn A, B, C, D — vui lòng kiểm tra hoặc chỉnh sửa'
+        : !correctOptId
+        ? 'Chưa có đáp án chính thức'
+        : undefined,
+      teacherVerified: isOk,
+      updatedAt: now,
+    };
+  }
+
+  if (targetType === 'part2_true_false') {
+    const tf = extractPart2Statements(sourceText);
+    const statements = tf.statements.length > 0 ? tf.statements : (q.statements || []);
+    const allAssigned =
+      statements.length >= 2 &&
+      statements.every(st => st.explanation === 'Đúng' || st.explanation === 'Sai');
+    return {
+      ...q,
+      code: newCode,
+      type: 'part2_true_false',
+      content: tf.prompt || sourceText,
+      options: undefined,
+      correctOptionId: undefined,
+      statements,
+      shortAnswerConfig: undefined,
+      rawSourceText: sourceText,
+      parseStatus: statements.length >= 2 && allAssigned ? 'verified' : 'needs_review',
+      parseWarning: statements.length < 2
+        ? 'Chưa tách được các ý a, b, c, d — vui lòng kiểm tra hoặc chỉnh sửa'
+        : !allAssigned
+        ? 'Chưa có đáp án chính thức cho tất cả các ý'
+        : undefined,
+      teacherVerified: statements.length >= 2 && allAssigned,
+      updatedAt: now,
+    };
+  }
+
+  // targetType === 'part3_short_answer' — never generate fake A/B/C/D options
+  const { prompt, inlineAnswer } = extractPart3Data(sourceText);
+  const existingAns = q.shortAnswerConfig?.acceptableAnswers?.[0] || inlineAnswer || '';
+  const hasAnswer = !!existingAns;
+  return {
+    ...q,
+    code: newCode,
+    type: 'part3_short_answer',
+    content: prompt,
+    options: undefined,
+    correctOptionId: undefined,
+    statements: undefined,
+    shortAnswerConfig: {
+      acceptableAnswers: hasAnswer
+        ? (q.shortAnswerConfig?.acceptableAnswers?.length
+            ? q.shortAnswerConfig.acceptableAnswers
+            : [existingAns, existingAns.replace(',', '.'), existingAns.replace('.', ',')])
+        : [],
+      isNumeric: !isNaN(Number(existingAns.replace(',', '.'))),
+      numericValue: hasAnswer ? parseFloat(existingAns.replace(',', '.') || '0') : undefined,
+      tolerance: 0.05,
+    },
+    rawSourceText: sourceText,
+    parseStatus: hasAnswer ? 'verified' : 'needs_review',
+    parseWarning: hasAnswer ? undefined : 'Chưa có đáp án chính thức',
+    teacherVerified: hasAnswer,
+    updatedAt: now,
+  };
+}
+
+function rebuildSourceFromQuestion(q: Question): string {
+  const parts: string[] = [q.content];
+  if (q.options && q.options.length > 0) {
+    q.options.forEach(o => parts.push(`${o.id}. ${o.text}`));
+  }
+  if (q.statements && q.statements.length > 0) {
+    q.statements.forEach(s => parts.push(`${s.id}) ${s.statement}`));
+  }
+  return parts.join('\n');
+}
+
+/**
+ * Recalculates all summary counts, answer recognition items, and detected section stats
+ * after questions or sections are modified in the UI.
+ */
+export function recalculateParsedExamResult(
+  base: ParsedExamResult,
+  questions: Question[],
+  sectionsOverride?: DetectedExamSection[],
+  sectionsConfirmed?: boolean
+): ParsedExamResult {
+  const part1Questions = questions.filter(q => q.type === 'part1_single_choice');
+  const part2Questions = questions.filter(q => q.type === 'part2_true_false');
+  const part3Questions = questions.filter(q => q.type === 'part3_short_answer');
+
+  const part1Count = part1Questions.length;
+  const part2Count = part2Questions.length;
+  const part2StatementsCount = part2Questions.reduce((sum, q) => sum + (q.statements?.length || 0), 0);
+  const part3Count = part3Questions.length;
+
+  // Rebuild answerItems cleanly while preserving existing verified answers by questionId
+  const existingItemMap = new Map(base.answerItems.map(it => [`${it.questionId}_${it.subQuestion || ''}`, it]));
+  const answerItems: ParsedExamResult['answerItems'] = [];
+  let p1Idx = 1;
+  let p2Idx = 1;
+  let p3Idx = 1;
+
+  for (const q of questions) {
+    if (q.type === 'part1_single_choice') {
+      const qNum = p1Idx++;
+      const prev = existingItemMap.get(`${q.id}_`);
+      const ans = q.correctOptionId || prev?.correctAnswer || '';
+      answerItems.push({
+        id: `I.${qNum}`,
+        questionId: q.id,
+        section: 'part1',
+        questionNumber: qNum,
+        answerType: 'choice',
+        correctAnswer: ans,
+        recognitionStatus: ans ? 'verified' : 'not_found',
+        recognitionSource: prev?.recognitionSource || q.recognitionSource || 'manual',
+        teacherVerified: ans ? (q.teacherVerified ?? prev?.teacherVerified ?? true) : false,
+        notes: prev?.notes,
+      });
+    } else if (q.type === 'part2_true_false') {
+      const qNum = p2Idx++;
+      const stmts = q.statements && q.statements.length > 0
+        ? q.statements
+        : [
+            { id: 'a', statement: '', correctAnswer: false },
+            { id: 'b', statement: '', correctAnswer: false },
+            { id: 'c', statement: '', correctAnswer: false },
+            { id: 'd', statement: '', correctAnswer: false },
+          ];
+      stmts.forEach(st => {
+        const prev = existingItemMap.get(`${q.id}_${st.id}`);
+        const hasVal = st.explanation === 'Đúng' || st.explanation === 'Sai' || prev?.recognitionStatus === 'verified';
+        const ansStr = hasVal ? (st.correctAnswer ? 'Đ' : 'S') : '';
+        answerItems.push({
+          id: `II.${qNum}${st.id}`,
+          questionId: q.id,
+          section: 'part2',
+          questionNumber: qNum,
+          subQuestion: st.id as 'a' | 'b' | 'c' | 'd',
+          answerType: 'true_false',
+          correctAnswer: ansStr,
+          recognitionStatus: hasVal ? 'verified' : 'not_found',
+          recognitionSource: prev?.recognitionSource || q.recognitionSource || 'manual',
+          teacherVerified: hasVal,
+          notes: st.statement?.slice(0, 50),
+        });
+      });
+    } else {
+      const qNum = p3Idx++;
+      const prev = existingItemMap.get(`${q.id}_`);
+      const ans = q.shortAnswerConfig?.acceptableAnswers?.[0] || prev?.correctAnswer || '';
+      answerItems.push({
+        id: `III.${qNum}`,
+        questionId: q.id,
+        section: 'part3',
+        questionNumber: qNum,
+        answerType: 'short_answer',
+        correctAnswer: ans,
+        acceptedAnswers: q.shortAnswerConfig?.acceptableAnswers || prev?.acceptedAnswers || [],
+        tolerance: q.shortAnswerConfig?.tolerance ?? 0.05,
+        recognitionStatus: ans ? 'verified' : 'not_found',
+        recognitionSource: prev?.recognitionSource || q.recognitionSource || 'manual',
+        teacherVerified: !!ans,
+        notes: prev?.notes,
+      });
+    }
+  }
+
+  const part1FoundCount = answerItems.filter(it => it.section === 'part1' && it.recognitionStatus === 'verified' && it.correctAnswer).length;
+  const part2StatementsFoundCount = answerItems.filter(it => it.section === 'part2' && it.recognitionStatus === 'verified' && it.correctAnswer).length;
+  const part3FoundCount = answerItems.filter(it => it.section === 'part3' && it.recognitionStatus === 'verified' && it.correctAnswer).length;
+
+  const part1TotalCount = answerItems.filter(it => it.section === 'part1').length;
+  const part2StatementsTotalCount = answerItems.filter(it => it.section === 'part2').length;
+  const part3TotalCount = answerItems.filter(it => it.section === 'part3').length;
+
+  const questionsWithAnswers = questions.filter(q => {
+    if (q.type === 'part1_single_choice') return !!q.correctOptionId;
+    if (q.type === 'part2_true_false') return q.statements && q.statements.length > 0 && q.teacherVerified;
+    if (q.type === 'part3_short_answer') return q.shortAnswerConfig && q.shortAnswerConfig.acceptableAnswers.length > 0;
+    return false;
+  }).length;
+
+  const updatedSections = (sectionsOverride || base.detectedSections || []).map(sec => {
+    const secQs = questions.filter(q => q.sectionId === sec.id);
+    return {
+      ...sec,
+      questionCount: secQs.length,
+      statementCount: secQs
+        .filter(q => q.type === 'part2_true_false')
+        .reduce((sum, q) => sum + (q.statements?.length || 0), 0),
+    };
+  });
+
+  const hasAmbiguousSections = updatedSections.some(s => s.needsConfirmation && !s.teacherConfirmed);
+
+  return {
+    ...base,
+    totalQuestions: questions.length,
+    part1Count,
+    part2Count,
+    part2StatementsCount,
+    part3Count,
+    questionsWithAnswers,
+    questionsMissingAnswers: questions.length - questionsWithAnswers,
+    questionsWithWarnings: questions.filter(q => q.parseStatus !== 'verified').length,
+    questions,
+    answerItems,
+    part1FoundCount,
+    part1TotalCount,
+    part2StatementsFoundCount,
+    part2StatementsTotalCount,
+    part3FoundCount,
+    part3TotalCount,
+    allAnswersVerified: answerItems.length > 0 && answerItems.every(it => it.recognitionStatus === 'verified'),
+    detectedSections: updatedSections,
+    hasAmbiguousSections,
+    sectionsConfirmed: sectionsConfirmed !== undefined ? sectionsConfirmed : !hasAmbiguousSections,
+  };
 }
 
 /**
  * Parses Vietnamese Chemistry Exam text into structured Question array
  * supporting Part I (4-choice), Part II (True/False statements), and Part III (Short Answer)
  */
-export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'): ParsedExamResult {
+export function parseExamContent(
+  rawText: string,
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+): ParsedExamResult {
   // 1. Isolate question content from answer keys and solutions
   const { answerSectionText } = isolateAnswerBlock(rawText);
-  const examBodyText = (rawText.includes(answerSectionText) && answerSectionText.length > 20)
-    ? rawText.slice(0, rawText.indexOf(answerSectionText))
-    : rawText;
+  const examBodyText =
+    rawText.includes(answerSectionText) && answerSectionText.length > 20
+      ? rawText.slice(0, rawText.indexOf(answerSectionText))
+      : rawText;
 
   const lines = (examBodyText.trim() ? examBodyText : rawText)
     .split(/\r?\n/)
@@ -270,7 +579,7 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
   for (let i = 0; i < Math.min(8, lines.length); i++) {
     const line = lines[i];
     if (/ĐỀ (THI|KIỂM TRA|KHẢO SÁT|ÔN TẬP)/i.test(line) || /HÓA HỌC/i.test(line)) {
-      title = line.replace(/^[#*_\s\-–—:]+|[#*_\s\-–—:]+$/g, '');
+      title = line.replace(/^[#*_\s\-–—:|]+|[#*_\s\-–—:|]+$/g, '');
       break;
     }
   }
@@ -278,19 +587,34 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
   // 3. Pre-extract Answer Keys matrix from the full document
   const answerKeys = extractComprehensiveAnswerKeys(rawText);
 
-  // 4. Split question lines into distinct question blocks while tracking section transitions
+  // 4. Split question lines into distinct question blocks while tracking section transitions & metadata
+  const sectionTrackers: InternalSectionTracker[] = [];
+  const sectionTrackerById = new Map<string, InternalSectionTracker>();
   const questionBlocks: RawQuestionBlock[] = [];
-  let currentSection: QuestionType = 'part1_single_choice';
-  let activeBlock: { promptNum: number; sectionHint: QuestionType; lines: string[] } | null = null;
+  let activeSection: InternalSectionTracker | null = null;
+  let activeBlock: { promptNum: number; sectionId: string; lines: string[] } | null = null;
 
-  const questionHeaderRegex = /^(?:#{1,6}\s*)?Câu\s+(\d+)(?:\s*[\(\[][^\)\]]*[\)\]])?[\s.:\-–—]+(.*)$/i;
-  const baiHeaderRegex = /^(?:#{1,6}\s*)?Bài\s+(\d+)(?:\s*[\(\[][^\)\]]*[\)\]])?[\s.:\-–—]+(.*)$/i;
+  const ensureFallbackSection = (): InternalSectionTracker => {
+    const id = `sec_${sectionTrackers.length + 1}`;
+    const tracker: InternalSectionTracker = {
+      id,
+      rawTitle: 'Phần chưa có tiêu đề (Tự động suy luận)',
+      candidateType: 'ambiguous',
+      detectionMethod: 'structure_inferred',
+      confidence: 0.6,
+      needsConfirmation: true,
+      warning: 'Không tìm thấy tiêu đề PHẦN I/II/III trước các câu hỏi — hệ thống tự suy luận dạng câu hỏi theo cấu trúc, vui lòng xác nhận.',
+    };
+    sectionTrackers.push(tracker);
+    sectionTrackerById.set(id, tracker);
+    return tracker;
+  };
 
   const flushActiveBlock = () => {
     if (activeBlock && activeBlock.lines.length > 0) {
       questionBlocks.push({
         promptNum: activeBlock.promptNum,
-        sectionHint: activeBlock.sectionHint,
+        sectionId: activeBlock.sectionId,
         rawText: activeBlock.lines.join('\n').trim(),
       });
       activeBlock = null;
@@ -300,30 +624,70 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
   for (let idx = 0; idx < lines.length; idx++) {
     const line = lines[idx];
 
-    // Check for Section Header
-    const detectedSec = detectSectionHeader(line);
-    if (detectedSec) {
-      flushActiveBlock();
-      currentSection = detectedSec;
-      continue;
-    }
-
     // Stop at end-of-exam markers ("Hết", "ĐÁP ÁN")
-    if (/^[\-–—*_\s]*HẾT[\-–—*_\s]*$/i.test(line) || /^(?:BẢNG\s+)?ĐÁP\s*ÁN(?:\s*[:\-–—])?$/i.test(line)) {
+    if (/^[\-–—*_\s|]*HẾT[\-–—*_\s|]*$/i.test(line) || /^(?:BẢNG\s+)?ĐÁP\s*ÁN(?:\s*[:\-–—])?$/i.test(line)) {
       flushActiveBlock();
       break;
     }
 
-    // Check for Question start: "Câu 1.", "Câu 1:", "Bài 1:"
-    const qMatch = line.match(questionHeaderRegex) || line.match(baiHeaderRegex);
+    // Check for Section Header
+    const secCandidate = detectSectionHeaderDetailed(line);
+    if (secCandidate) {
+      flushActiveBlock();
+
+      // Merge up to 2 immediate subtitle lines (e.g. bare "PHẦN II" followed by "TRẮC NGHIỆM ĐÚNG SAI" or "(2,0 điểm)")
+      let combinedRawTitle = secCandidate.rawTitle;
+      let resolvedCandidate = secCandidate;
+
+      for (let lookahead = 1; lookahead <= 2 && idx + 1 < lines.length; lookahead++) {
+        const nextLine = lines[idx + 1];
+        if (matchQuestionStart(nextLine)) break;
+        if (/^[\-–—*_\s|]*HẾT[\-–—*_\s|]*$/i.test(nextLine) || /^(?:BẢNG\s+)?ĐÁP\s*ÁN/i.test(nextLine)) break;
+
+        const nextHeader = detectSectionHeaderDetailed(nextLine);
+        if (nextHeader && nextHeader.method === 'roman_header') {
+          // Next line starts a distinct Roman section header (e.g., empty Part I followed directly by PHẦN II)
+          break;
+        }
+
+        if (isSectionSubtitleLine(nextLine)) {
+          const merged = detectSectionHeaderDetailed(`${combinedRawTitle} ${nextLine}`);
+          if (merged && merged.type !== 'ambiguous') {
+            resolvedCandidate = merged;
+          }
+          combinedRawTitle = `${combinedRawTitle} — ${nextLine.replace(/[*_`#|]+/g, '').trim()}`;
+          idx++;
+        } else {
+          break;
+        }
+      }
+
+      const secId = `sec_${sectionTrackers.length + 1}`;
+      activeSection = {
+        id: secId,
+        rawTitle: combinedRawTitle,
+        candidateType: resolvedCandidate.type,
+        detectionMethod: resolvedCandidate.method,
+        confidence: resolvedCandidate.confidence,
+        needsConfirmation: resolvedCandidate.needsConfirmation,
+        warning: resolvedCandidate.warning,
+      };
+      sectionTrackers.push(activeSection);
+      sectionTrackerById.set(secId, activeSection);
+      continue;
+    }
+
+    // Check for Question start: "Câu 1.", "**Câu 1:**", "Bài 1:"
+    const qMatch = matchQuestionStart(line);
     if (qMatch) {
       flushActiveBlock();
-      const num = parseInt(qMatch[1], 10);
-      const rest = qMatch[2] || '';
+      if (!activeSection) {
+        activeSection = ensureFallbackSection();
+      }
       activeBlock = {
-        promptNum: num,
-        sectionHint: currentSection,
-        lines: rest ? [rest] : [],
+        promptNum: qMatch.num,
+        sectionId: activeSection.id,
+        lines: qMatch.rest ? [qMatch.rest] : [],
       };
       continue;
     }
@@ -336,57 +700,83 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
 
   flushActiveBlock();
 
-  // 5. Structure each question block into Question object with Structural Auto-Detection
+  // 5. Structure each question block into Question object, respecting explicit section headers
   const questions: Question[] = [];
   let p1Counter = 0;
   let p2Counter = 0;
   let p3Counter = 0;
 
+  // Track structural mismatch stats per section
+  const sectionMismatchCounts = new Map<string, { total: number; mc: number; tf: number; sa: number }>();
+
   for (let bIdx = 0; bIdx < questionBlocks.length; bIdx++) {
     const block = questionBlocks[bIdx];
     const rawContent = block.rawText;
     const promptNum = block.promptNum;
+    const secTracker = sectionTrackerById.get(block.sectionId);
 
-    // Structural Auto-Detection:
-    // Check 1: Does it contain Part II statements a, b, c, d?
     const tfResult = extractPart2Statements(rawContent);
     const hasTFStatements = tfResult.statements.length >= 2;
 
-    // Check 2: Does it contain Part I options A, B, C, D?
     const mcResult = extractPart1Options(rawContent);
     const hasMCOptions = mcResult.options.length >= 2;
 
-    // Resolve Final Question Type:
+    if (!sectionMismatchCounts.has(block.sectionId)) {
+      sectionMismatchCounts.set(block.sectionId, { total: 0, mc: 0, tf: 0, sa: 0 });
+    }
+    const secStat = sectionMismatchCounts.get(block.sectionId)!;
+    secStat.total++;
+    if (hasMCOptions) secStat.mc++;
+    else if (hasTFStatements) secStat.tf++;
+    else secStat.sa++;
+
+    // Resolve Question Type:
     let finalType: QuestionType;
-    if (block.sectionHint === 'part1_single_choice') {
+    let structureMismatchWarning: string | undefined;
+
+    if (!secTracker || secTracker.candidateType === 'ambiguous') {
+      // No clear header or ambiguous header -> infer strictly from internal question structure
       if (hasTFStatements && !hasMCOptions) {
         finalType = 'part2_true_false';
-      } else {
-        finalType = 'part1_single_choice';
-      }
-    } else if (block.sectionHint === 'part2_true_false') {
-      if (hasMCOptions && !hasTFStatements) {
-        finalType = 'part1_single_choice';
-      } else {
-        finalType = 'part2_true_false';
-      }
-    } else if (block.sectionHint === 'part3_short_answer') {
-      if (hasTFStatements && !hasMCOptions) {
-        finalType = 'part2_true_false';
-      } else if (hasMCOptions && !hasTFStatements) {
+      } else if (hasMCOptions) {
         finalType = 'part1_single_choice';
       } else {
         finalType = 'part3_short_answer';
+      }
+    } else if (secTracker.candidateType === 'part1_single_choice') {
+      if (hasTFStatements && !hasMCOptions) {
+        finalType = 'part2_true_false';
+        structureMismatchWarning = `Câu ${promptNum} nằm trong "${secTracker.rawTitle}" nhưng có các ý Đúng/Sai (a, b, c, d)`;
+        secTracker.needsConfirmation = true;
+        secTracker.warning =
+          secTracker.warning ||
+          `Phát hiện câu hỏi có mệnh đề a, b, c, d trong "${secTracker.rawTitle}" — vui lòng kiểm tra lại ranh giới Phần I / Phần II.`;
+      } else {
+        finalType = 'part1_single_choice';
+      }
+    } else if (secTracker.candidateType === 'part2_true_false') {
+      if (hasMCOptions && !hasTFStatements) {
+        // Mismatch: MC question placed inside Part II header -> warn teacher!
+        finalType = 'part1_single_choice';
+        structureMismatchWarning = `Câu ${promptNum} nằm trong "${secTracker.rawTitle}" nhưng có lựa chọn A, B, C, D`;
+        secTracker.needsConfirmation = true;
+        secTracker.warning =
+          secTracker.warning ||
+          `Phát hiện câu hỏi 4 lựa chọn (A, B, C, D) nằm trong "${secTracker.rawTitle}" — vui lòng xác nhận lại dạng câu hỏi.`;
+      } else {
+        // Keep grouped inside Part II (never split a/b/c/d into separate questions)
+        finalType = 'part2_true_false';
       }
     } else {
-      // Fallback auto-detection without section header
-      if (hasMCOptions) {
-        finalType = 'part1_single_choice';
-      } else if (hasTFStatements) {
-        finalType = 'part2_true_false';
-      } else {
-        finalType = 'part3_short_answer';
+      // Part III Short Answer scope: classify as part3_short_answer, never fabricate A/B/C/D options
+      if (hasMCOptions && !hasTFStatements) {
+        structureMismatchWarning = `Câu ${promptNum} thuộc "${secTracker.rawTitle}" nhưng có cấu trúc A, B, C, D — vui lòng kiểm tra.`;
+        secTracker.needsConfirmation = true;
+        secTracker.warning =
+          secTracker.warning ||
+          `Phát hiện lựa chọn A, B, C, D bên trong "${secTracker.rawTitle}" — vui lòng kiểm tra lại.`;
       }
+      finalType = 'part3_short_answer';
     }
 
     const prefix = finalType === 'part1_single_choice' ? 'P1' : finalType === 'part2_true_false' ? 'P2' : 'P3';
@@ -406,6 +796,14 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
         });
       }
 
+      const warnMsg =
+        structureMismatchWarning ||
+        (mcResult.options.length < 2
+          ? 'Không đủ 4 lựa chọn A, B, C, D'
+          : !correctOptId
+          ? 'Chưa có đáp án chính thức'
+          : undefined);
+
       question = {
         id: qId,
         code: qCode,
@@ -416,11 +814,13 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
         content: mcResult.prompt || rawContent,
         options: mcResult.options,
         correctOptionId: correctOptId,
-        recognitionSource: detectedKey ? 'answer_table' : (mcResult.correctOptionId ? 'question_content' : undefined),
-        teacherVerified: !!correctOptId,
-        parseStatus: (mcResult.options.length >= 2 && correctOptId) ? 'verified' : 'needs_review',
-        parseWarning: !correctOptId ? 'Chưa có đáp án chính thức' : (mcResult.options.length < 2 ? 'Không đủ 4 lựa chọn' : undefined),
+        recognitionSource: detectedKey ? 'answer_table' : mcResult.correctOptionId ? 'question_content' : undefined,
+        teacherVerified: !!correctOptId && !structureMismatchWarning,
+        parseStatus: mcResult.options.length >= 2 && correctOptId && !structureMismatchWarning ? 'verified' : 'needs_review',
+        parseWarning: warnMsg,
         authorId: 'teacher_curr',
+        sectionId: block.sectionId,
+        rawSourceText: rawContent,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -428,7 +828,7 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
       p2Counter++;
       const detectedTF = answerKeys.part2.get(p2Counter) || answerKeys.part2.get(promptNum);
 
-      let allAssigned = true;
+      let allAssigned = tfResult.statements.length >= 2;
       tfResult.statements.forEach(st => {
         if (detectedTF?.statements && detectedTF.statements[st.id] !== undefined) {
           st.correctAnswer = detectedTF.statements[st.id];
@@ -437,6 +837,14 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
           allAssigned = false;
         }
       });
+
+      const warnMsg =
+        structureMismatchWarning ||
+        (tfResult.statements.length < 2
+          ? 'Chưa tách đủ các mệnh đề a, b, c, d'
+          : !allAssigned
+          ? 'Chưa có đáp án chính thức cho tất cả các ý'
+          : undefined);
 
       question = {
         id: qId,
@@ -448,15 +856,16 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
         content: tfResult.prompt || rawContent,
         statements: tfResult.statements,
         recognitionSource: detectedTF ? 'answer_table' : 'question_content',
-        teacherVerified: (tfResult.statements.length >= 2 && allAssigned),
-        parseStatus: (tfResult.statements.length >= 2 && allAssigned) ? 'verified' : 'needs_review',
-        parseWarning: allAssigned ? undefined : 'Chưa có đáp án chính thức cho tất cả các ý',
+        teacherVerified: tfResult.statements.length >= 2 && allAssigned && !structureMismatchWarning,
+        parseStatus: tfResult.statements.length >= 2 && allAssigned && !structureMismatchWarning ? 'verified' : 'needs_review',
+        parseWarning: warnMsg,
         authorId: 'teacher_curr',
+        sectionId: block.sectionId,
+        rawSourceText: rawContent,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
     } else {
-      // Part III: Short Answer
       p3Counter++;
       const detectedShort = answerKeys.part3.get(p3Counter) || answerKeys.part3.get(promptNum);
       const { prompt: cleanPrompt, inlineAnswer } = extractPart3Data(rawContent);
@@ -476,17 +885,19 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
         statements: undefined,
         shortAnswerConfig: {
           acceptableAnswers: hasAnswer
-            ? (detectedShort?.acceptedAnswers || [finalVal, finalVal.replace(',', '.'), finalVal.replace('.', ',')])
+            ? detectedShort?.acceptedAnswers || [finalVal, finalVal.replace(',', '.'), finalVal.replace('.', ',')]
             : [],
           isNumeric: !isNaN(Number(finalVal.replace(',', '.'))),
           numericValue: hasAnswer ? parseFloat(finalVal.replace(',', '.') || '0') : undefined,
           tolerance: 0.05,
         },
-        recognitionSource: detectedShort ? 'answer_table' : (inlineAnswer ? 'question_content' : undefined),
-        teacherVerified: hasAnswer,
-        parseStatus: hasAnswer ? 'verified' : 'needs_review',
-        parseWarning: hasAnswer ? undefined : 'Chưa có đáp án chính thức',
+        recognitionSource: detectedShort ? 'answer_table' : inlineAnswer ? 'question_content' : undefined,
+        teacherVerified: hasAnswer && !structureMismatchWarning,
+        parseStatus: hasAnswer && !structureMismatchWarning ? 'verified' : 'needs_review',
+        parseWarning: structureMismatchWarning || (hasAnswer ? undefined : 'Chưa có đáp án chính thức'),
         authorId: 'teacher_curr',
+        sectionId: block.sectionId,
+        rawSourceText: rawContent,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -501,9 +912,55 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
     questions.push(question);
   }
 
+  // Finalize DetectedExamSection array with accurate counts & resolved dominant type for ambiguous sections
+  const detectedSections: DetectedExamSection[] = sectionTrackers.map(sec => {
+    const secQs = questions.filter(q => q.sectionId === sec.id);
+    const stat = sectionMismatchCounts.get(sec.id);
+
+    let resolvedType: QuestionType;
+    if (sec.candidateType === 'ambiguous') {
+      if (stat && stat.tf >= stat.mc && stat.tf >= stat.sa && stat.tf > 0) {
+        resolvedType = 'part2_true_false';
+      } else if (stat && stat.mc >= stat.sa && stat.mc > 0) {
+        resolvedType = 'part1_single_choice';
+      } else if (secQs.length > 0) {
+        resolvedType = secQs[0].type;
+      } else {
+        resolvedType = 'part1_single_choice';
+      }
+    } else {
+      resolvedType = sec.candidateType;
+      // Warn if explicit section has questions but none of them match expected structure (e.g. bare PHẦN I with no A/B/C/D options)
+      if (secQs.length > 0 && resolvedType === 'part1_single_choice' && stat && stat.mc === 0 && stat.sa > 0) {
+        sec.needsConfirmation = true;
+        sec.warning =
+          sec.warning ||
+          `Tiêu đề "${sec.rawTitle}" được hiểu mặc định là Phần I (4 lựa chọn), nhưng các câu hỏi bên trong không có phương án A, B, C, D — vui lòng kiểm tra và xác nhận.`;
+      }
+    }
+
+    return {
+      id: sec.id,
+      rawTitle: sec.rawTitle,
+      detectedType: resolvedType,
+      detectionMethod: sec.detectionMethod,
+      confidence: sec.confidence,
+      needsConfirmation: sec.needsConfirmation,
+      warning: sec.warning,
+      questionCount: secQs.length,
+      statementCount: secQs
+        .filter(q => q.type === 'part2_true_false')
+        .reduce((sum, q) => sum + (q.statements?.length || 0), 0),
+      teacherConfirmed: !sec.needsConfirmation,
+    };
+  });
+
   // 6. Summary Statistics
   const part1Count = questions.filter(q => q.type === 'part1_single_choice').length;
   const part2Count = questions.filter(q => q.type === 'part2_true_false').length;
+  const part2StatementsCount = questions
+    .filter(q => q.type === 'part2_true_false')
+    .reduce((sum, q) => sum + (q.statements?.length || 0), 0);
   const part3Count = questions.filter(q => q.type === 'part3_short_answer').length;
 
   const questionsWithAnswers = questions.filter(q => {
@@ -528,7 +985,9 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
   const part2StatementsTotalCount = answerItems.filter(item => item.section === 'part2').length;
   const part3TotalCount = answerItems.filter(item => item.section === 'part3').length;
 
-  const allAnswersVerified = answerItems.length > 0 && answerItems.every(item => item.recognitionStatus === 'verified');
+  const allAnswersVerified =
+    answerItems.length > 0 && answerItems.every(item => item.recognitionStatus === 'verified');
+  const hasAmbiguousSections = detectedSections.some(s => s.needsConfirmation);
 
   return {
     title,
@@ -536,6 +995,7 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
     totalQuestions: questions.length,
     part1Count,
     part2Count,
+    part2StatementsCount,
     part3Count,
     questionsWithAnswers,
     questionsMissingAnswers,
@@ -550,6 +1010,9 @@ export function parseExamContent(rawText: string, defaultGrade: '10' | '11' | '1
     part3FoundCount,
     part3TotalCount,
     allAnswersVerified,
+    detectedSections,
+    hasAmbiguousSections,
+    sectionsConfirmed: !hasAmbiguousSections,
   };
 }
 

@@ -27,7 +27,14 @@ import {
   FileCode,
   Copy
 } from 'lucide-react';
-import { extractTextFromDocx, extractTextFromPdf, parseExamContent, SAMPLE_CHEMISTRY_EXAMS } from '../../utils/docxParser';
+import {
+  extractTextFromDocx,
+  extractTextFromPdf,
+  parseExamContent,
+  reclassifyQuestionType,
+  recalculateParsedExamResult,
+  SAMPLE_CHEMISTRY_EXAMS,
+} from '../../utils/docxParser';
 import { ParsedExamResult, Question, QuestionType, ChemGrade, ChemTopic, AnswerRecognitionItem, RecognitionStatus } from '../../types';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { ExamAnswerDashboard } from './ExamAnswerDashboard';
@@ -59,6 +66,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const [editingItemValue, setEditingItemValue] = useState<string>('');
   const [showSourceSnippetModal, setShowSourceSnippetModal] = useState<boolean>(false);
   const [isDeepScanning, setIsDeepScanning] = useState<boolean>(false);
+  const [pendingActionNotice, setPendingActionNotice] = useState<'bank' | 'exam' | null>(null);
 
   // Automatically load the attached sample exam (Đề số 5 - Mẫu PDF đính kèm) on mount
   useEffect(() => {
@@ -297,40 +305,86 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const handleDeleteQuestion = (qId: string) => {
     if (!parsedResult) return;
     const updated = parsedResult.questions.filter(q => q.id !== qId);
-    recalculateParsedStats(updated);
+    setParsedResult(recalculateParsedExamResult(parsedResult, updated));
   };
 
   const handleUpdateQuestion = (updated: Question) => {
     if (!parsedResult) return;
     const list = parsedResult.questions.map(q => q.id === updated.id ? updated : q);
-    recalculateParsedStats(list);
+    setParsedResult(recalculateParsedExamResult(parsedResult, list));
     setEditingQuestion(null);
     showToast('Đã cập nhật câu hỏi!');
   };
 
-  const recalculateParsedStats = (questions: Question[]) => {
+  const handleChangeSectionType = (sectionId: string, newType: QuestionType) => {
     if (!parsedResult) return;
-    const part1Count = questions.filter(q => q.type === 'part1_single_choice').length;
-    const part2Count = questions.filter(q => q.type === 'part2_true_false').length;
-    const part3Count = questions.filter(q => q.type === 'part3_short_answer').length;
-    const questionsWithAnswers = questions.filter(q => {
-      if (q.type === 'part1_single_choice') return !!q.correctOptionId;
-      if (q.type === 'part2_true_false') return q.statements && q.statements.length > 0;
-      if (q.type === 'part3_short_answer') return q.shortAnswerConfig && q.shortAnswerConfig.acceptableAnswers.length > 0;
-      return false;
-    }).length;
+    const updatedQuestions = parsedResult.questions.map(q =>
+      q.sectionId === sectionId && q.type !== newType ? reclassifyQuestionType(q, newType) : q
+    );
+    const updatedSections = (parsedResult.detectedSections || []).map(sec =>
+      sec.id === sectionId
+        ? {
+            ...sec,
+            detectedType: newType,
+            teacherConfirmed: true,
+            needsConfirmation: false,
+            warning: undefined,
+          }
+        : sec
+    );
+    setParsedResult(recalculateParsedExamResult(parsedResult, updatedQuestions, updatedSections));
+    setPendingActionNotice(null);
+    showToast('Đã cập nhật loại câu hỏi cho phần vừa chọn!');
+  };
 
-    setParsedResult({
-      ...parsedResult,
-      totalQuestions: questions.length,
-      part1Count,
-      part2Count,
-      part3Count,
-      questionsWithAnswers,
-      questionsMissingAnswers: questions.length - questionsWithAnswers,
-      questionsWithWarnings: questions.filter(q => q.parseStatus !== 'verified').length,
-      questions,
-    });
+  const handleConfirmAllSections = () => {
+    if (!parsedResult) return;
+    const updatedSections = (parsedResult.detectedSections || []).map(sec => ({
+      ...sec,
+      teacherConfirmed: true,
+      needsConfirmation: false,
+    }));
+    setParsedResult(
+      recalculateParsedExamResult(parsedResult, parsedResult.questions, updatedSections, true)
+    );
+    setPendingActionNotice(null);
+    showToast('Đã xác nhận cấu trúc các phần của đề thi!');
+  };
+
+  const handleMoveQuestionType = (qId: string, newType: QuestionType) => {
+    if (!parsedResult) return;
+    const targetQ = parsedResult.questions.find(q => q.id === qId);
+    if (!targetQ || targetQ.type === newType) return;
+    const reclassified = reclassifyQuestionType(targetQ, newType);
+    const updatedQuestions = parsedResult.questions.map(q => (q.id === qId ? reclassified : q));
+    setParsedResult(recalculateParsedExamResult(parsedResult, updatedQuestions));
+    const label =
+      newType === 'part1_single_choice'
+        ? 'Phần I (4 lựa chọn)'
+        : newType === 'part2_true_false'
+        ? 'Phần II (Đúng/Sai)'
+        : 'Phần III (Trả lời ngắn)';
+    showToast(`Đã chuyển câu hỏi sang ${label}`);
+  };
+
+  const handleGuardedSaveBank = () => {
+    if (!parsedResult) return;
+    if (parsedResult.hasAmbiguousSections && !parsedResult.sectionsConfirmed) {
+      setPendingActionNotice('bank');
+      showToast('Vui lòng kiểm tra và xác nhận cấu trúc các phần trước khi lưu vào Ngân hàng!');
+      return;
+    }
+    onSaveToQuestionBank(parsedResult.questions);
+  };
+
+  const handleGuardedCreateExam = () => {
+    if (!parsedResult) return;
+    if (parsedResult.hasAmbiguousSections && !parsedResult.sectionsConfirmed) {
+      setPendingActionNotice('exam');
+      showToast('Vui lòng kiểm tra và xác nhận cấu trúc các phần trước khi tạo đề thi!');
+      return;
+    }
+    onCreateExamFromParsed(parsedResult.title, parsedResult.questions, selectedGrade);
   };
 
   // Dedicated Answer Item Handlers (Section V & Section VIII)
@@ -734,20 +788,145 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
             <div className="flex items-center gap-2">
               <button
-                onClick={() => onSaveToQuestionBank(parsedResult.questions)}
+                onClick={handleGuardedSaveBank}
                 className="px-3.5 py-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-slate-50 text-slate-800 text-xs font-bold transition-all flex items-center gap-1.5"
               >
                 <Save className="w-4 h-4 text-slate-600" />
                 <span>Lưu Ngân Hàng</span>
               </button>
               <button
-                onClick={() => onCreateExamFromParsed(parsedResult.title, parsedResult.questions, selectedGrade)}
+                onClick={handleGuardedCreateExam}
                 className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-1.5"
               >
                 <CheckCircle2 className="w-4 h-4" />
                 <span>Tạo Đề Thi & Chấm Điểm</span>
               </button>
             </div>
+          </div>
+
+          {/* Section Detection Summary & Teacher Confirmation Panel */}
+          <div
+            className={`rounded-2xl border p-4 shadow-xs space-y-3 ${
+              parsedResult.hasAmbiguousSections && !parsedResult.sectionsConfirmed
+                ? 'bg-amber-50/90 border-amber-300'
+                : 'bg-white border-slate-200'
+            }`}
+          >
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-xs font-extrabold text-slate-800 flex items-center gap-1.5">
+                  <Layers className="w-4 h-4 text-blue-600" />
+                  <span>Cấu trúc các phần đã nhận diện:</span>
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-blue-50 text-blue-800 border border-blue-200 text-[11px] font-bold">
+                  Phần I (4 lựa chọn): {parsedResult.part1Count} câu
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-800 border border-indigo-200 text-[11px] font-bold">
+                  Phần II (Đúng/Sai): {parsedResult.part2Count} câu chính ({parsedResult.part2StatementsCount ?? parsedResult.part2Count * 4} mệnh đề)
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-purple-50 text-purple-800 border border-purple-200 text-[11px] font-bold">
+                  Phần III (Trả lời ngắn): {parsedResult.part3Count} câu
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                {parsedResult.hasAmbiguousSections && !parsedResult.sectionsConfirmed ? (
+                  <button
+                    onClick={handleConfirmAllSections}
+                    className="px-3 py-1.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-xs"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>Xác nhận cấu trúc các phần</span>
+                  </button>
+                ) : (
+                  <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-[11px] font-bold flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Đã xác nhận cấu trúc
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {pendingActionNotice && parsedResult.hasAmbiguousSections && !parsedResult.sectionsConfirmed && (
+              <div className="p-2.5 rounded-xl bg-amber-100 border border-amber-300 text-amber-900 text-xs flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <span className="font-semibold flex items-center gap-1.5">
+                  <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+                  Có phần chưa chắc chắn cấu trúc hoặc tiêu đề chưa chuẩn. Vui lòng kiểm tra lại loại câu hỏi từng phần bên dưới rồi bấm xác nhận.
+                </span>
+                <button
+                  onClick={() => {
+                    handleConfirmAllSections();
+                    if (pendingActionNotice === 'bank') {
+                      onSaveToQuestionBank(parsedResult.questions);
+                    } else {
+                      onCreateExamFromParsed(parsedResult.title, parsedResult.questions, selectedGrade);
+                    }
+                  }}
+                  className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold shrink-0"
+                >
+                  Xác nhận & Tiếp tục
+                </button>
+              </div>
+            )}
+
+            {parsedResult.detectedSections && parsedResult.detectedSections.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+                {parsedResult.detectedSections.map((sec) => (
+                  <div
+                    key={sec.id}
+                    className={`p-2.5 rounded-xl border text-xs flex flex-col justify-between gap-2 ${
+                      sec.needsConfirmation && !sec.teacherConfirmed
+                        ? 'bg-white border-amber-400 ring-1 ring-amber-200'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <span className="font-bold text-slate-800 line-clamp-2" title={sec.rawTitle}>
+                          {sec.rawTitle}
+                        </span>
+                        <span className="px-1.5 py-0.5 rounded bg-slate-200/80 text-slate-700 font-bold text-[10px] shrink-0">
+                          {sec.questionCount} câu{sec.statementCount > 0 ? ` / ${sec.statementCount} ý` : ''}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                          {sec.detectionMethod === 'roman_header'
+                            ? 'Tiêu đề Phần I/II/III'
+                            : sec.detectionMethod === 'semantic_header'
+                            ? 'Ngữ nghĩa tiêu đề'
+                            : sec.detectionMethod === 'structure_inferred'
+                            ? 'Suy luận từ cấu trúc'
+                            : 'Cần xác nhận'}
+                        </span>
+                        {sec.needsConfirmation && !sec.teacherConfirmed && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            Kiểm tra lại
+                          </span>
+                        )}
+                      </div>
+                      {sec.warning && (
+                        <p className="text-[11px] text-amber-800 leading-snug">{sec.warning}</p>
+                      )}
+                    </div>
+
+                    <div className="flex items-center gap-1.5 pt-1 border-t border-slate-200/70">
+                      <span className="text-[10px] font-semibold text-slate-500 shrink-0">Dạng phần:</span>
+                      <select
+                        value={sec.detectedType}
+                        onChange={(e) => handleChangeSectionType(sec.id, e.target.value as QuestionType)}
+                        className="flex-1 text-[11px] font-bold px-2 py-1 rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="part1_single_choice">Phần I: 4 lựa chọn (A,B,C,D)</option>
+                        <option value="part2_true_false">Phần II: Đúng / Sai (a,b,c,d)</option>
+                        <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
+                      </select>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Master View Mode Tabs */}
@@ -831,7 +1010,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                         : 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200'
                     }`}
                   >
-                    Phần II: Đúng/Sai ({parsedResult.part2Count} câu - {parsedResult.part2Count * 4} ý)
+                    Phần II: Đúng/Sai ({parsedResult.part2Count} câu - {parsedResult.part2StatementsCount ?? parsedResult.part2Count * 4} ý)
                   </button>
 
                   <button
@@ -897,8 +1076,18 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       )}
                     </div>
 
-                    {/* Edit / Delete Buttons */}
+                    {/* Move Part & Edit / Delete Buttons */}
                     <div className="flex items-center gap-1.5">
+                      <select
+                        value={q.type}
+                        onChange={(e) => handleMoveQuestionType(q.id, e.target.value as QuestionType)}
+                        title="Chuyển câu hỏi sang phần khác"
+                        className="text-[11px] font-semibold px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-slate-700 hover:border-blue-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        <option value="part1_single_choice">Chuyển: Phần I (4 L/C)</option>
+                        <option value="part2_true_false">Chuyển: Phần II (Đ/S)</option>
+                        <option value="part3_short_answer">Chuyển: Phần III (Ngắn)</option>
+                      </select>
                       <button
                         onClick={() => setEditingQuestion({ ...q })}
                         className="p-1.5 rounded-lg text-slate-500 hover:text-blue-600 hover:bg-blue-50 transition-colors"
@@ -1025,6 +1214,19 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </div>
 
             <div className="p-6 overflow-y-auto flex-1 space-y-4 text-xs">
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Dạng câu hỏi (Thuộc phần):</label>
+                <select
+                  value={editingQuestion.type}
+                  onChange={(e) => setEditingQuestion(reclassifyQuestionType(editingQuestion, e.target.value as QuestionType))}
+                  className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-xs bg-slate-50 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+                >
+                  <option value="part1_single_choice">Phần I: Trắc nghiệm 4 lựa chọn (A, B, C, D)</option>
+                  <option value="part2_true_false">Phần II: Trắc nghiệm Đúng / Sai (a, b, c, d)</option>
+                  <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
+                </select>
+              </div>
+
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Nội dung câu hỏi (hỗ trợ công thức hóa học, LaTeX)</label>
                 <textarea

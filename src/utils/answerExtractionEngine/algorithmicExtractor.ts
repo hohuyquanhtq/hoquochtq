@@ -124,9 +124,9 @@ function processTable(
   if (!rows || rows.length === 0) return;
 
   const headerSnippet = (table.surroundingHeader || '').toUpperCase();
-  const isPart1Hint = headerSnippet.includes('PHẦN I') || headerSnippet.includes('PHAN I') || headerSnippet.includes('PHẦN 1');
-  const isPart2Hint = headerSnippet.includes('PHẦN II') || headerSnippet.includes('PHAN II') || headerSnippet.includes('PHẦN 2');
-  const isPart3Hint = headerSnippet.includes('PHẦN III') || headerSnippet.includes('PHAN III') || headerSnippet.includes('PHẦN 3');
+  const isPart3Hint = /\b(?:PHẦN|PHAN)\s*(?:III|3)\b|TRẢ\s*LỜI\s*NGẮN/i.test(headerSnippet);
+  const isPart2Hint = !isPart3Hint && /\b(?:PHẦN|PHAN)\s*(?:II|2)\b|ĐÚNG\s*[-–\/]?\s*SAI/i.test(headerSnippet);
+  const isPart1Hint = !isPart3Hint && !isPart2Hint && /\b(?:PHẦN|PHAN)\s*(?:I|1)\b|TRẮC\s*NGHIỆM/i.test(headerSnippet);
 
   // --- CASE A: PART II TRANSPOSED MATRIX (Most complex & common in GDPT 2018 exams) ---
   // Rows:
@@ -513,7 +513,7 @@ function parsePart2InlineString(
   source: 'table' | 'text'
 ) {
   // Matches "a) Đúng", "a) Đ", "a. S", "a - Đ", "a: Sai", "a Đ", "(a) Đúng"
-  const matches = [...text.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)\b/gi)];
+  const matches = [...text.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)(?=$|[\s,;.)\]\|])/gi)];
   for (const m of matches) {
     const sub = (m[1] || m[2]).toLowerCase() as 'a' | 'b' | 'c' | 'd';
     const val = normalizeTrueFalse(m[3]);
@@ -548,13 +548,29 @@ function processTextLists(
   part2Map: Map<string, ExtractedAnswerItem>,
   part3Map: Map<number, ExtractedAnswerItem>
 ) {
-  // Split into sections if markers exist
-  const p1Block = extractSectionSubstring(text, ['PHẦN I', 'PHẦN 1', 'TRẮC NGHIỆM 4', 'TRẮC NGHIỆM NHIỀU'], ['PHẦN II', 'PHẦN 2']);
-  const p2Block = extractSectionSubstring(text, ['PHẦN II', 'PHẦN 2', 'ĐÚNG/SAI', 'ĐÚNG SAI', 'ĐÚNG - SAI'], ['PHẦN III', 'PHẦN 3']);
-  const p3Block = extractSectionSubstring(text, ['PHẦN III', 'PHẦN 3', 'TRẢ LỜI NGẮN'], ['HƯỚNG DẪN', 'LỜI GIẢI', 'HƯỚNG DẪN GIẢI']);
+  // If full document includes exam questions + answer section, focus on the tail where answer keys reside
+  const hetMatches = [
+    ...text.matchAll(
+      /(?:^|\n)\s*(?:[\-–—*_\s|]*HẾT[\-–—*_\s|]*$|(?:BẢNG\s+)?ĐÁP\s*ÁN(?:\s*[:\-–—])?\s*$)/gim
+    ),
+  ];
+  const answerFocusText =
+    hetMatches.length > 0 && hetMatches[hetMatches.length - 1].index !== undefined
+      ? text.slice(hetMatches[hetMatches.length - 1].index!)
+      : text;
+
+  // Split into sections if markers exist (using word-boundary regexes to prevent PHẦN I matching PHẦN II/III)
+  const p1Start = [/\bPHẦN\s+(?:I|1)\b/i, /\bI\.\s*TRẮC\s+NGHIỆM/i, /TRẮC\s+NGHIỆM\s+(?:4|NHIỀU)\s+(?:LỰA\s+CHỌN|PHƯƠNG\s+ÁN)/i];
+  const p2Start = [/\bPHẦN\s+(?:II|2)\b/i, /\bII\.\s*TRẮC\s+NGHIỆM/i, /TRẮC\s+NGHIỆM\s+ĐÚNG\s*[-–\/]?\s*SAI/i];
+  const p3Start = [/\bPHẦN\s+(?:III|3)\b/i, /\bIII\.\s*(?:TRẮC\s+NGHIỆM\s+)?TRẢ\s+LỜI\s+NGẮN/i, /TRẢ\s+LỜI\s+NGẮN/i];
+  const solStart = [/HƯỚNG\s+DẪN\s+GIẢI/i, /LỜI\s+GIẢI\s+CHI\s+TIẾT/i];
+
+  const p1Block = extractSectionSubstringByRegex(answerFocusText, p1Start, [...p2Start, ...p3Start, ...solStart]);
+  const p2Block = extractSectionSubstringByRegex(answerFocusText, p2Start, [...p3Start, ...solStart]);
+  const p3Block = extractSectionSubstringByRegex(answerFocusText, p3Start, solStart);
 
   // --- Part 1 inline regex ---
-  const p1Text = p1Block || text;
+  const p1Text = p1Block || answerFocusText;
   // Match patterns like: "1.A", "1 - B", "Câu 1: C", "Câu 1. D"
   const p1Matches = [...p1Text.matchAll(/(?:^|\s|[,;|])(?:Câu\s*)?(\d+)\s*[:.\-–]\s*([A-D])(?=[,\s;|]|$)/gi)];
   for (const m of p1Matches) {
@@ -616,26 +632,29 @@ function processTextLists(
 }
 
 /**
- * Extracts a slice of text between start headers and end headers
+ * Extracts a slice of text between start regexes and end regexes
  */
-function extractSectionSubstring(text: string, startMarkers: string[], endMarkers: string[]): string | null {
-  const upper = text.toUpperCase();
+function extractSectionSubstringByRegex(text: string, startRegexes: RegExp[], endRegexes: RegExp[]): string | null {
   let startIdx = -1;
 
-  for (const marker of startMarkers) {
-    const idx = upper.indexOf(marker);
-    if (idx !== -1 && (startIdx === -1 || idx < startIdx)) {
-      startIdx = idx;
+  for (const rx of startRegexes) {
+    const m = text.match(rx);
+    if (m && m.index !== undefined && (startIdx === -1 || m.index < startIdx)) {
+      startIdx = m.index;
     }
   }
 
   if (startIdx === -1) return null;
 
   let endIdx = text.length;
-  for (const marker of endMarkers) {
-    const idx = upper.indexOf(marker, startIdx + 10);
-    if (idx !== -1 && idx < endIdx) {
-      endIdx = idx;
+  const tail = text.slice(startIdx + 6);
+  for (const rx of endRegexes) {
+    const m = tail.match(rx);
+    if (m && m.index !== undefined) {
+      const candidateEnd = startIdx + 6 + m.index;
+      if (candidateEnd < endIdx) {
+        endIdx = candidateEnd;
+      }
     }
   }
 

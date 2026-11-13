@@ -99,9 +99,16 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
         markdownBlocks.push(pText.trim());
       }
     } else if (tagName === 'w:tbl') {
-      const { mdTable, structuredRows } = parseTableContent(tagContent, imageMap, () => { equationCount++; });
+      const { mdTable, structuredRows, plainParagraphs } = parseTableContent(tagContent, imageMap, () => { equationCount++; });
       if (structuredRows.length > 0) {
-        markdownBlocks.push(mdTable);
+        // If this is a 1-column Word table (commonly used as header boxes or layout frames),
+        // emit its paragraphs cleanly so section headers & questions are preserved on separate lines.
+        const maxCols = Math.max(...structuredRows.map(r => r.length));
+        if (maxCols === 1 && plainParagraphs.length > 0) {
+          markdownBlocks.push(plainParagraphs.join('\n\n'));
+        } else {
+          markdownBlocks.push(mdTable);
+        }
         tables.push({
           id: `tbl_docx_${tables.length + 1}`,
           sourceType: 'docx_html',
@@ -175,7 +182,10 @@ export function parseParagraphContent(
     if (fallbackText) return fallbackText;
   }
 
-  return result.replace(/\s{2,}/g, ' ');
+  return result
+    .replace(/\*{6}/g, '')
+    .replace(/\*{4}/g, '')
+    .replace(/[ \t]{2,}/g, ' ');
 }
 
 /**
@@ -263,8 +273,9 @@ function parseTableContent(
   tblXml: string,
   imageMap: Map<string, string>,
   onEquationFound?: () => void
-): { mdTable: string; structuredRows: string[][] } {
+): { mdTable: string; structuredRows: string[][]; plainParagraphs: string[] } {
   const structuredRows: string[][] = [];
+  const plainParagraphs: string[] = [];
 
   const trMatches = [...tblXml.matchAll(/<w:tr\b[^>]*>([\s\S]*?)<\/w:tr>/gi)];
 
@@ -280,13 +291,14 @@ function parseTableContent(
       let cellText = '';
 
       if (pMatches.length > 0) {
-        cellText = pMatches
-          .map(p => parseParagraphContent(p[1], imageMap, onEquationFound))
-          .filter(Boolean)
-          .join(' ')
-          .trim();
+        const cellLines = pMatches
+          .map(p => parseParagraphContent(p[1], imageMap, onEquationFound).trim())
+          .filter(Boolean);
+        plainParagraphs.push(...cellLines);
+        cellText = cellLines.join(' ').trim();
       } else {
         cellText = parseParagraphContent(tcXml, imageMap, onEquationFound).trim();
+        if (cellText) plainParagraphs.push(cellText);
       }
 
       // Escape pipes in cell text to not break markdown tables
@@ -300,7 +312,7 @@ function parseTableContent(
   }
 
   if (structuredRows.length === 0) {
-    return { mdTable: '', structuredRows: [] };
+    return { mdTable: '', structuredRows: [], plainParagraphs: [] };
   }
 
   // Normalize column count across all rows
@@ -319,7 +331,7 @@ function parseTableContent(
   }
   mdTable += '\n';
 
-  return { mdTable, structuredRows: normalizedRows };
+  return { mdTable, structuredRows: normalizedRows, plainParagraphs };
 }
 
 /**

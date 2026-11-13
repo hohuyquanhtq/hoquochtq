@@ -1,6 +1,7 @@
 import { Question, QuestionType, AnswerRecognitionItem, RecognitionStatus, RecognitionSource } from '../types';
 import { extractTablesFromText } from './answerExtractionEngine/documentTableReader';
 import { extractAnswersAlgorithmically } from './answerExtractionEngine/algorithmicExtractor';
+import { detectSectionHeader } from './sectionDetector';
 
 export interface SectionAnswersMatrix {
   part1: Map<number, { answer: string; source: RecognitionSource; notes?: string }>;
@@ -100,16 +101,16 @@ export function extractComprehensiveAnswerKeys(rawText: string): SectionAnswersM
     }
   }
 
-  // If no standalone "ĐÁP ÁN" header was found, check if a repeated "PHẦN I" or a table header appears in the second half of the document
+  // If no standalone "ĐÁP ÁN" header was found, check if a repeated section header or table header appears in the second half of the document
   if (answerKeyStartIndex === -1) {
     for (let i = 10; i < rawLines.length; i++) {
       const line = rawLines[i];
-      if (/^PHẦN\s+(I|1)\b/i.test(line) && i > rawLines.length * 0.3) {
+      if (detectSectionHeader(line) && i > rawLines.length * 0.3) {
         answerKeyStartIndex = i;
         break;
       }
       if (/^Câu(?:\s*:)?\s+[\d\s]+$/i.test(line) && i + 1 < rawLines.length && /^(?:Đáp\s*án(?:\s*:)?|[a-d]\))/i.test(rawLines[i + 1])) {
-        answerKeyStartIndex = (i > 0 && /PHẦN/i.test(rawLines[i - 1])) ? i - 1 : i;
+        answerKeyStartIndex = (i > 0 && /PHẦN|MỤC/i.test(rawLines[i - 1])) ? i - 1 : i;
         break;
       }
     }
@@ -143,17 +144,18 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    // Detect section transitions
-    if (/PHẦN\s+(I|1)\b/i.test(line)) {
-      currentSection = 'part1';
+    // Detect section transitions flexibly (III / II / I or semantic titles)
+    const detectedSec = detectSectionHeader(line);
+    if (detectedSec === 'part3_short_answer') {
+      currentSection = 'part3';
       continue;
     }
-    if (/PHẦN\s+(II|2)\b/i.test(line)) {
+    if (detectedSec === 'part2_true_false') {
       currentSection = 'part2';
       continue;
     }
-    if (/PHẦN\s+(III|3)\b/i.test(line)) {
-      currentSection = 'part3';
+    if (detectedSec === 'part1_single_choice') {
+      currentSection = 'part1';
       continue;
     }
 
@@ -281,7 +283,7 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
 
         for (let nextR = i + 1; nextR < Math.min(lines.length, i + 6); nextR++) {
           const nextL = lines[nextR];
-          const subMatch = nextL.match(/^(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)\b/i);
+          const subMatch = nextL.match(/^(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)(?=$|[\s,;.)\]\|])/i);
           if (subMatch) {
             const sub = (subMatch[1] || subMatch[2]).toLowerCase();
             const val = /^(Đ|ĐÚNG|TRUE|T|D)$/i.test(subMatch[3].trim());
@@ -308,7 +310,7 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
       const inlineQNumMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]+/i);
       if (inlineQNumMatch) {
         const qNum = parseInt(inlineQNumMatch[1], 10);
-        const pairs = [...line.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)\b/gi)];
+        const pairs = [...line.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)(?=$|[\s,;.)\]\|])/gi)];
         if (pairs.length >= 2) {
           const tfMap: Record<string, boolean> = {};
           pairs.forEach(p => {
@@ -408,19 +410,20 @@ function parseDetailedSolutionsSection(lines: string[], matrix: SectionAnswersMa
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
-    if (/PHẦN\s+(I|1)\b/i.test(line)) {
+    const detectedSolSec = detectSectionHeader(line);
+    if (detectedSolSec === 'part3_short_answer') {
       finalizeExplanation();
-      currentSection = 'part1';
+      currentSection = 'part3';
       continue;
     }
-    if (/PHẦN\s+(II|2)\b/i.test(line)) {
+    if (detectedSolSec === 'part2_true_false') {
       finalizeExplanation();
       currentSection = 'part2';
       continue;
     }
-    if (/PHẦN\s+(III|3)\b/i.test(line)) {
+    if (detectedSolSec === 'part1_single_choice') {
       finalizeExplanation();
-      currentSection = 'part3';
+      currentSection = 'part1';
       continue;
     }
 

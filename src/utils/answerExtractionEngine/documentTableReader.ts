@@ -91,7 +91,7 @@ export function extractTablesFromHtml(html: string): RawDocumentTable[] {
       // Find previous 200 characters of text to detect table section header (e.g. "PHẦN I", "PHẦN II")
       const beforeIndex = Math.max(0, tMatch.index ? tMatch.index - 300 : 0);
       const preSnippet = html.substring(beforeIndex, tMatch.index || 0).replace(/<[^>]+>/g, ' ').trim();
-      const headerMatch = preSnippet.match(/(?:PHẦN\s+[I|1|II|2|III|3][^.\n]*|ĐÁP\s*ÁN[^.\n]*)/i);
+      const headerMatch = preSnippet.match(/(?:PHẦN\s+(?:III|II|I|3|2|1)\b[^.\n]*|ĐÁP\s*ÁN[^.\n]*)/i);
 
       tables.push({
         id: `tbl_${tIdx + 1}`,
@@ -339,19 +339,19 @@ export function isolateAnswerBlock(text: string): {
     const line = lines[i];
 
     // Marker 1: "---------------------Hết----------------" or "Hết"
-    if (/^[\-–—*_\s]*HẾT[\-–—*_\s]*$/i.test(line) && i > 3) {
+    if (/^[\-–—*_\s]*HẾT[\-–—*_\s]*$/i.test(line) && i >= 1) {
       endOfExamIndex = i;
     }
 
     // Marker 2: "ĐÁP ÁN", "BẢNG ĐÁP ÁN", "HƯỚNG DẪN CHẤM"
     if (/^(?:BẢNG\s+)?ĐÁP\s*ÁN(?:\s*[:\-–—])?$/i.test(line) || /^BẢNG\s+ĐÁP\s*ÁN\b/i.test(line)) {
-      if (answerHeaderIndex === -1 && i > 3) {
+      if (answerHeaderIndex === -1 && i >= 1) {
         answerHeaderIndex = i;
       }
     }
 
     // Marker 3: "HƯỚNG DẪN GIẢI CHI TIẾT"
-    if (/HƯỚNG\s*DẪN\s*GIẢI\s*CHI\s*TIẾT/i.test(line) && i > 3) {
+    if (/HƯỚNG\s*DẪN\s*GIẢI\s*CHI\s*TIẾT/i.test(line) && i >= 1) {
       solutionsHeaderIndex = i;
     }
   }

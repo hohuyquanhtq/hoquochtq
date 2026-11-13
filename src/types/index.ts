@@ -90,6 +90,8 @@ export interface Question {
   parseWarning?: string;
   teacherVerified?: boolean;
   recognitionSource?: RecognitionSource;
+  sectionId?: string;
+  rawSourceText?: string;
 }
 
 export interface Folder {
@@ -241,12 +243,28 @@ export interface AnswerRecognitionItem {
   validationIssues?: string[];
 }
 
+export type SectionDetectionMethod = 'roman_header' | 'semantic_header' | 'structure_inferred' | 'ambiguous';
+
+export interface DetectedExamSection {
+  id: string;
+  rawTitle: string;
+  detectedType: QuestionType;
+  detectionMethod: SectionDetectionMethod;
+  confidence: number;
+  needsConfirmation: boolean;
+  warning?: string;
+  questionCount: number;
+  statementCount: number;
+  teacherConfirmed?: boolean;
+}
+
 export interface ParsedExamResult {
   title: string;
   grade?: ChemGrade;
   totalQuestions: number;
   part1Count: number;
   part2Count: number;
+  part2StatementsCount?: number;
   part3Count: number;
   questionsWithAnswers: number;
   questionsMissingAnswers: number;
@@ -264,6 +282,11 @@ export interface ParsedExamResult {
   part3TotalCount: number;
   allAnswersVerified: boolean;
   successRatePercent?: number;
+
+  // Detected Exam Sections & Confirmation
+  detectedSections?: DetectedExamSection[];
+  hasAmbiguousSections?: boolean;
+  sectionsConfirmed?: boolean;
 }
 
 declare global {

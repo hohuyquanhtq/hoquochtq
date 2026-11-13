@@ -29,6 +29,7 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
   exam,
   submissions,
   onBack,
+  onShareExam,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('all');
