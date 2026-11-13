@@ -26,16 +26,31 @@ import firebaseConfig from '../../firebase-applet-config.json';
 import { Exam, Question, StudentSubmission } from '../types';
 import { normalizeExamCode, normalizeExamCodeCompact } from '../utils/urlHelper';
 
+function cleanEnvStr(val: unknown): string {
+  return typeof val === 'string' ? val.trim() : '';
+}
+
 function resolveFirebaseConfig() {
   const env = (typeof import.meta !== 'undefined' ? (import.meta as any).env : {}) || {};
+  const envProjectId = cleanEnvStr(env.VITE_FIREBASE_PROJECT_ID);
+  const resolvedProjectId = envProjectId || firebaseConfig.projectId;
+  const envDatabaseId =
+    cleanEnvStr(env.VITE_FIREBASE_DATABASE_ID) ||
+    cleanEnvStr(env.VITE_FIREBASE_FIRESTORE_DATABASE_ID);
+
+  // Only inherit bundled named firestoreDatabaseId when pointing to the bundled project
+  const resolvedDatabaseId =
+    envDatabaseId ||
+    (resolvedProjectId === firebaseConfig.projectId ? firebaseConfig.firestoreDatabaseId : '');
+
   return {
-    projectId: env.VITE_FIREBASE_PROJECT_ID || firebaseConfig.projectId,
-    appId: env.VITE_FIREBASE_APP_ID || firebaseConfig.appId,
-    apiKey: env.VITE_FIREBASE_API_KEY || firebaseConfig.apiKey,
-    authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfig.authDomain,
-    firestoreDatabaseId: env.VITE_FIREBASE_DATABASE_ID || firebaseConfig.firestoreDatabaseId,
-    storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfig.storageBucket,
-    messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfig.messagingSenderId,
+    projectId: resolvedProjectId,
+    appId: cleanEnvStr(env.VITE_FIREBASE_APP_ID) || firebaseConfig.appId,
+    apiKey: cleanEnvStr(env.VITE_FIREBASE_API_KEY) || firebaseConfig.apiKey,
+    authDomain: cleanEnvStr(env.VITE_FIREBASE_AUTH_DOMAIN) || firebaseConfig.authDomain,
+    firestoreDatabaseId: resolvedDatabaseId,
+    storageBucket: cleanEnvStr(env.VITE_FIREBASE_STORAGE_BUCKET) || firebaseConfig.storageBucket,
+    messagingSenderId: cleanEnvStr(env.VITE_FIREBASE_MESSAGING_SENDER_ID) || firebaseConfig.messagingSenderId,
     measurementId: firebaseConfig.measurementId || '',
   };
 }
@@ -58,13 +73,26 @@ try {
 } catch (initErr) {
   firebaseInitError = initErr instanceof Error ? initErr.message : String(initErr);
   console.error('[HQTest Firebase] Lỗi khởi tạo Firebase:', initErr);
-  // Keep fallback references safely unassigned only if totally broken
   app = (getApps()[0] || {}) as FirebaseApp;
   db = {} as Firestore;
   auth = {} as Auth;
 }
 
-export { db, auth };
+export { app, db, auth, firebaseInitError };
+
+export function getFirebaseProjectInfo(): {
+  projectId: string;
+  databaseId: string;
+  initialized: boolean;
+  initError: string | null;
+} {
+  return {
+    projectId: resolvedConfig.projectId || '',
+    databaseId: resolvedConfig.firestoreDatabaseId || '(default)',
+    initialized: !firebaseInitError,
+    initError: firebaseInitError,
+  };
+}
 
 const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
@@ -345,17 +373,24 @@ export function subscribeAuthState(callback: (user: FirebaseUser | null) => void
 }
 
 export async function signInWithGoogleForCloudSync(): Promise<FirebaseUser> {
+  if (firebaseInitError) {
+    throw new Error(`Firebase chưa sẵn sàng: ${firebaseInitError}`);
+  }
   const cred = await signInWithPopup(auth, googleProvider);
   return cred.user;
 }
 
 export async function signOutFromCloud(): Promise<void> {
+  if (firebaseInitError) return;
   await signOut(auth);
 }
 
 // --- Cloud Exam Sync (Teacher) ---
 export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean; reason?: string }> {
-  const user = auth.currentUser;
+  if (firebaseInitError) {
+    return { synced: false, reason: 'firebase_not_initialized' };
+  }
+  const user = auth?.currentUser;
   if (!user || !user.emailVerified) {
     return { synced: false, reason: 'unauthenticated' };
   }
@@ -464,7 +499,8 @@ export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean
 }
 
 export async function deleteExamFromFirestore(exam: Exam): Promise<void> {
-  const user = auth.currentUser;
+  if (firebaseInitError) return;
+  const user = auth?.currentUser;
   if (!user || !user.emailVerified) return;
 
   const safeId = exam.id.replace(/[^a-zA-Z0-9_-]/g, '_');
@@ -484,6 +520,7 @@ export async function deleteExamFromFirestore(exam: Exam): Promise<void> {
 }
 
 export async function fetchTeacherExamsFromFirestore(uid: string): Promise<Exam[]> {
+  if (firebaseInitError || !uid) return [];
   try {
     const q = query(collection(db, 'exams'), where('ownerId', '==', uid));
     const snap = await getDocs(q);
@@ -497,6 +534,7 @@ export async function fetchTeacherExamsFromFirestore(uid: string): Promise<Exam[
 }
 
 export async function fetchTeacherSubmissionsFromFirestore(uid: string): Promise<StudentSubmission[]> {
+  if (firebaseInitError || !uid) return [];
   try {
     const q = query(collection(db, 'submissions'), where('ownerId', '==', uid));
     const snap = await getDocs(q);
@@ -515,6 +553,7 @@ export type CloudExamLookupStatus =
   | 'expired'
   | 'unauthorized'
   | 'network_error'
+  | 'firebase_not_initialized'
   | 'unexpected_error';
 
 export interface CloudExamLookupResult {
@@ -549,7 +588,7 @@ function classifyFirestoreError(error: unknown): {
   ) {
     return {
       status: 'network_error',
-      message: 'Không thể kết nối tới máy chủ bài thi (mạng yếu hoặc mất kết nối). Vui lòng kiểm tra Internet và thử lại.',
+      message: 'Không thể kết nối tới máy chủ Firebase (mạng yếu hoặc mất kết nối). Vui lòng kiểm tra Internet và thử lại.',
     };
   }
 
@@ -562,8 +601,8 @@ function classifyFirestoreError(error: unknown): {
 export async function fetchPublicExamFromFirestore(rawCode: string): Promise<CloudExamLookupResult> {
   if (firebaseInitError) {
     return {
-      status: 'unexpected_error',
-      message: `Lỗi cấu hình kết nối Firebase: ${firebaseInitError}`,
+      status: 'firebase_not_initialized',
+      message: `Dịch vụ Firestore chưa khởi tạo thành công (${firebaseInitError}). Vui lòng kiểm tra cấu hình hoặc tải lại trang.`,
     };
   }
 
@@ -698,6 +737,7 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
 export async function fetchAllowedAnswerKeysAfterSubmit(
   examCode: string
 ): Promise<{ answerMap: Record<string, AnswerKeyEntry>; showSolutionsAfterSubmit: boolean } | null> {
+  if (firebaseInitError) return null;
   const code = normalizeExamCode(examCode);
   if (!code) return null;
   try {
@@ -723,7 +763,7 @@ export async function saveSubmissionToFirestore(
   submission: StudentSubmission,
   ownerId: string
 ): Promise<boolean> {
-  if (!ownerId) return false;
+  if (firebaseInitError || !ownerId) return false;
   const safeSubId = submission.id.replace(/[^a-zA-Z0-9_-]/g, '_');
   const code = normalizeExamCode(submission.examCode);
 

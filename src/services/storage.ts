@@ -843,7 +843,11 @@ export const StorageService = {
         };
       }
 
-      if (cloudResult.status === 'network_error' || cloudResult.status === 'unexpected_error') {
+      if (
+        cloudResult.status === 'network_error' ||
+        cloudResult.status === 'firebase_not_initialized' ||
+        cloudResult.status === 'unexpected_error'
+      ) {
         return {
           source: 'cloud',
           status: cloudResult.status,

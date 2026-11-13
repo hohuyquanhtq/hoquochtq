@@ -30,6 +30,7 @@ export type ExamLandingStatus =
   | 'expired'
   | 'unauthorized'
   | 'network_error'
+  | 'firebase_not_initialized'
   | 'unexpected_error';
 
 interface ExamJoinLandingProps {
@@ -80,7 +81,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
     const isSchedule = status === 'not_started' || status === 'expired';
     const isUnauthorized = status === 'unauthorized';
     const isNetwork = status === 'network_error';
-    const isUnexpected = status === 'unexpected_error';
+    const isUnexpected = status === 'unexpected_error' || status === 'firebase_not_initialized';
     const displayCode = exam?.code || examCode || 'N/A';
 
     const titleText =
@@ -94,6 +95,8 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
         ? 'Không đủ quyền truy cập'
         : status === 'network_error'
         ? 'Lỗi kết nối máy chủ'
+        : status === 'firebase_not_initialized'
+        ? 'Firestore chưa khởi tạo'
         : status === 'unexpected_error'
         ? 'Lỗi hệ thống'
         : 'Không tìm thấy mã bài thi';
@@ -103,6 +106,8 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
         ? 'Bạn không có quyền truy cập phòng thi này hoặc bài thi chưa được mở công khai.'
         : status === 'network_error'
         ? 'Không thể kết nối tới máy chủ để tải dữ liệu bài thi. Vui lòng kiểm tra kết nối mạng và thử lại.'
+        : status === 'firebase_not_initialized'
+        ? 'Dịch vụ cơ sở dữ liệu Firestore chưa được khởi tạo sẵn sàng. Vui lòng kiểm tra cấu hình hoặc tải lại trang.'
         : status === 'unexpected_error'
         ? 'Hệ thống gặp sự cố không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.'
         : `Không tìm thấy bài thi với mã "${displayCode}".`;
