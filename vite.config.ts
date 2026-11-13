@@ -4,10 +4,21 @@ import path from 'path';
 import {defineConfig} from 'vite';
 
 export default defineConfig(() => {
+  const productionUrlRaw =
+    process.env.VITE_PUBLIC_APP_URL ||
+    (process.env.VERCEL_PROJECT_PRODUCTION_URL
+      ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.replace(/^https?:\/\//, '')}`
+      : '');
+  const appUrlRaw =
+    process.env.APP_URL && !process.env.APP_URL.includes('ais-dev-')
+      ? process.env.APP_URL
+      : '';
+
   return {
     plugins: [react(), tailwindcss()],
     define: {
-      '__APP_URL__': JSON.stringify(process.env.APP_URL || 'https://ais-dev-oo4zxgd2cngrm3egycshsk-120327851336.asia-southeast1.run.app'),
+      '__APP_URL__': JSON.stringify(appUrlRaw),
+      '__PRODUCTION_APP_URL__': JSON.stringify(productionUrlRaw.replace(/\/+$/, '')),
     },
     resolve: {
       alias: {

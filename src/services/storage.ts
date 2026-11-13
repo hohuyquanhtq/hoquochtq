@@ -1,5 +1,7 @@
 import { User, Question, Exam, Folder, StudentSubmission } from '../types';
 import { parseExamContent, SAMPLE_CHEMISTRY_EXAMS } from '../utils/docxParser';
+import { normalizeExamCode, normalizeExamCodeCompact } from '../utils/urlHelper';
+import { fetchPublicExamFromFirestore, sanitizeExamForStudent } from './firebase';
 
 const STORAGE_KEYS = {
   CURRENT_USER: 'chemtest_current_user',
@@ -691,15 +693,21 @@ export const StorageService = {
 
   /**
    * Robust search for exams by Code or ID
-   * Normalizes whitespaces, case, prefixes (#, c/, ?exam=, etc.)
+   * Normalizes whitespaces, case, prefixes (#, c/, ?examCode=, etc.)
    */
   getExamByCode(rawCode: string): Exam | undefined {
     if (!rawCode || !rawCode.trim()) return undefined;
-    const clean = rawCode.trim().replace(/^(?:#|\/?c\/)/i, '').replace(/[\s\-_]/g, '').toUpperCase();
+    const normalized = normalizeExamCode(rawCode);
+    const compact = normalizeExamCodeCompact(rawCode);
     const list = this.getExams();
     return list.find(e => {
-      const eCode = e.code.trim().replace(/[\s\-_]/g, '').toUpperCase();
-      return eCode === clean || e.id.toLowerCase() === rawCode.trim().toLowerCase() || e.code.toUpperCase() === rawCode.trim().toUpperCase();
+      const eNorm = normalizeExamCode(e.code);
+      const eCompact = normalizeExamCodeCompact(e.code);
+      return (
+        eNorm === normalized ||
+        eCompact === compact ||
+        e.id.toLowerCase() === rawCode.trim().toLowerCase()
+      );
     });
   },
 
@@ -715,13 +723,13 @@ export const StorageService = {
     if (!exam) {
       return { 
         status: 'not_found', 
-        message: `Không tìm thấy bài thi với mã "${rawCode.trim()}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!` 
+        message: `Không tìm thấy bài thi với mã "${normalizeExamCode(rawCode) || rawCode.trim()}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!` 
       };
     }
 
     if (!exam.isPublished) {
       return { 
-        exam, 
+        exam: sanitizeExamForStudent(exam), 
         status: 'not_published', 
         message: `Bài thi "${exam.title}" (Mã: ${exam.code}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.` 
       };
@@ -730,9 +738,9 @@ export const StorageService = {
     const now = new Date();
     if (exam.openAt) {
       const openTime = new Date(exam.openAt);
-      if (now < openTime) {
+      if (!isNaN(openTime.getTime()) && now < openTime) {
         return { 
-          exam, 
+          exam: sanitizeExamForStudent(exam), 
           status: 'not_started', 
           message: `Bài thi chưa mở. Thời gian bắt đầu: ${openTime.toLocaleString('vi-VN')}` 
         };
@@ -741,9 +749,9 @@ export const StorageService = {
 
     if (exam.closeAt) {
       const closeTime = new Date(exam.closeAt);
-      if (now > closeTime) {
+      if (!isNaN(closeTime.getTime()) && now > closeTime) {
         return { 
-          exam, 
+          exam: sanitizeExamForStudent(exam), 
           status: 'expired', 
           message: `Bài thi đã kết thúc thời hạn làm bài lúc: ${closeTime.toLocaleString('vi-VN')}` 
         };
@@ -751,6 +759,37 @@ export const StorageService = {
     }
 
     return { exam, status: 'found' };
+  },
+
+  /**
+   * Cross-device student-safe exam lookup: checks Firestore cloud projection first
+   * (with stripped answers/solutions), then falls back to local/built-in exams (also sanitized).
+   */
+  async checkExamStatusAsync(rawCode: string): Promise<{
+    exam?: Exam;
+    ownerId?: string;
+    source: 'cloud' | 'local';
+    status: 'found' | 'not_found' | 'not_published' | 'not_started' | 'expired';
+    message?: string;
+  }> {
+    const cloudResult = await fetchPublicExamFromFirestore(rawCode);
+    if (cloudResult.status !== 'not_found') {
+      return {
+        exam: cloudResult.exam,
+        ownerId: cloudResult.ownerId,
+        source: 'cloud',
+        status: cloudResult.status,
+        message: cloudResult.message,
+      };
+    }
+
+    const localResult = this.checkExamStatus(rawCode);
+    return {
+      exam: localResult.exam ? sanitizeExamForStudent(localResult.exam) : undefined,
+      source: 'local',
+      status: localResult.status,
+      message: localResult.message,
+    };
   },
 
   getSubmissions(examId?: string): StudentSubmission[] {

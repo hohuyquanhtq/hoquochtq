@@ -1,0 +1,359 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // 2. Global Security Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isAdmin() {
+      return isVerified() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (request.auth.token.email == 'hohuyquanhtq@gmail.com' && request.auth.token.email_verified == true)
+      );
+    }
+
+    function isOwner(ownerId) {
+      return isVerified() && request.auth.uid == ownerId;
+    }
+
+    function isValidExamCode(code) {
+      return code is string && code.size() >= 2 && code.size() <= 32 && code.matches('^[A-Z0-9\\-]+$');
+    }
+
+    // 3. Entity Validation Blueprints
+    function isValidExamMaster(data) {
+      return data.keys().hasAll([
+          'id', 'code', 'title', 'grade', 'durationMinutes', 'totalQuestions',
+          'totalScore', 'questions', 'rules', 'isPublished', 'ownerId',
+          'authorName', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'code', 'title', 'grade', 'topic', 'folderId',
+          'durationMinutes', 'totalQuestions', 'totalScore', 'questions', 'rules',
+          'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
+          'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
+          'showSolutionsAfterSubmit', 'allowReviewLater', 'ownerId', 'authorId',
+          'authorName', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidExamCode(data.code)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.grade in ['10', '11', '12', 'chuyen_hsg']
+        && (!('topic' in data) || (data.topic is string && data.topic.size() <= 64))
+        && (!('folderId' in data) || (data.folderId is string && data.folderId.size() <= 128))
+        && data.durationMinutes is number && data.durationMinutes >= 1 && data.durationMinutes <= 600
+        && data.totalQuestions is number && data.totalQuestions >= 0 && data.totalQuestions <= 200
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
+        && data.questions is list && data.questions.size() <= 200
+        && (data.questions.size() == 0 || data.questions[0] is map)
+        && data.rules is map
+        && (!('shuffleQuestions' in data) || data.shuffleQuestions is bool)
+        && (!('shuffleOptions' in data) || data.shuffleOptions is bool)
+        && data.isPublished is bool
+        && (!('openAt' in data) || (data.openAt is string && data.openAt.size() <= 64))
+        && (!('closeAt' in data) || (data.closeAt is string && data.closeAt.size() <= 64))
+        && (!('maxAttempts' in data) || (data.maxAttempts is number && data.maxAttempts >= 0 && data.maxAttempts <= 1000))
+        && (!('showScoreAfterSubmit' in data) || data.showScoreAfterSubmit is bool)
+        && (!('showAnswersAfterSubmit' in data) || data.showAnswersAfterSubmit is bool)
+        && (!('showSolutionsAfterSubmit' in data) || data.showSolutionsAfterSubmit is bool)
+        && (!('allowReviewLater' in data) || data.allowReviewLater is bool)
+        && isValidId(data.ownerId)
+        && (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128))
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && data.serverCreatedAt is timestamp
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidExamStatus(data) {
+      return data.keys().hasAll([
+          'examCode', 'examId', 'title', 'grade', 'durationMinutes',
+          'totalQuestions', 'totalScore', 'isPublished', 'authorName',
+          'ownerId', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'examCode', 'examId', 'title', 'grade', 'durationMinutes',
+          'totalQuestions', 'totalScore', 'isPublished', 'openAt', 'closeAt',
+          'authorName', 'ownerId', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && isValidExamCode(data.examCode)
+        && isValidId(data.examId)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.grade in ['10', '11', '12', 'chuyen_hsg']
+        && data.durationMinutes is number && data.durationMinutes >= 1 && data.durationMinutes <= 600
+        && data.totalQuestions is number && data.totalQuestions >= 0 && data.totalQuestions <= 200
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
+        && data.isPublished is bool
+        && (!('openAt' in data) || (data.openAt is string && data.openAt.size() <= 64))
+        && (!('closeAt' in data) || (data.closeAt is string && data.closeAt.size() <= 64))
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
+        && isValidId(data.ownerId)
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidPublicExam(data) {
+      return data.keys().hasAll([
+          'id', 'code', 'title', 'grade', 'durationMinutes', 'totalQuestions',
+          'totalScore', 'questions', 'rules', 'isPublished',
+          'showScoreAfterSubmit', 'showAnswersAfterSubmit', 'showSolutionsAfterSubmit',
+          'authorName', 'ownerId', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'code', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
+          'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
+          'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
+          'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
+          'authorName', 'ownerId', 'createdAt', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidExamCode(data.code)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.grade in ['10', '11', '12', 'chuyen_hsg']
+        && (!('topic' in data) || (data.topic is string && data.topic.size() <= 64))
+        && data.durationMinutes is number && data.durationMinutes >= 1 && data.durationMinutes <= 600
+        && data.totalQuestions is number && data.totalQuestions >= 0 && data.totalQuestions <= 200
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
+        && data.questions is list && data.questions.size() <= 200
+        && (data.questions.size() == 0 || data.questions[0] is map)
+        && data.rules is map
+        && (!('shuffleQuestions' in data) || data.shuffleQuestions is bool)
+        && (!('shuffleOptions' in data) || data.shuffleOptions is bool)
+        && data.isPublished is bool
+        && (!('openAt' in data) || (data.openAt is string && data.openAt.size() <= 64))
+        && (!('closeAt' in data) || (data.closeAt is string && data.closeAt.size() <= 64))
+        && (!('maxAttempts' in data) || (data.maxAttempts is number && data.maxAttempts >= 0 && data.maxAttempts <= 1000))
+        && data.showScoreAfterSubmit is bool
+        && data.showAnswersAfterSubmit is bool
+        && data.showSolutionsAfterSubmit is bool
+        && (!('allowReviewLater' in data) || data.allowReviewLater is bool)
+        && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
+        && isValidId(data.ownerId)
+        && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64))
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidExamAnswerKey(data) {
+      return data.keys().hasAll([
+          'examCode', 'examId', 'ownerId', 'isPublished',
+          'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'answerMap',
+          'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'examCode', 'examId', 'ownerId', 'isPublished',
+          'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'answerMap',
+          'updatedAt', 'serverUpdatedAt'
+        ])
+        && isValidExamCode(data.examCode)
+        && isValidId(data.examId)
+        && isValidId(data.ownerId)
+        && data.isPublished is bool
+        && data.showAnswersAfterSubmit is bool
+        && data.showSolutionsAfterSubmit is bool
+        && data.answerMap is map
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidSubmission(data) {
+      return data.keys().hasAll([
+          'id', 'examId', 'examTitle', 'examCode', 'ownerId', 'studentId',
+          'studentName', 'studentClass', 'startedAt', 'submittedAt',
+          'durationSeconds', 'answers', 'part1Score', 'part2Score', 'part3Score',
+          'totalScore', 'maxPossibleScore', 'correctQuestionsCount', 'status', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'examId', 'examTitle', 'examCode', 'variantCode', 'ownerId',
+          'studentId', 'studentName', 'studentClass', 'startedAt', 'submittedAt',
+          'durationSeconds', 'answers', 'part1Score', 'part2Score', 'part3Score',
+          'totalScore', 'maxPossibleScore', 'correctQuestionsCount',
+          'tabSwitchesCount', 'status', 'createdAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.examId)
+        && data.examTitle is string && data.examTitle.size() >= 1 && data.examTitle.size() <= 300
+        && isValidExamCode(data.examCode)
+        && (!('variantCode' in data) || (data.variantCode is string && data.variantCode.size() <= 32))
+        && isValidId(data.ownerId)
+        && data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128
+        && data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120
+        && data.studentClass is string && data.studentClass.size() >= 1 && data.studentClass.size() <= 80
+        && data.startedAt is string && data.startedAt.size() <= 64
+        && data.submittedAt is string && data.submittedAt.size() <= 64
+        && data.durationSeconds is number && data.durationSeconds >= 0 && data.durationSeconds <= 86400
+        && data.answers is map
+        && data.part1Score is number && data.part1Score >= 0 && data.part1Score <= 100
+        && data.part2Score is number && data.part2Score >= 0 && data.part2Score <= 100
+        && data.part3Score is number && data.part3Score >= 0 && data.part3Score <= 100
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
+        && data.maxPossibleScore is number && data.maxPossibleScore >= 0 && data.maxPossibleScore <= 100
+        && data.correctQuestionsCount is number && data.correctQuestionsCount >= 0 && data.correctQuestionsCount <= 200
+        && (!('tabSwitchesCount' in data) || (data.tabSwitchesCount is number && data.tabSwitchesCount >= 0 && data.tabSwitchesCount <= 10000))
+        && data.status in ['completed', 'in_progress', 'timed_out']
+        && data.createdAt is timestamp;
+    }
+
+    // 4. Collection Rules
+    match /exams/{examId} {
+      allow get: if isValidId(examId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow create: if isVerified()
+        && isValidId(examId)
+        && isValidExamMaster(incoming())
+        && (incoming().ownerId == request.auth.uid || isAdmin())
+        && incoming().id == examId
+        && incoming().serverCreatedAt == request.time
+        && incoming().serverUpdatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(examId)
+        && isValidExamMaster(incoming())
+        && (isOwner(existing().ownerId) || isAdmin())
+        && incoming().ownerId == existing().ownerId
+        && incoming().id == existing().id
+        && incoming().serverCreatedAt == existing().serverCreatedAt
+        && incoming().serverUpdatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'code', 'title', 'grade', 'topic', 'folderId', 'durationMinutes',
+          'totalQuestions', 'totalScore', 'questions', 'rules',
+          'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
+          'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
+          'showSolutionsAfterSubmit', 'allowReviewLater', 'authorName',
+          'updatedAt', 'serverUpdatedAt'
+        ]);
+      allow delete: if isValidId(examId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    match /examStatus/{examCode} {
+      allow get: if isValidId(examCode) && isValidExamCode(examCode);
+      allow list: if false;
+      allow create: if isVerified()
+        && isValidId(examCode)
+        && isValidExamStatus(incoming())
+        && incoming().examCode == examCode
+        && (incoming().ownerId == request.auth.uid || isAdmin())
+        && incoming().serverUpdatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(examCode)
+        && isValidExamStatus(incoming())
+        && (isOwner(existing().ownerId) || isAdmin())
+        && incoming().ownerId == existing().ownerId
+        && incoming().examCode == existing().examCode
+        && incoming().serverUpdatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'examId', 'title', 'grade', 'durationMinutes', 'totalQuestions',
+          'totalScore', 'isPublished', 'openAt', 'closeAt', 'authorName',
+          'updatedAt', 'serverUpdatedAt'
+        ]);
+      allow delete: if isValidId(examCode) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    match /publicExams/{examCode} {
+      allow get: if isValidId(examCode) && isValidExamCode(examCode) && existing().isPublished == true;
+      allow list: if false;
+      allow create: if isVerified()
+        && isValidId(examCode)
+        && isValidPublicExam(incoming())
+        && incoming().code == examCode
+        && (incoming().ownerId == request.auth.uid || isAdmin())
+        && incoming().serverUpdatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(examCode)
+        && isValidPublicExam(incoming())
+        && (isOwner(existing().ownerId) || isAdmin())
+        && incoming().ownerId == existing().ownerId
+        && incoming().code == existing().code
+        && incoming().serverUpdatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'id', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
+          'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
+          'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
+          'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
+          'authorName', 'updatedAt', 'serverUpdatedAt'
+        ]);
+      allow delete: if isValidId(examCode) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    match /examKeys/{examCode} {
+      allow get: if isValidId(examCode) && isValidExamCode(examCode) && (
+        (existing().isPublished == true && existing().showAnswersAfterSubmit == true) ||
+        isOwner(existing().ownerId) ||
+        isAdmin()
+      );
+      allow list: if false;
+      allow create: if isVerified()
+        && isValidId(examCode)
+        && isValidExamAnswerKey(incoming())
+        && incoming().examCode == examCode
+        && (incoming().ownerId == request.auth.uid || isAdmin())
+        && incoming().serverUpdatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(examCode)
+        && isValidExamAnswerKey(incoming())
+        && (isOwner(existing().ownerId) || isAdmin())
+        && incoming().ownerId == existing().ownerId
+        && incoming().examCode == existing().examCode
+        && incoming().serverUpdatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'examId', 'isPublished', 'showAnswersAfterSubmit',
+          'showSolutionsAfterSubmit', 'answerMap', 'updatedAt', 'serverUpdatedAt'
+        ]);
+      allow delete: if isValidId(examCode) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    match /submissions/{submissionId} {
+      allow get: if isValidId(submissionId) && (isOwner(existing().ownerId) || isAdmin());
+      allow list: if isVerified() && (existing().ownerId == request.auth.uid || isAdmin());
+      allow create: if isValidId(submissionId)
+        && isValidSubmission(incoming())
+        && incoming().id == submissionId
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/publicExams/$(incoming().examCode))
+        && get(/databases/$(database)/documents/publicExams/$(incoming().examCode)).data.isPublished == true
+        && incoming().ownerId == get(/databases/$(database)/documents/publicExams/$(incoming().examCode)).data.ownerId;
+      allow update: if isVerified()
+        && isValidId(submissionId)
+        && isValidSubmission(incoming())
+        && (isAdmin() || (isOwner(existing().ownerId) && existing().status != 'completed'))
+        && incoming().ownerId == existing().ownerId
+        && incoming().id == existing().id
+        && incoming().examId == existing().examId
+        && incoming().examCode == existing().examCode
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'part1Score', 'part2Score', 'part3Score', 'totalScore',
+          'correctQuestionsCount', 'status'
+        ]);
+      allow delete: if isValidId(submissionId) && (isOwner(existing().ownerId) || isAdmin());
+    }
+
+    match /admins/{userId} {
+      allow get: if isVerified() && request.auth.uid == userId;
+      allow list, create, update, delete: if false;
+    }
+  }
+}

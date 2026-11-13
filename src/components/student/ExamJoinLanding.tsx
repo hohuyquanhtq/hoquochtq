@@ -1,37 +1,176 @@
 import React, { useState } from 'react';
-import { 
-  GraduationCap, 
-  Clock, 
-  FileText, 
-  Award, 
-  Play, 
-  AlertCircle, 
-  CheckCircle2, 
-  User as UserIcon, 
-  Layers, 
+import {
+  Clock,
+  FileText,
+  Award,
+  Play,
+  AlertCircle,
+  CheckCircle2,
+  User as UserIcon,
+  Layers,
   FlaskConical,
   ShieldAlert,
-  ArrowLeft
+  ArrowLeft,
+  RefreshCw,
+  SearchX,
+  Lock,
+  CalendarClock,
 } from 'lucide-react';
 import { Exam, User } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
 
+export type ExamLandingStatus =
+  | 'loading'
+  | 'found'
+  | 'not_found'
+  | 'not_published'
+  | 'not_started'
+  | 'expired';
+
 interface ExamJoinLandingProps {
-  exam: Exam;
+  exam: Exam | null;
+  examCode?: string;
+  status?: ExamLandingStatus;
+  statusMessage?: string;
   currentUser: User;
   onStartExam: (exam: Exam, studentName: string, studentClass: string) => void;
+  onRetryLookup?: () => void;
   onBackToHome: () => void;
 }
 
 export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   exam,
+  examCode,
+  status = 'found',
+  statusMessage,
   currentUser,
   onStartExam,
+  onRetryLookup,
   onBackToHome,
 }) => {
   const [studentName, setStudentName] = useState(currentUser.name || '');
   const [studentClass, setStudentClass] = useState(currentUser.className || '12 Hóa 1');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  if (status === 'loading') {
+    return (
+      <div className="max-w-2xl mx-auto py-12 px-4">
+        <div className="bg-white border border-slate-200 rounded-3xl shadow-lg p-10 text-center space-y-4">
+          <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
+            <RefreshCw className="w-6 h-6 animate-spin" />
+          </div>
+          <h2 className="text-lg font-extrabold text-slate-900">
+            Đang tải phòng thi {examCode ? `(${examCode})` : ''}...
+          </h2>
+          <p className="text-xs text-slate-500">
+            Hệ thống đang kiểm tra thông tin bài thi và chuẩn bị đề thi cho bạn.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status !== 'found' || !exam) {
+    const isLocked = status === 'not_published';
+    const isSchedule = status === 'not_started' || status === 'expired';
+    const displayCode = exam?.code || examCode || 'N/A';
+
+    return (
+      <div className="max-w-2xl mx-auto py-8 px-4 space-y-5">
+        <button
+          onClick={onBackToHome}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Quay lại trang chủ {APP_CONFIG.APP_NAME}</span>
+        </button>
+
+        <div className="bg-white border border-slate-200 rounded-3xl shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-slate-800 to-slate-900 p-6 text-white flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-11 h-11 rounded-2xl bg-white/10 flex items-center justify-center">
+                {isLocked ? (
+                  <Lock className="w-6 h-6 text-amber-300" />
+                ) : isSchedule ? (
+                  <CalendarClock className="w-6 h-6 text-amber-300" />
+                ) : (
+                  <SearchX className="w-6 h-6 text-rose-300" />
+                )}
+              </div>
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 block">
+                  {APP_CONFIG.APP_NAME} • TRẠNG THÁI PHÒNG THI
+                </span>
+                <h1 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
+                  {status === 'not_published'
+                    ? 'Phòng thi đang tạm đóng'
+                    : status === 'not_started'
+                    ? 'Bài thi chưa đến giờ mở'
+                    : status === 'expired'
+                    ? 'Bài thi đã kết thúc'
+                    : 'Không tìm thấy bài thi'}
+                </h1>
+              </div>
+            </div>
+
+            {displayCode !== 'N/A' && (
+              <div className="bg-white/10 border border-white/20 px-3.5 py-2 rounded-xl text-center shrink-0">
+                <span className="text-[10px] font-bold text-slate-300 block">MÃ ĐỀ</span>
+                <span className="font-mono font-black text-base text-white">{displayCode}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="p-6 sm:p-8 space-y-5">
+            {exam?.title && (
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200">
+                <p className="text-xs text-slate-500 font-semibold">Tên bài thi:</p>
+                <p className="text-sm font-bold text-slate-900 mt-0.5">{exam.title}</p>
+                {exam.authorName && (
+                  <p className="text-xs text-slate-500 mt-1">Giáo viên: {exam.authorName}</p>
+                )}
+              </div>
+            )}
+
+            <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm font-medium flex items-start gap-3">
+              <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold">
+                  {statusMessage ||
+                    `Không tìm thấy bài thi với mã "${displayCode}".`}
+                </p>
+                {status === 'not_found' && (
+                  <p className="text-xs text-amber-800 leading-relaxed">
+                    Nếu giáo viên vừa mới tạo đề thi trên thiết bị khác, vui lòng kiểm tra lại mã đề hoặc nhờ giáo viên bấm &ldquo;Đồng bộ Cloud&rdquo; trong mục Chia sẻ &amp; QR.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2">
+              {onRetryLookup && (
+                <button
+                  type="button"
+                  onClick={onRetryLookup}
+                  className="px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5 transition-colors"
+                >
+                  <RefreshCw className="w-4 h-4 text-blue-600" />
+                  <span>Kiểm tra lại</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={onBackToHome}
+                className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-colors"
+              >
+                Về trang nhập mã thi
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,13 +188,12 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   };
 
   // Count question types
-  const p1Count = exam.questions.filter(q => q.type === 'part1_single_choice').length;
-  const p2Count = exam.questions.filter(q => q.type === 'part2_true_false').length;
-  const p3Count = exam.questions.filter(q => q.type === 'part3_short_answer').length;
+  const p1Count = exam.questions.filter((q) => q.type === 'part1_single_choice').length;
+  const p2Count = exam.questions.filter((q) => q.type === 'part2_true_false').length;
+  const p3Count = exam.questions.filter((q) => q.type === 'part3_short_answer').length;
 
   return (
     <div className="max-w-3xl mx-auto py-6 px-4 space-y-6">
-      
       {/* Top Navigation */}
       <button
         onClick={onBackToHome}
@@ -67,7 +205,6 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
 
       {/* Main Card */}
       <div className="bg-white border border-slate-200 rounded-3xl shadow-xl overflow-hidden">
-        
         {/* Banner */}
         <div className="bg-gradient-to-r from-blue-700 via-indigo-700 to-blue-800 p-6 md:p-8 text-white relative">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 text-blue-200 text-xs font-semibold mb-3">
@@ -98,7 +235,6 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
 
         {/* Content Body */}
         <div className="p-6 md:p-8 space-y-6">
-          
           {errorMsg && (
             <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold rounded-xl flex items-center gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
@@ -111,7 +247,9 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
               <div>
                 <p className="font-bold">Phòng thi đang tạm khóa hoặc chưa mở</p>
-                <p className="text-amber-700 mt-0.5">Giáo viên chưa mở phòng thi cho mã "{exam.code}". Vui lòng liên hệ giáo viên để biết thời gian mở phòng!</p>
+                <p className="text-amber-700 mt-0.5">
+                  Giáo viên chưa mở phòng thi cho mã &ldquo;{exam.code}&rdquo;. Vui lòng liên hệ giáo viên để biết thời gian mở phòng!
+                </p>
               </div>
             </div>
           )}
@@ -134,7 +272,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               </div>
               <div>
                 <p className="text-[11px] text-slate-500 font-medium">Số câu hỏi</p>
-                <p className="text-base font-extrabold text-slate-900">{exam.totalQuestions} câu</p>
+                <p className="text-base font-extrabold text-slate-900">{exam.totalQuestions || exam.questions.length} câu</p>
               </div>
             </div>
 
@@ -154,7 +292,9 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               </div>
               <div>
                 <p className="text-[11px] text-slate-500 font-medium">Cấu trúc</p>
-                <p className="text-base font-extrabold text-slate-900">3 Phần thi</p>
+                <p className="text-base font-extrabold text-slate-900">
+                  {[p1Count > 0, p2Count > 0, p3Count > 0].filter(Boolean).length || 1} Phần thi
+                </p>
               </div>
             </div>
           </div>
@@ -185,7 +325,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
 
             <div className="flex items-center gap-2 text-[11px] text-amber-800 bg-amber-50 border border-amber-200 p-2.5 rounded-xl">
               <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>Hệ thống giám sát chuyển tab/cửa sổ. Hãy tập trung làm bài và nhấn "Nộp bài" khi hoàn thành.</span>
+              <span>Hệ thống giám sát chuyển tab/cửa sổ. Hãy tập trung làm bài và nhấn &ldquo;Nộp bài&rdquo; khi hoàn thành.</span>
             </div>
           </div>
 
@@ -241,11 +381,8 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               <span>{exam.isPublished ? `BẮT ĐẦU LÀM BÀI THI (${exam.durationMinutes} PHÚT)` : 'PHÒNG THI ĐANG TẠM KHÓA'}</span>
             </button>
           </form>
-
         </div>
-
       </div>
-
     </div>
   );
 };

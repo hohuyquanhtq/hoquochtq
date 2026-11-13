@@ -291,4 +291,5 @@ export interface ParsedExamResult {
 
 declare global {
   const __APP_URL__: string | undefined;
+  const __PRODUCTION_APP_URL__: string | undefined;
 }

@@ -20,6 +20,8 @@ import { ChemRenderer } from '../../utils/chemRenderer';
 import { APP_CONFIG } from '../../constants/brand';
 import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
+import { normalizeExamCode } from '../../utils/urlHelper';
+import { auth, syncExamToFirestore } from '../../services/firebase';
 
 interface ExamCreatorProps {
   initialTitle?: string;
@@ -115,18 +117,20 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   };
 
   const [createdExamForShare, setCreatedExamForShare] = useState<Exam | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const handleRemoveQuestion = (id: string) => {
     setQuestions(questions.filter(q => q.id !== id));
   };
 
   const handleSave = () => {
+    setFormError(null);
     if (!title.trim()) {
-      alert('Vui lòng nhập tiêu đề đề thi!');
+      setFormError('Vui lòng nhập tiêu đề đề thi!');
       return;
     }
     if (questions.length === 0) {
-      alert('Đề thi cần có ít nhất 1 câu hỏi!');
+      setFormError('Đề thi cần có ít nhất 1 câu hỏi!');
       return;
     }
 
@@ -151,14 +155,17 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       }
     }
 
-    // Clean and validate code
-    let cleanCode = (code.trim() || `HQ${Math.floor(10 + Math.random() * 90)}`).replace(/^(?:#|\/?c\/)/i, '').replace(/[\s\-_]/g, '').toUpperCase();
+    // Clean and validate code consistently without injecting mismatching hyphens
+    let cleanCode = normalizeExamCode(code.trim() || `HQ${Math.floor(10 + Math.random() * 90)}`);
+    if (!cleanCode) {
+      cleanCode = `HQ${Math.floor(10 + Math.random() * 90)}`;
+    }
     
     // Check if code already belongs to another existing exam
     const existingExams = StorageService.getExams();
-    const isConflict = existingExams.some(e => e.code.toUpperCase() === cleanCode);
+    const isConflict = existingExams.some(e => normalizeExamCode(e.code) === cleanCode);
     if (isConflict) {
-      cleanCode = `${cleanCode}-${Math.floor(10 + Math.random() * 89)}`;
+      cleanCode = `${cleanCode}${Math.floor(10 + Math.random() * 89)}`;
     }
 
     const newExam: Exam = {
@@ -187,7 +194,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       showAnswersAfterSubmit,
       showSolutionsAfterSubmit,
       allowReviewLater: true,
-      authorId: 'teacher_1',
+      authorId: auth.currentUser?.uid || 'teacher_1',
       authorName: APP_CONFIG.APP_AUTHOR,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
@@ -196,8 +203,15 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     // 1. Guaranteed database persistence with verified readback
     const savedSuccess = StorageService.addExam(newExam);
     if (!savedSuccess) {
-      alert('Không thể lưu đề thi vào bộ nhớ. Vui lòng kiểm tra dung lượng trình duyệt và thử lại!');
+      setFormError('Không thể lưu đề thi vào bộ nhớ. Vui lòng kiểm tra dung lượng trình duyệt và thử lại!');
       return;
+    }
+
+    // Best-effort cloud sync when signed in
+    if (auth.currentUser?.emailVerified) {
+      void syncExamToFirestore(newExam).catch((err) => {
+        console.warn('Background cloud exam sync failed:', err);
+      });
     }
 
     // 2. Notify parent state
@@ -211,6 +225,13 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     <div className="space-y-6">
       
       {/* Top Header */}
+      {formError && (
+        <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+          <span>{formError}</span>
+        </div>
+      )}
+
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <button

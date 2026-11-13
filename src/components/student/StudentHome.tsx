@@ -16,12 +16,14 @@ import {
 import { getUserGreeting, APP_CONFIG } from '../../constants/brand';
 import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
+import { normalizeExamCode } from '../../utils/urlHelper';
+import { sanitizeExamForStudent } from '../../services/firebase';
 
 interface StudentHomeProps {
   currentUser: User;
   exams: Exam[];
   submissions: StudentSubmission[];
-  onStartExam: (exam: Exam, studentName: string, studentClass: string) => void;
+  onStartExam: (exam: Exam, studentName: string, studentClass: string, ownerId?: string) => void;
   onReviewSubmission: (sub: StudentSubmission) => void;
 }
 
@@ -36,6 +38,7 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
   const [name, setName] = useState(currentUser.name || '');
   const [className, setClassName] = useState(currentUser.className || '');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isLookingUp, setIsLookingUp] = useState(false);
   const [shareExam, setShareExam] = useState<Exam | null>(null);
 
   useEffect(() => {
@@ -46,7 +49,7 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
   const activeExams = exams.filter(e => e.isPublished);
   const mySubmissions = submissions.filter(s => s.studentName === name || s.studentId === currentUser.id);
 
-  const handleJoinByCode = (e: React.FormEvent) => {
+  const handleJoinByCode = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     if (!name.trim() || !className.trim() || !examCode.trim()) {
@@ -54,30 +57,35 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
       return;
     }
 
-    const cleanCode = examCode.trim().replace(/^(?:#|\/?c\/)/i, '').replace(/[\s\-_]/g, '').toUpperCase();
-    const result = StorageService.checkExamStatus(cleanCode);
+    const cleanCode = normalizeExamCode(examCode);
+    setIsLookingUp(true);
+    try {
+      const result = await StorageService.checkExamStatusAsync(cleanCode);
 
-    if (result.status === 'not_found' || !result.exam) {
-      setErrorMsg(`Không tìm thấy bài thi với mã "${cleanCode}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!`);
-      return;
+      if (result.status === 'not_found' || !result.exam) {
+        setErrorMsg(`Không tìm thấy bài thi với mã "${cleanCode}". Vui lòng kiểm tra lại mã do giáo viên cung cấp!`);
+        return;
+      }
+
+      if (result.status === 'not_published') {
+        setErrorMsg(`Bài thi "${result.exam.title}" (Mã: ${cleanCode}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.`);
+        return;
+      }
+
+      if (result.status === 'not_started') {
+        setErrorMsg(result.message || 'Bài thi chưa đến thời gian mở.');
+        return;
+      }
+
+      if (result.status === 'expired') {
+        setErrorMsg(result.message || 'Bài thi đã kết thúc thời hạn làm bài.');
+        return;
+      }
+
+      onStartExam(result.exam, name.trim(), className.trim(), result.ownerId);
+    } finally {
+      setIsLookingUp(false);
     }
-
-    if (result.status === 'not_published') {
-      setErrorMsg(`Bài thi "${result.exam.title}" (Mã: ${cleanCode}) hiện đang ở trạng thái Bản nháp hoặc đã được giáo viên đóng phòng thi.`);
-      return;
-    }
-
-    if (result.status === 'not_started') {
-      setErrorMsg(result.message || 'Bài thi chưa đến thời gian mở.');
-      return;
-    }
-
-    if (result.status === 'expired') {
-      setErrorMsg(result.message || 'Bài thi đã kết thúc thời hạn làm bài.');
-      return;
-    }
-
-    onStartExam(result.exam, name.trim(), className.trim());
   };
 
   return (
@@ -192,10 +200,11 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
 
               <button
                 type="submit"
-                className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2"
+                disabled={isLookingUp}
+                className="w-full mt-2 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-500/20 transition-all flex items-center justify-center gap-2"
               >
                 <Play className="w-4 h-4" />
-                <span>Bắt đầu làm bài thi</span>
+                <span>{isLookingUp ? 'Đang tìm bài thi...' : 'Bắt đầu làm bài thi'}</span>
               </button>
             </form>
           </div>
@@ -253,7 +262,7 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
                     <QrCode className="w-3.5 h-3.5 text-blue-600" />
                   </button>
                   <button
-                    onClick={() => onStartExam(exam, name, className)}
+                    onClick={() => onStartExam(sanitizeExamForStudent(exam), name, className)}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5"
                   >
                     <Play className="w-3.5 h-3.5" />

@@ -44,6 +44,7 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   const [tabSwitchesCount, setTabSwitchesCount] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
+  const [showConfirmExit, setShowConfirmExit] = useState(false);
 
   // Restore saved state from localStorage if available
   useEffect(() => {
@@ -516,11 +517,7 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
               </button>
               
               <button
-                onClick={() => {
-                  if (confirm('Bạn có chắc muốn thoát phòng thi? Dữ liệu chưa nộp sẽ không được tính điểm.')) {
-                    onExitWithoutSave();
-                  }
-                }}
+                onClick={() => setShowConfirmExit(true)}
                 className="w-full py-1.5 text-slate-500 hover:text-slate-700 text-xs text-center"
               >
                 Rời khỏi phòng thi
@@ -530,6 +527,39 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
         </div>
 
       </div>
+
+      {/* Confirmation Exit Modal */}
+      {showConfirmExit && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-2xl border border-slate-200 space-y-4">
+            <div className="w-12 h-12 rounded-full bg-amber-100 text-amber-600 flex items-center justify-center mx-auto">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+
+            <div className="text-center">
+              <h3 className="text-lg font-bold text-slate-900">Rời khỏi phòng thi?</h3>
+              <p className="text-xs text-slate-600 mt-1">
+                Dữ liệu chưa nộp sẽ không được tính điểm. Bạn có chắc muốn thoát?
+              </p>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <button
+                onClick={() => setShowConfirmExit(false)}
+                className="flex-1 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-50"
+              >
+                Ở lại làm bài
+              </button>
+              <button
+                onClick={onExitWithoutSave}
+                className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold shadow-md shadow-rose-500/20"
+              >
+                Rời phòng thi
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Confirmation Submit Modal */}
       {showConfirmSubmit && (

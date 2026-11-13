@@ -16,7 +16,8 @@ import {
   Edit2,
   X,
   Check,
-  Sparkles
+  Sparkles,
+  Cloud
 } from 'lucide-react';
 
 import { APP_CONFIG, getUserGreeting } from '../../constants/brand';
@@ -29,6 +30,9 @@ interface HeaderProps {
   onOpenSystemDocs: () => void;
   onOpenQuickExamModal?: () => void;
   onUpdateUser?: (updated: User) => void;
+  cloudUserEmail?: string | null;
+  onCloudSignIn?: () => void;
+  onCloudSignOut?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -38,6 +42,9 @@ export const Header: React.FC<HeaderProps> = ({
   setActiveTab,
   onOpenSystemDocs,
   onUpdateUser,
+  cloudUserEmail,
+  onCloudSignIn,
+  onCloudSignOut,
 }) => {
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
   const [editName, setEditName] = useState(currentUser.name || '');
@@ -184,6 +191,29 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* User Role Switcher & System Spec modal button */}
           <div className="flex items-center gap-2.5">
+            {/* Cloud Sync Status (Teacher / Admin) */}
+            {currentUser.role !== 'student' && (onCloudSignIn || onCloudSignOut) && (
+              cloudUserEmail ? (
+                <button
+                  onClick={onCloudSignOut}
+                  title={`Đã đồng bộ Cloud: ${cloudUserEmail}. Nhấn để đăng xuất Cloud`}
+                  className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 text-xs font-semibold transition-colors"
+                >
+                  <Cloud className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Cloud Sync</span>
+                </button>
+              ) : (
+                <button
+                  onClick={onCloudSignIn}
+                  title="Đăng nhập Google để đồng bộ đề thi & nhận bài làm học sinh từ mọi thiết bị"
+                  className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 text-xs font-semibold transition-colors"
+                >
+                  <Cloud className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Đồng bộ Cloud</span>
+                </button>
+              )
+            )}
+
             {/* System Architecture Button */}
             <button
               onClick={onOpenSystemDocs}

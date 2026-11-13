@@ -1,0 +1,246 @@
+{
+  "entities": {
+    "ExamMaster": {
+      "title": "ExamMaster",
+      "description": "Teacher-owned complete exam definition including answer keys and detailed solutions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "topic": { "type": "string", "maxLength": 64 },
+        "folderId": { "type": "string", "maxLength": 128 },
+        "durationMinutes": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "questions": { "type": "array" },
+        "rules": { "type": "object" },
+        "shuffleQuestions": { "type": "boolean" },
+        "shuffleOptions": { "type": "boolean" },
+        "isPublished": { "type": "boolean" },
+        "openAt": { "type": "string", "maxLength": 64 },
+        "closeAt": { "type": "string", "maxLength": 64 },
+        "maxAttempts": { "type": "number" },
+        "showScoreAfterSubmit": { "type": "boolean" },
+        "showAnswersAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "allowReviewLater": { "type": "boolean" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "authorName": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "code",
+        "title",
+        "grade",
+        "durationMinutes",
+        "totalQuestions",
+        "totalScore",
+        "questions",
+        "rules",
+        "isPublished",
+        "ownerId",
+        "authorName",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ExamStatus": {
+      "title": "ExamStatus",
+      "description": "Publicly queryable non-sensitive exam availability metadata keyed by normalized exam code.",
+      "type": "object",
+      "properties": {
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "durationMinutes": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "isPublished": { "type": "boolean" },
+        "openAt": { "type": "string", "maxLength": 64 },
+        "closeAt": { "type": "string", "maxLength": 64 },
+        "authorName": { "type": "string", "maxLength": 150 },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "examCode",
+        "examId",
+        "title",
+        "grade",
+        "durationMinutes",
+        "totalQuestions",
+        "totalScore",
+        "isPublished",
+        "authorName",
+        "ownerId",
+        "updatedAt"
+      ]
+    },
+    "PublicExam": {
+      "title": "PublicExam",
+      "description": "Student-safe published exam projection stripped of correct answers, solutions, and teacher internal fields.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "topic": { "type": "string", "maxLength": 64 },
+        "durationMinutes": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "questions": { "type": "array" },
+        "rules": { "type": "object" },
+        "shuffleQuestions": { "type": "boolean" },
+        "shuffleOptions": { "type": "boolean" },
+        "isPublished": { "type": "boolean" },
+        "openAt": { "type": "string", "maxLength": 64 },
+        "closeAt": { "type": "string", "maxLength": 64 },
+        "maxAttempts": { "type": "number" },
+        "showScoreAfterSubmit": { "type": "boolean" },
+        "showAnswersAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "allowReviewLater": { "type": "boolean" },
+        "authorName": { "type": "string", "maxLength": 150 },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "code",
+        "title",
+        "grade",
+        "durationMinutes",
+        "totalQuestions",
+        "totalScore",
+        "questions",
+        "rules",
+        "isPublished",
+        "showScoreAfterSubmit",
+        "showAnswersAfterSubmit",
+        "showSolutionsAfterSubmit",
+        "authorName",
+        "ownerId",
+        "updatedAt"
+      ]
+    },
+    "ExamAnswerKey": {
+      "title": "ExamAnswerKey",
+      "description": "Separated answer keys and optional explanations released only when teacher settings permit post-submission review.",
+      "type": "object",
+      "properties": {
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isPublished": { "type": "boolean" },
+        "showAnswersAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "answerMap": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "examCode",
+        "examId",
+        "ownerId",
+        "isPublished",
+        "showAnswersAfterSubmit",
+        "showSolutionsAfterSubmit",
+        "answerMap",
+        "updatedAt"
+      ]
+    },
+    "StudentSubmission": {
+      "title": "StudentSubmission",
+      "description": "Student exam submission stored for teacher review and analytics.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examTitle": { "type": "string", "maxLength": 300 },
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "studentClass": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "startedAt": { "type": "string", "maxLength": 64 },
+        "submittedAt": { "type": "string", "maxLength": 64 },
+        "durationSeconds": { "type": "number" },
+        "answers": { "type": "object" },
+        "part1Score": { "type": "number" },
+        "part2Score": { "type": "number" },
+        "part3Score": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "maxPossibleScore": { "type": "number" },
+        "correctQuestionsCount": { "type": "number" },
+        "tabSwitchesCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "in_progress", "timed_out"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id",
+        "examId",
+        "examTitle",
+        "examCode",
+        "ownerId",
+        "studentId",
+        "studentName",
+        "studentClass",
+        "startedAt",
+        "submittedAt",
+        "durationSeconds",
+        "answers",
+        "part1Score",
+        "part2Score",
+        "part3Score",
+        "totalScore",
+        "maxPossibleScore",
+        "correctQuestionsCount",
+        "status",
+        "createdAt"
+      ]
+    },
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Trusted admin marker document keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["admin"] }
+      },
+      "required": ["uid", "role"]
+    }
+  },
+  "firestore": {
+    "/exams/{examId}": {
+      "schema": { "$ref": "#/entities/ExamMaster" },
+      "description": "Private teacher-owned master exams with answer keys and explanations."
+    },
+    "/examStatus/{examCode}": {
+      "schema": { "$ref": "#/entities/ExamStatus" },
+      "description": "Public single-doc status lookup by exam code without question or answer payloads."
+    },
+    "/publicExams/{examCode}": {
+      "schema": { "$ref": "#/entities/PublicExam" },
+      "description": "Sanitized published exam questions readable via single-doc get by exam code."
+    },
+    "/examKeys/{examCode}": {
+      "schema": { "$ref": "#/entities/ExamAnswerKey" },
+      "description": "Separated answer keys readable only by owner teacher or post-submission when allowed."
+    },
+    "/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/StudentSubmission" },
+      "description": "Student exam submissions readable only by exam owner teacher or admin."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Admin role assignment documents."
+    }
+  }
+}

@@ -26,8 +26,9 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
   exam,
   onBackToHome,
 }) => {
-  const showAnswers = exam ? exam.showAnswersAfterSubmit : true;
-  const showSolutions = exam ? exam.showSolutionsAfterSubmit : true;
+  const showScore = exam ? !!exam.showScoreAfterSubmit : true;
+  const showAnswers = exam ? !!exam.showAnswersAfterSubmit : false;
+  const showSolutions = exam ? !!exam.showSolutionsAfterSubmit : false;
 
   let scoreColor = 'text-blue-700 bg-blue-50 border-blue-200';
   let badgeTitle = 'Đạt Yêu Cầu';
@@ -67,7 +68,7 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
       <div className={`p-6 sm:p-8 rounded-3xl border-2 text-center shadow-lg ${scoreColor} space-y-4`}>
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 backdrop-blur-xs text-xs font-bold shadow-2xs">
           <Award className="w-4 h-4" />
-          <span>Kết quả thi trực tuyến • {badgeTitle}</span>
+          <span>{showScore && showAnswers ? `Kết quả thi trực tuyến • ${badgeTitle}` : 'Đã ghi nhận bài làm trực tuyến'}</span>
         </div>
 
         <div>
@@ -80,33 +81,51 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
         </div>
 
         {/* Big Score Display */}
-        <div className="py-2">
-          <span className="text-5xl sm:text-6xl font-black tracking-tight text-slate-900">
-            {submission.totalScore.toFixed(2)}
-          </span>
-          <span className="text-xl font-bold text-slate-500"> / 10.0</span>
-        </div>
+        {showScore && showAnswers ? (
+          <>
+            <div className="py-2">
+              <span className="text-5xl sm:text-6xl font-black tracking-tight text-slate-900">
+                {submission.totalScore.toFixed(2)}
+              </span>
+              <span className="text-xl font-bold text-slate-500"> / 10.0</span>
+            </div>
 
-        {/* Detailed Breakdown Pill Row */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-xs">
-          <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
-            <p className="text-[10px] text-slate-500 font-medium">Phần I (Trắc nghiệm)</p>
-            <p className="text-base font-extrabold text-blue-700 mt-0.5">{submission.part1Score.toFixed(2)}đ</p>
+            {/* Detailed Breakdown Pill Row */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-xs">
+              <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
+                <p className="text-[10px] text-slate-500 font-medium">Phần I (Trắc nghiệm)</p>
+                <p className="text-base font-extrabold text-blue-700 mt-0.5">{submission.part1Score.toFixed(2)}đ</p>
+              </div>
+              <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
+                <p className="text-[10px] text-slate-500 font-medium">Phần II (Đúng / Sai)</p>
+                <p className="text-base font-extrabold text-indigo-700 mt-0.5">{submission.part2Score.toFixed(2)}đ</p>
+              </div>
+              <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
+                <p className="text-[10px] text-slate-500 font-medium">Phần III (Trả lời ngắn)</p>
+                <p className="text-base font-extrabold text-purple-700 mt-0.5">{submission.part3Score.toFixed(2)}đ</p>
+              </div>
+              <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
+                <p className="text-[10px] text-slate-500 font-medium">Thời gian làm</p>
+                <p className="text-base font-extrabold text-slate-800 mt-0.5">{durationMins}p {durationSecs}s</p>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="p-4 bg-white/90 rounded-2xl border border-slate-200/80 max-w-xl mx-auto text-xs text-slate-700 font-medium">
+            Bài làm của bạn đã được lưu an toàn lúc {new Date(submission.submittedAt).toLocaleTimeString('vi-VN')} (Thời gian làm: {durationMins}p {durationSecs}s).
           </div>
-          <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
-            <p className="text-[10px] text-slate-500 font-medium">Phần II (Đúng / Sai)</p>
-            <p className="text-base font-extrabold text-indigo-700 mt-0.5">{submission.part2Score.toFixed(2)}đ</p>
-          </div>
-          <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
-            <p className="text-[10px] text-slate-500 font-medium">Phần III (Trả lời ngắn)</p>
-            <p className="text-base font-extrabold text-purple-700 mt-0.5">{submission.part3Score.toFixed(2)}đ</p>
-          </div>
-          <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
-            <p className="text-[10px] text-slate-500 font-medium">Thời gian làm</p>
-            <p className="text-base font-extrabold text-slate-800 mt-0.5">{durationMins}p {durationSecs}s</p>
-          </div>
-        </div>
+        )}
       </div>
+
+      {/* Answer withholding notice */}
+      {!showAnswers && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-xs flex items-center gap-3">
+          <ShieldCheck className="w-5 h-5 text-amber-600 shrink-0" />
+          <span>
+            Đáp án đúng và lời giải chi tiết hiện được bảo mật theo thiết lập của giáo viên. Giáo viên sẽ chấm và công bố kết quả theo lịch.
+          </span>
+        </div>
+      )}
 
       {/* Review Section */}
       {showAnswers && exam?.questions && (
@@ -114,7 +133,7 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
               <FileText className="w-5 h-5 text-blue-600" />
-              Chi tiết câu trả lời & Hướng dẫn giải
+              Chi tiết câu trả lời &amp; Hướng dẫn giải
             </h2>
             <span className="text-xs text-slate-500">
               Đúng {submission.correctQuestionsCount} / {exam.questions.length} câu

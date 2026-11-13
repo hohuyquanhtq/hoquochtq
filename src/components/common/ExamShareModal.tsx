@@ -15,14 +15,21 @@ import {
   Clock, 
   Award,
   AlertCircle,
-  ToggleLeft,
-  ToggleRight,
-  Eye,
-  CheckCircle2
+  CheckCircle2,
+  Cloud,
+  Globe
 } from 'lucide-react';
 import { Exam } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
-import { getExamDirectUrl, getExamQueryUrl } from '../../utils/urlHelper';
+import {
+  getExamDirectUrl,
+  getPublicDomain,
+  isPreviewOrLocalOrigin,
+  normalizeExamCode,
+  getSavedProductionDomainOverride,
+  setSavedProductionDomainOverride,
+} from '../../utils/urlHelper';
+import { auth, signInWithGoogleForCloudSync, syncExamToFirestore } from '../../services/firebase';
 
 interface ExamShareModalProps {
   isOpen: boolean;
@@ -41,6 +48,10 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedAnnouncement, setCopiedAnnouncement] = useState(false);
   const [notificationMsg, setNotificationMsg] = useState<{ type: 'success' | 'info'; text: string } | null>(null);
+  const [domainInput, setDomainInput] = useState<string>(() => getSavedProductionDomainOverride());
+  const [domainTick, setDomainTick] = useState(0);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudSynced, setCloudSynced] = useState(false);
   
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [qrSvgString, setQrSvgString] = useState<string>('');
@@ -50,14 +61,31 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const printableRef = useRef<HTMLDivElement>(null);
 
-  // Clean exam code and build direct public URL
-  const examCode = (exam?.code || 'HQ50').trim().toUpperCase();
+  // Clean exam code and build unified canonical Production URL (?examCode=...)
+  const examCode = normalizeExamCode(exam?.code || 'HQ50');
+  const activeDomain = getPublicDomain();
+  const isPreviewDomain = isPreviewOrLocalOrigin(activeDomain);
   const directLink = getExamDirectUrl(examCode);
-  const queryLink = getExamQueryUrl(examCode);
+  void domainTick;
 
   const totalQuestionsCount = exam ? (exam.totalQuestions || exam.questions?.length || 0) : 0;
 
-  // Generate QR Code with multiple methods (SVG + Canvas + DataURL) to guarantee 100% success
+  // Auto-sync to Firestore if teacher is already signed in
+  useEffect(() => {
+    if (!isOpen || !exam) return;
+    setDomainInput(getSavedProductionDomainOverride());
+    if (auth.currentUser?.emailVerified) {
+      setIsSyncingCloud(true);
+      syncExamToFirestore(exam)
+        .then((res) => setCloudSynced(res.synced))
+        .catch(() => setCloudSynced(false))
+        .finally(() => setIsSyncingCloud(false));
+    } else {
+      setCloudSynced(false);
+    }
+  }, [isOpen, exam]);
+
+  // Generate QR Code with multiple methods (SVG + Canvas + DataURL) using unified directLink
   useEffect(() => {
     if (!isOpen || !exam) return;
 
@@ -74,8 +102,8 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
             width: 600,
             margin: 2,
             color: {
-              dark: '#000000', // Pure black
-              light: '#ffffff', // Pure white
+              dark: '#000000',
+              light: '#ffffff',
             },
             errorCorrectionLevel: 'H',
           });
@@ -123,6 +151,49 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   }, [isOpen, exam, directLink]);
 
   if (!isOpen || !exam) return null;
+
+  const handleSaveProductionDomain = () => {
+    setSavedProductionDomainOverride(domainInput);
+    setDomainTick((t) => t + 1);
+    setNotificationMsg({
+      type: 'success',
+      text: domainInput.trim()
+        ? 'Đã cập nhật domain Production cho link chia sẻ và mã QR!'
+        : 'Đã khôi phục domain mặc định của môi trường hiện tại.',
+    });
+    setTimeout(() => setNotificationMsg(null), 3500);
+  };
+
+  const handleCloudSyncClick = async () => {
+    setIsSyncingCloud(true);
+    try {
+      if (!auth.currentUser) {
+        await signInWithGoogleForCloudSync();
+      }
+      const res = await syncExamToFirestore(exam);
+      setCloudSynced(res.synced);
+      if (res.synced) {
+        setNotificationMsg({
+          type: 'success',
+          text: `Đã đồng bộ đề "${examCode}" lên Cloud! Học sinh có thể mở link từ mọi thiết bị & ẩn danh.`,
+        });
+      } else {
+        setNotificationMsg({
+          type: 'info',
+          text: 'Vui lòng hoàn tất đăng nhập Google để đồng bộ đề thi lên Cloud.',
+        });
+      }
+    } catch (err) {
+      console.error('Cloud sync failed:', err);
+      setNotificationMsg({
+        type: 'info',
+        text: 'Không thể đồng bộ Cloud lúc này. Vui lòng kiểm tra kết nối hoặc cửa sổ đăng nhập Google.',
+      });
+    } finally {
+      setIsSyncingCloud(false);
+      setTimeout(() => setNotificationMsg(null), 4000);
+    }
+  };
 
   // Clipboard copy with fallbacks
   const copyToClipboard = async (text: string, type: 'link' | 'code' | 'announcement') => {
@@ -197,7 +268,7 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
   // Download crisp PNG of QR code
   const handleDownloadQrPng = () => {
     if (!qrDataUrl && !canvasRef.current) {
-      alert('Đang tạo mã QR, vui lòng thử lại sau giây lát!');
+      setNotificationMsg({ type: 'info', text: 'Đang tạo mã QR, vui lòng thử lại sau giây lát!' });
       return;
     }
 
@@ -463,15 +534,80 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                 </div>
               </div>
 
-              {/* SECTION B: CHIA SẺ BẰNG LIÊN KẾT TRỰC TIẾP */}
-              <div className="space-y-2">
+              {/* SECTION B: CHIA SẺ BẰNG LIÊN KẾT TRỰC TIẾP & ĐỒNG BỘ CLOUD */}
+              <div className="space-y-3">
+                {/* Cloud Sync & Production URL Status Row */}
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs">
+                  <div className="flex items-center gap-2">
+                    <Cloud className={`w-4 h-4 shrink-0 ${cloudSynced ? 'text-emerald-600' : 'text-amber-600'}`} />
+                    <div>
+                      <span className="font-bold text-slate-800 block">
+                        {isSyncingCloud
+                          ? 'Đang đồng bộ bài thi lên Cloud...'
+                          : cloudSynced
+                          ? 'Đã đồng bộ Cloud (Mở được trên mọi thiết bị & ẩn danh)'
+                          : 'Chưa đồng bộ Cloud (Hiện chỉ lưu trên trình duyệt này)'}
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        {cloudSynced
+                          ? 'Chỉ công bố nội dung câu hỏi; đáp án & lời giải được bảo mật riêng.'
+                          : 'Đăng nhập Google 1 lần để học sinh trên điện thoại / ẩn danh truy cập được đề mới tạo.'}
+                      </span>
+                    </div>
+                  </div>
+                  {!cloudSynced && (
+                    <button
+                      type="button"
+                      onClick={handleCloudSyncClick}
+                      disabled={isSyncingCloud}
+                      className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-[11px] font-bold shrink-0 shadow-2xs transition-colors"
+                    >
+                      {isSyncingCloud ? 'Đang xử lý...' : 'Đồng bộ Cloud (Google)'}
+                    </button>
+                  )}
+                </div>
+
+                {isPreviewDomain && (
+                  <div className="p-3 rounded-2xl bg-amber-50 border border-amber-200 text-xs space-y-2">
+                    <div className="flex items-start gap-2 text-amber-900">
+                      <Globe className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                      <div>
+                        <span className="font-bold block">Đang mở từ Preview/Localhost</span>
+                        <span className="text-[11px] text-amber-800">
+                          Khi triển khai trên Vercel Production, hệ thống tự động dùng domain Production. Bạn cũng có thể nhập domain Production (VD: https://hqtest.vercel.app) bên dưới nếu muốn tạo link/QR ngay từ máy cá nhân:
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="url"
+                        value={domainInput}
+                        onChange={(e) => setDomainInput(e.target.value)}
+                        placeholder="https://ten-app-cua-ban.vercel.app"
+                        className="flex-1 px-2.5 py-1.5 rounded-lg border border-amber-300 bg-white text-xs font-mono text-slate-800"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSaveProductionDomain}
+                        className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-[11px] font-bold shrink-0"
+                      >
+                        Áp dụng domain
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <LinkIcon className="w-3.5 h-3.5 text-blue-600" />
                     <span>Đường dẫn truy cập trực tiếp bài thi (Không cần nhập mã)</span>
                   </label>
-                  <span className="text-[11px] text-emerald-600 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
-                    URL Thực tế
+                  <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
+                    isPreviewDomain
+                      ? 'text-amber-700 bg-amber-50 border-amber-200'
+                      : 'text-emerald-600 bg-emerald-50 border-emerald-200'
+                  }`}>
+                    {isPreviewDomain ? 'URL Preview/Local' : 'Domain Production'}
                   </span>
                 </div>
 
