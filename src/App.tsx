@@ -4,8 +4,19 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, UserRole, Question, Exam, Folder, StudentSubmission, ChemGrade } from './types';
-import { StorageService, DEFAULT_USERS } from './services/storage';
+import {
+  User,
+  UserRole,
+  Question,
+  Exam,
+  Folder,
+  StudentSubmission,
+  ChemGrade,
+  Classroom,
+  ClassEnrollment,
+  UploadRecord,
+} from './types';
+import { StorageService } from './services/storage';
 import { Header } from './components/common/Header';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SystemDesignModal } from './components/docs/SystemDesignModal';
@@ -15,19 +26,33 @@ import {
   normalizeExamCode,
 } from './utils/urlHelper';
 import {
-  subscribeAuthState,
-  signInWithGoogleForCloudSync,
-  signOutFromCloud,
   syncExamToFirestore,
   deleteExamFromFirestore,
-  fetchTeacherExamsFromFirestore,
-  fetchTeacherSubmissionsFromFirestore,
   fetchAllowedAnswerKeysAfterSubmit,
   rehydrateExamWithAnswerKeys,
   saveSubmissionToFirestore,
   sanitizeExamForStudent,
 } from './services/firebase';
+import {
+  fetchTeacherWorkspaceFromFirestore,
+  fetchStudentWorkspaceFromFirestore,
+  saveQuestionToFirestore,
+  saveQuestionsBatchToFirestore,
+  deleteQuestionFromFirestore,
+  saveFolderToFirestore,
+  deleteFolderFromFirestore,
+  saveUploadRecordToFirestore,
+  saveClassroomToFirestore,
+  deleteClassroomFromFirestore,
+  removeStudentEnrollmentFromFirestore,
+} from './services/workspaceService';
+import { joinClassByCode } from './services/authService';
 import { gradeSubmission } from './utils/gradingEngine';
+import { useAuth } from './contexts/AuthContext';
+
+// Auth Components
+import { AuthPortal } from './components/auth/AuthPortal';
+import { ProtectedRoute } from './components/auth/ProtectedRoute';
 
 // Teacher Components
 import { TeacherDashboard } from './components/teacher/TeacherDashboard';
@@ -37,9 +62,10 @@ import { FolderManager } from './components/teacher/FolderManager';
 import { ExamCreator } from './components/teacher/ExamCreator';
 import { ExamManager } from './components/teacher/ExamManager';
 import { ExamResults } from './components/teacher/ExamResults';
+import { ClassManager } from './components/teacher/ClassManager';
 
 // Student Components
-import { StudentHome } from './components/student/StudentHome';
+import { StudentHome, StudentAssignedExamItem } from './components/student/StudentHome';
 import { ExamTaker } from './components/student/ExamTaker';
 import { ExamResultView } from './components/student/ExamResultView';
 import { ExamJoinLanding, ExamLandingStatus } from './components/student/ExamJoinLanding';
@@ -54,6 +80,8 @@ function getDefaultTabForRole(role: UserRole): string {
 }
 
 export default function App() {
+  const { authState, userProfile, setLocalUpdatedProfile, logout } = useAuth();
+
   const [initialDirectCode] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
     try {
@@ -63,35 +91,29 @@ export default function App() {
     }
   });
 
-  const [currentUser, setCurrentUser] = useState<User>(() => {
-    if (initialDirectCode) {
-      return DEFAULT_USERS.find((u) => u.role === 'student') || DEFAULT_USERS[1];
-    }
-    return StorageService.getCurrentUser();
-  });
-
-  const [activeTab, setActiveTab] = useState<string>(() => {
-    if (initialDirectCode) return 'exam_landing';
-    return getDefaultTabForRole(StorageService.getCurrentUser().role);
-  });
-
+  // Guest direct-link exam access (/c/:code or ?examCode=...)
+  const [guestExamMode, setGuestExamMode] = useState<boolean>(() => Boolean(initialDirectCode));
+  const [activeTab, setActiveTab] = useState<string>(() =>
+    initialDirectCode ? 'exam_landing' : 'dashboard'
+  );
   const [isSystemDocsOpen, setIsSystemDocsOpen] = useState(false);
 
-  // Firebase Auth Cloud User State
-  const [cloudUserUid, setCloudUserUid] = useState<string | null>(null);
-  const [cloudUserEmail, setCloudUserEmail] = useState<string | null>(null);
-
-  // Core Data State
-  const [questions, setQuestions] = useState<Question[]>(() => StorageService.getQuestions());
-  const [exams, setExams] = useState<Exam[]>(() => StorageService.getExams());
-  const [folders, setFolders] = useState<Folder[]>(() => StorageService.getFolders());
-  const [submissions, setSubmissions] = useState<StudentSubmission[]>(() => StorageService.getSubmissions());
+  // Scoped Workspace State (Strict UID isolation)
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [exams, setExams] = useState<Exam[]>([]);
+  const [folders, setFolders] = useState<Folder[]>([]);
+  const [submissions, setSubmissions] = useState<StudentSubmission[]>([]);
+  const [classes, setClasses] = useState<Classroom[]>([]);
+  const [enrollments, setEnrollments] = useState<ClassEnrollment[]>([]);
+  const [assignedExams, setAssignedExams] = useState<StudentAssignedExamItem[]>([]);
+  const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
+  const [isSeedingSamples, setIsSeedingSamples] = useState(false);
 
   // Interactive flow state
   const [activeExamForTaking, setActiveExamForTaking] = useState<Exam | null>(null);
   const [activeExamOwnerId, setActiveExamOwnerId] = useState<string | undefined>(undefined);
-  const [activeStudentName, setActiveStudentName] = useState<string>('Trần Minh Khang');
-  const [activeStudentClass, setActiveStudentClass] = useState<string>('12 Hóa 1');
+  const [activeStudentName, setActiveStudentName] = useState<string>('');
+  const [activeStudentClass, setActiveStudentClass] = useState<string>('');
   const [reviewSubmission, setReviewSubmission] = useState<StudentSubmission | null>(null);
   const [reviewExamOverride, setReviewExamOverride] = useState<Exam | undefined>(undefined);
   const [selectedExamIdForResults, setSelectedExamIdForResults] = useState<string | null>(null);
@@ -112,71 +134,86 @@ export default function App() {
   );
   const [directJoinMessage, setDirectJoinMessage] = useState<string | undefined>(undefined);
 
-  // Reload data from storage helper
-  const reloadDataFromStorage = useCallback(() => {
-    setQuestions(StorageService.getQuestions());
-    setExams(StorageService.getExams());
-    setFolders(StorageService.getFolders());
-    setSubmissions(StorageService.getSubmissions());
+  const activeUid = userProfile?.uid || userProfile?.id || '';
+
+  const resetWorkspaceMemoryState = useCallback(() => {
+    setQuestions([]);
+    setExams([]);
+    setFolders([]);
+    setSubmissions([]);
+    setClasses([]);
+    setEnrollments([]);
+    setAssignedExams([]);
+    setSelectedExamIdForResults(null);
   }, []);
 
-  // Subscribe to Firebase Auth & hydrate teacher's cloud exams/submissions when signed in
-  useEffect(() => {
-    const unsub = subscribeAuthState(async (fbUser) => {
-      if (fbUser && fbUser.emailVerified) {
-        setCloudUserUid(fbUser.uid);
-        setCloudUserEmail(fbUser.email || fbUser.uid);
+  // Load workspace when authenticated user changes
+  const hydrateAuthenticatedWorkspace = useCallback(async (user: User) => {
+    const uid = user.uid || user.id;
+    if (!uid) return;
 
-        try {
-          const [cloudExams, cloudSubs] = await Promise.all([
-            fetchTeacherExamsFromFirestore(fbUser.uid),
-            fetchTeacherSubmissionsFromFirestore(fbUser.uid),
-          ]);
+    StorageService.setActiveWorkspaceUid(uid);
+    setQuestions(StorageService.getQuestions(uid));
+    setExams(StorageService.getExams(uid));
+    setFolders(StorageService.getFolders(uid));
+    setSubmissions(StorageService.getSubmissions(undefined, uid));
 
-          if (cloudExams.length > 0) {
-            const localExams = StorageService.getExams();
-            const mergedMap = new Map<string, Exam>();
-            localExams.forEach((e) => mergedMap.set(e.id, e));
-            cloudExams.forEach((ce) => mergedMap.set(ce.id, ce));
-            const mergedList = Array.from(mergedMap.values());
-            StorageService.saveExams(mergedList);
-            setExams(mergedList);
-          }
+    setIsLoadingWorkspace(true);
+    try {
+      if (user.role === 'teacher') {
+        const ws = await fetchTeacherWorkspaceFromFirestore(uid);
+        setQuestions(ws.questions);
+        setFolders(ws.folders);
+        setExams(ws.exams);
+        setSubmissions(ws.submissions);
+        setClasses(ws.classes);
+        setEnrollments(ws.enrollments);
 
-          if (cloudSubs.length > 0) {
-            const localSubs = StorageService.getSubmissions();
-            const subMap = new Map<string, StudentSubmission>();
-            localSubs.forEach((s) => subMap.set(s.id, s));
-            cloudSubs.forEach((cs) => subMap.set(cs.id, cs));
-            const mergedSubs = Array.from(subMap.values()).sort(
-              (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
-            );
-            StorageService.saveSubmissions(mergedSubs);
-            setSubmissions(mergedSubs);
-          }
-        } catch (err) {
-          console.warn('Could not fetch teacher cloud data:', err);
-        }
-      } else {
-        setCloudUserUid(null);
-        setCloudUserEmail(null);
+        StorageService.saveQuestions(ws.questions, uid);
+        StorageService.saveFolders(ws.folders, uid);
+        StorageService.saveExams(ws.exams, uid);
+        StorageService.saveSubmissions(ws.submissions, uid);
+      } else if (user.role === 'student') {
+        const sws = await fetchStudentWorkspaceFromFirestore(uid);
+        setEnrollments(sws.enrollments);
+        setAssignedExams(sws.assignedExams);
+        setSubmissions(sws.submissions);
+        StorageService.saveSubmissions(sws.submissions, uid);
       }
-    });
-
-    return () => unsub();
+    } catch (err) {
+      console.warn('[HQTest Workspace] Could not sync remote workspace:', err);
+    } finally {
+      setIsLoadingWorkspace(false);
+    }
   }, []);
 
-  const resolveDirectExamFromUrl = useCallback(async () => {
-    if (typeof window === 'undefined') return;
+  useEffect(() => {
+    if (authState === 'authenticated' && userProfile) {
+      void hydrateAuthenticatedWorkspace(userProfile);
+      setActiveTab((prev) => {
+        if (guestExamMode || prev === 'exam_landing' || prev === 'take_exam' || prev === 'review_submission') {
+          return prev;
+        }
+        return getDefaultTabForRole(userProfile.role);
+      });
+    } else if (authState === 'unauthenticated' || authState === 'locked' || authState === 'rejected' || authState === 'pending_approval') {
+      resetWorkspaceMemoryState();
+    }
+  }, [authState, userProfile, hydrateAuthenticatedWorkspace, resetWorkspaceMemoryState, guestExamMode]);
 
-    const targetCode = extractExamCodeFromLocation(window.location);
-    if (!targetCode) return;
+  const reloadDataFromStorage = useCallback(() => {
+    if (!activeUid) return;
+    setQuestions(StorageService.getQuestions(activeUid));
+    setExams(StorageService.getExams(activeUid));
+    setFolders(StorageService.getFolders(activeUid));
+    setSubmissions(StorageService.getSubmissions(undefined, activeUid));
+  }, [activeUid]);
 
-    const clean = normalizeExamCode(targetCode);
-    const studentUser = DEFAULT_USERS.find((u) => u.role === 'student') || DEFAULT_USERS[1];
-    setCurrentUser(studentUser);
-    StorageService.setCurrentUser(studentUser);
+  const resolveDirectExamByCode = useCallback(async (rawCode: string) => {
+    const clean = normalizeExamCode(rawCode);
+    if (!clean) return;
 
+    setGuestExamMode(true);
     setDirectJoinCode(clean);
     setDirectJoinExam(null);
     setDirectJoinOwnerId(undefined);
@@ -191,13 +228,20 @@ export default function App() {
       setDirectJoinExam(res.exam || null);
       setDirectJoinOwnerId(res.ownerId);
     } catch (err) {
-      console.error('[HQTest] Lỗi tải thông tin bài thi từ URL:', err);
+      console.error('[HQTest] Lỗi tải thông tin bài thi:', err);
       setDirectJoinStatus('unexpected_error');
       setDirectJoinMessage('Đã xảy ra lỗi không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.');
       setDirectJoinExam(null);
       setDirectJoinOwnerId(undefined);
     }
   }, []);
+
+  const resolveDirectExamFromUrl = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+    const targetCode = extractExamCodeFromLocation(window.location);
+    if (!targetCode) return;
+    await resolveDirectExamByCode(targetCode);
+  }, [resolveDirectExamByCode]);
 
   // URL Routing, QR Scan Detection & Cross-Tab Storage Sync
   useEffect(() => {
@@ -211,7 +255,14 @@ export default function App() {
       } else {
         setDirectJoinExam(null);
         setDirectJoinCode('');
-        setActiveTab((prev) => (prev === 'exam_landing' ? 'student_home' : prev));
+        setGuestExamMode(false);
+        setActiveTab((prev) =>
+          prev === 'exam_landing'
+            ? userProfile
+              ? getDefaultTabForRole(userProfile.role)
+              : 'dashboard'
+            : prev
+        );
       }
     };
 
@@ -228,28 +279,59 @@ export default function App() {
       window.removeEventListener('popstate', handleRouteChange);
       window.removeEventListener('hashchange', handleRouteChange);
     };
-  }, [reloadDataFromStorage, resolveDirectExamFromUrl]);
+  }, [reloadDataFromStorage, resolveDirectExamFromUrl, userProfile]);
 
-  // Sync state whenever activeTab or role changes
-  const handleSwitchUserRole = (role: UserRole) => {
-    const targetUser = DEFAULT_USERS.find((u) => u.role === role) || DEFAULT_USERS[0];
-    setCurrentUser(targetUser);
-    StorageService.setCurrentUser(targetUser);
-
-    if (role === 'teacher') {
-      setActiveTab('dashboard');
-    } else if (role === 'student') {
-      setActiveTab('student_home');
-    } else if (role === 'admin') {
-      setActiveTab('admin_dashboard');
+  const clearExamUrlParam = () => {
+    if (typeof window !== 'undefined') {
+      try {
+        if (window.location.pathname !== '/' || window.location.search || window.location.hash) {
+          window.history.replaceState({}, '', '/');
+        }
+      } catch {
+        // Ignore history restriction
+      }
     }
   };
 
-  // --- Handlers for Teacher Actions ---
+  // --- Handlers for Teacher Actions (Strictly Owner-Scoped + Firestore Persisted) ---
   const handleSaveQuestionsToBank = (newQuestions: Question[]) => {
-    newQuestions.forEach((q) => StorageService.addQuestion(q));
-    setQuestions(StorageService.getQuestions());
+    if (!activeUid) return;
+    const nowIso = new Date().toISOString();
+    const scoped = newQuestions.map((q) => ({
+      ...q,
+      ownerId: activeUid,
+      authorId: activeUid,
+      updatedAt: nowIso,
+    }));
+    scoped.forEach((q) => StorageService.addQuestion(q, activeUid));
+    setQuestions(StorageService.getQuestions(activeUid));
+    void saveQuestionsBatchToFirestore(scoped, activeUid).catch((err) => {
+      console.warn('[HQTest] Could not sync question batch to Firestore:', err);
+    });
     setActiveTab('question_bank');
+  };
+
+  const handleFileParsedRecord = (rec: {
+    fileName: string;
+    fileType: 'docx' | 'pdf' | 'text';
+    examTitle: string;
+    totalQuestions: number;
+    grade: ChemGrade;
+  }) => {
+    if (!activeUid) return;
+    const uploadRecord: UploadRecord = {
+      id: `up_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+      ownerId: activeUid,
+      fileName: rec.fileName,
+      fileType: rec.fileType,
+      examTitle: rec.examTitle,
+      totalQuestions: rec.totalQuestions,
+      grade: rec.grade,
+      createdAt: new Date().toISOString(),
+    };
+    void saveUploadRecordToFirestore(uploadRecord, activeUid).catch((err) => {
+      console.warn('[HQTest] Could not save upload record:', err);
+    });
   };
 
   const handleCreateExamFromParsed = (title: string, parsedQuestions: Question[], grade: ChemGrade) => {
@@ -266,33 +348,47 @@ export default function App() {
   };
 
   const handleSaveExam = (newExam: Exam) => {
-    const current = StorageService.getExams();
-    setExams(current.some((e) => e.id === newExam.id) ? current : [newExam, ...current]);
+    if (!activeUid) return;
+    const scopedExam: Exam = {
+      ...newExam,
+      ownerId: activeUid,
+      authorId: activeUid,
+      authorName: userProfile?.name || newExam.authorName || APP_CONFIG.APP_AUTHOR,
+    };
+    StorageService.addExam(scopedExam, activeUid);
+    setExams(StorageService.getExams(activeUid));
+    void syncExamToFirestore(scopedExam, activeUid).catch((err) => {
+      console.warn('[HQTest] Could not sync saved exam to Firestore:', err);
+    });
     setActiveTab('exam_manager');
   };
 
   const handleToggleExamPublish = (examId: string) => {
+    if (!activeUid) return;
     const updated = exams.map((e) =>
-      e.id === examId ? { ...e, isPublished: !e.isPublished, updatedAt: new Date().toISOString() } : e
+      e.id === examId
+        ? { ...e, isPublished: !e.isPublished, ownerId: activeUid, updatedAt: new Date().toISOString() }
+        : e
     );
-    StorageService.saveExams(updated);
+    StorageService.saveExams(updated, activeUid);
     setExams(updated);
 
     const toggled = updated.find((e) => e.id === examId);
-    if (toggled && cloudUserUid) {
-      void syncExamToFirestore(toggled).catch((err) => {
+    if (toggled) {
+      void syncExamToFirestore(toggled, activeUid).catch((err) => {
         console.warn('Could not sync publish toggle to Firestore:', err);
       });
     }
   };
 
   const handleDeleteExam = (examId: string) => {
+    if (!activeUid) return;
     const target = exams.find((e) => e.id === examId);
     const updated = exams.filter((e) => e.id !== examId);
-    StorageService.saveExams(updated);
+    StorageService.saveExams(updated, activeUid);
     setExams(updated);
 
-    if (target && cloudUserUid) {
+    if (target) {
       void deleteExamFromFirestore(target).catch((err) => {
         console.warn('Could not delete exam from Firestore:', err);
       });
@@ -300,23 +396,113 @@ export default function App() {
   };
 
   const handleAddQuestion = (q: Question) => {
-    StorageService.addQuestion(q);
-    setQuestions(StorageService.getQuestions());
+    if (!activeUid) return;
+    const scoped: Question = { ...q, ownerId: activeUid, authorId: activeUid };
+    StorageService.addQuestion(scoped, activeUid);
+    setQuestions(StorageService.getQuestions(activeUid));
+    void saveQuestionToFirestore(scoped, activeUid).catch((err) => {
+      console.warn('[HQTest] Could not save question to Firestore:', err);
+    });
   };
 
   const handleUpdateQuestion = (q: Question) => {
-    StorageService.updateQuestion(q);
-    setQuestions(StorageService.getQuestions());
+    if (!activeUid) return;
+    const scoped: Question = {
+      ...q,
+      ownerId: activeUid,
+      authorId: activeUid,
+      updatedAt: new Date().toISOString(),
+    };
+    StorageService.updateQuestion(scoped, activeUid);
+    setQuestions(StorageService.getQuestions(activeUid));
+    void saveQuestionToFirestore(scoped, activeUid).catch((err) => {
+      console.warn('[HQTest] Could not update question in Firestore:', err);
+    });
   };
 
   const handleDeleteQuestion = (id: string) => {
-    StorageService.deleteQuestion(id);
-    setQuestions(StorageService.getQuestions());
+    if (!activeUid) return;
+    StorageService.deleteQuestion(id, activeUid);
+    setQuestions(StorageService.getQuestions(activeUid));
+    void deleteQuestionFromFirestore(id).catch((err) => {
+      console.warn('[HQTest] Could not delete question from Firestore:', err);
+    });
   };
 
   const handleSaveFolders = (newFolders: Folder[]) => {
-    StorageService.saveFolders(newFolders);
-    setFolders(newFolders);
+    if (!activeUid) return;
+    const prevIds = new Set(folders.map((f) => f.id));
+    const nextIds = new Set(newFolders.map((f) => f.id));
+    const scopedFolders = newFolders.map((f) => ({
+      ...f,
+      ownerId: activeUid,
+      authorId: activeUid,
+    }));
+
+    StorageService.saveFolders(scopedFolders, activeUid);
+    setFolders(scopedFolders);
+
+    // Persist added/updated folders & delete removed folders
+    scopedFolders.forEach((f) => {
+      void saveFolderToFirestore(f, activeUid).catch((err) => {
+        console.warn('[HQTest] Could not sync folder to Firestore:', err);
+      });
+    });
+    prevIds.forEach((oldId) => {
+      if (!nextIds.has(oldId)) {
+        void deleteFolderFromFirestore(oldId).catch((err) => {
+          console.warn('[HQTest] Could not delete folder from Firestore:', err);
+        });
+      }
+    });
+  };
+
+  const handleSaveClass = async (cls: Classroom) => {
+    if (!activeUid) return;
+    const scopedCls: Classroom = {
+      ...cls,
+      ownerId: activeUid,
+      teacherName: userProfile?.name || cls.teacherName,
+      school: userProfile?.school || cls.school,
+    };
+    await saveClassroomToFirestore(scopedCls, activeUid);
+    setClasses((prev) => {
+      const idx = prev.findIndex((c) => c.id === scopedCls.id);
+      if (idx === -1) return [scopedCls, ...prev];
+      const next = [...prev];
+      next[idx] = scopedCls;
+      return next;
+    });
+  };
+
+  const handleDeleteClass = async (cls: Classroom) => {
+    await deleteClassroomFromFirestore(cls);
+    setClasses((prev) => prev.filter((c) => c.id !== cls.id));
+    setEnrollments((prev) => prev.filter((en) => en.classId !== cls.id));
+  };
+
+  const handleRemoveEnrollment = async (enrollmentId: string) => {
+    await removeStudentEnrollmentFromFirestore(enrollmentId);
+    setEnrollments((prev) => prev.filter((en) => en.id !== enrollmentId));
+  };
+
+  const handleSeedStarterSamples = async () => {
+    if (!activeUid || !userProfile) return;
+    setIsSeedingSamples(true);
+    try {
+      const seeded = StorageService.seedStarterSamplesForTeacher(activeUid, userProfile.name);
+      setFolders(seeded.folders);
+      setQuestions(seeded.questions);
+      setExams(seeded.exams);
+
+      await Promise.all([
+        ...seeded.folders.map((f) => saveFolderToFirestore(f, activeUid).catch(() => {})),
+        saveQuestionsBatchToFirestore(seeded.questions, activeUid).catch(() => {}),
+        ...seeded.exams.map((ex) => syncExamToFirestore(ex, activeUid).catch(() => {})),
+      ]);
+    } finally {
+      setIsSeedingSamples(false);
+    }
   };
 
   const handleOpenExamResults = (examId: string) => {
@@ -324,38 +510,36 @@ export default function App() {
     setActiveTab('exam_results');
   };
 
-  // --- Handlers for Student Actions ---
+  // --- Handlers for Student & Exam Taking Actions ---
   const handleStartExam = (exam: Exam, name: string, cls: string, ownerId?: string) => {
-    // Always enforce sanitized question payload while taking exam so answer keys cannot be inspected prematurely
     setActiveExamForTaking(sanitizeExamForStudent(exam));
-    setActiveExamOwnerId(ownerId);
+    setActiveExamOwnerId(ownerId || exam.ownerId);
     setActiveStudentName(name);
     setActiveStudentClass(cls);
-    if (currentUser.role === 'student' && name.trim() && name.trim() !== currentUser.name) {
-      const updated = { ...currentUser, name: name.trim(), className: cls.trim() };
-      setCurrentUser(updated);
-      StorageService.setCurrentUser(updated);
-    }
-    // Keep ?examCode= in URL so refreshing (F5) during the session never 404s and restores cleanly
+
     if (typeof window !== 'undefined' && exam.code) {
       try {
         const normalized = normalizeExamCode(exam.code);
         const nextUrl = `/?examCode=${encodeURIComponent(normalized)}`;
         window.history.replaceState({}, '', nextUrl);
       } catch {
-        // Ignore history restriction in embedded contexts
+        // Ignore history restriction
       }
     }
     setActiveTab('take_exam');
   };
 
   const handleFinishExam = async (rawSubmission: StudentSubmission) => {
-    let finalSubmission = rawSubmission;
+    let finalSubmission: StudentSubmission = {
+      ...rawSubmission,
+      studentId: activeUid || rawSubmission.studentId || 'guest_student',
+      ownerId: activeExamOwnerId || rawSubmission.ownerId,
+    };
     let examForReview: Exam | undefined = activeExamForTaking || undefined;
 
     if (activeExamForTaking) {
-      // 1. If this exam came from Cloud and permits post-submit answer review, fetch allowed answer key now
-      if (activeExamOwnerId) {
+      const resolvedOwnerId = activeExamOwnerId || activeExamForTaking.ownerId;
+      if (resolvedOwnerId) {
         if (activeExamForTaking.showAnswersAfterSubmit) {
           const allowedKeys = await fetchAllowedAnswerKeysAfterSubmit(activeExamForTaking.code);
           if (allowedKeys) {
@@ -366,7 +550,7 @@ export default function App() {
             );
             const graded = gradeSubmission(
               hydrated,
-              rawSubmission.studentId,
+              finalSubmission.studentId,
               rawSubmission.studentName,
               rawSubmission.studentClass,
               rawSubmission.startedAt,
@@ -376,6 +560,7 @@ export default function App() {
             finalSubmission = {
               ...graded,
               id: rawSubmission.id,
+              ownerId: resolvedOwnerId,
               durationSeconds: rawSubmission.durationSeconds,
               submittedAt: rawSubmission.submittedAt,
               status: rawSubmission.status,
@@ -383,15 +568,13 @@ export default function App() {
             examForReview = hydrated;
           }
         }
-        // Always persist student submission back to Firestore for teacher review
-        void saveSubmissionToFirestore(finalSubmission, activeExamOwnerId);
+        void saveSubmissionToFirestore(finalSubmission, resolvedOwnerId);
       } else {
-        // 2. Local/built-in exam: look up local master key strictly post-submission for grading
-        const localMaster = StorageService.getExamByCode(activeExamForTaking.code);
+        const localMaster = StorageService.getExamByCode(activeExamForTaking.code, activeUid || undefined);
         if (localMaster) {
           const graded = gradeSubmission(
             localMaster,
-            rawSubmission.studentId,
+            finalSubmission.studentId,
             rawSubmission.studentName,
             rawSubmission.studentClass,
             rawSubmission.startedAt,
@@ -405,7 +588,6 @@ export default function App() {
             submittedAt: rawSubmission.submittedAt,
             status: rawSubmission.status,
           };
-          // Only expose answers/solutions to ExamResultView if teacher policy allows it
           examForReview = localMaster.showAnswersAfterSubmit
             ? localMaster
             : sanitizeExamForStudent(localMaster);
@@ -413,15 +595,18 @@ export default function App() {
       }
     }
 
-    StorageService.addSubmission(finalSubmission);
-    setSubmissions(StorageService.getSubmissions());
+    if (activeUid) {
+      StorageService.addSubmission(finalSubmission, activeUid);
+      setSubmissions(StorageService.getSubmissions(undefined, activeUid));
+    }
     setReviewExamOverride(examForReview);
     setReviewSubmission(finalSubmission);
     setActiveTab('review_submission');
   };
 
   const handleReviewSubmission = (sub: StudentSubmission) => {
-    const localExam = exams.find((e) => e.id === sub.examId);
+    const matchingAssigned = assignedExams.find((a) => a.exam.id === sub.examId)?.exam;
+    const localExam = exams.find((e) => e.id === sub.examId) || matchingAssigned;
     setReviewExamOverride(
       localExam
         ? localExam.showAnswersAfterSubmit
@@ -433,42 +618,33 @@ export default function App() {
     setActiveTab('review_submission');
   };
 
-  const handleUpdateCurrentUser = (updatedUser: User) => {
-    setCurrentUser(updatedUser);
-    StorageService.setCurrentUser(updatedUser);
-  };
-
-  const handleCloudSignIn = async () => {
-    try {
-      const fbUser = await signInWithGoogleForCloudSync();
-      if (fbUser.emailVerified) {
-        // Sync local custom exams up to Firestore so shared links work across all devices
-        const localExams = StorageService.getExams();
-        for (const ex of localExams) {
-          if (!['exam_hq50_standard', 'exam_de5_attached', 'exam_chem12_01', 'exam_olymp_01'].includes(ex.id)) {
-            await syncExamToFirestore(ex).catch(() => {});
-          }
-        }
-      }
-    } catch (err) {
-      console.warn('Google sign-in cancelled or failed:', err);
+  const handleJoinClassByCode = async (code: string) => {
+    if (!userProfile) {
+      return { success: false, errorMessage: 'Vui lòng đăng nhập tài khoản học sinh để tham gia lớp.' };
     }
-  };
-
-  const handleCloudSignOut = async () => {
-    await signOutFromCloud();
-  };
-
-  const clearExamUrlParam = () => {
-    if (typeof window !== 'undefined') {
-      try {
-        if (window.location.pathname !== '/' || window.location.search || window.location.hash) {
-          window.history.replaceState({}, '', '/');
-        }
-      } catch {
-        // Ignore history restriction
-      }
+    const res = await joinClassByCode(userProfile, code);
+    if (res.success && userProfile) {
+      await hydrateAuthenticatedWorkspace(userProfile);
     }
+    return res;
+  };
+
+  const handleLogout = async () => {
+    clearExamUrlParam();
+    setGuestExamMode(false);
+    setDirectJoinExam(null);
+    setActiveExamForTaking(null);
+    setReviewSubmission(null);
+    resetWorkspaceMemoryState();
+    await logout();
+  };
+
+  const handleExitGuestModeToAuth = () => {
+    clearExamUrlParam();
+    setGuestExamMode(false);
+    setDirectJoinExam(null);
+    setActiveExamForTaking(null);
+    setReviewSubmission(null);
   };
 
   const resetToRoleHome = () => {
@@ -476,177 +652,101 @@ export default function App() {
     setDirectJoinExam(null);
     setActiveExamForTaking(null);
     setReviewSubmission(null);
-    setActiveTab(getDefaultTabForRole(currentUser.role));
+    if (userProfile) {
+      setGuestExamMode(false);
+      setActiveTab(getDefaultTabForRole(userProfile.role));
+    } else {
+      setGuestExamMode(false);
+    }
   };
+
+  // --- Determine whether we are in Guest Direct-Exam Flow vs Auth Gate vs Authenticated App ---
+  const isAuthenticatedSession = authState === 'authenticated' && Boolean(userProfile);
+  const isGuestDirectExamFlow =
+    guestExamMode ||
+    ['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && !isAuthenticatedSession;
+
+  if (!isAuthenticatedSession && !isGuestDirectExamFlow) {
+    return (
+      <ErrorBoundary fallbackTitle="Không thể khởi tạo cổng đăng nhập" onResetToHome={() => window.location.reload()}>
+        <AuthPortal
+          onQuickExamCodeLookup={(code) => {
+            void resolveDirectExamByCode(code);
+          }}
+        />
+      </ErrorBoundary>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       {/* Global Header (Hide during ongoing exam for full concentration) */}
       {activeTab !== 'take_exam' && (
         <Header
-          currentUser={currentUser}
-          onSwitchUser={handleSwitchUserRole}
+          currentUser={userProfile}
+          isGuest={!isAuthenticatedSession}
           activeTab={activeTab}
-          setActiveTab={setActiveTab}
+          setActiveTab={(tab) => {
+            if (isAuthenticatedSession) {
+              setGuestExamMode(false);
+            }
+            setActiveTab(tab);
+          }}
           onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
-          onUpdateUser={handleUpdateCurrentUser}
-          cloudUserEmail={cloudUserEmail}
-          onCloudSignIn={handleCloudSignIn}
-          onCloudSignOut={handleCloudSignOut}
+          onProfileUpdated={(updated) => setLocalUpdatedProfile(updated)}
+          onLogout={isAuthenticatedSession ? handleLogout : undefined}
+          onRequestAuth={handleExitGuestModeToAuth}
         />
       )}
 
       {/* Main Content Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <ErrorBoundary
-          fallbackTitle="Không thể hiển thị nội dung bài thi"
-          onResetToHome={resetToRoleHome}
-        >
-          {/* --- TEACHER VIEWS --- */}
-          {currentUser.role === 'teacher' && (
-            <>
-              {activeTab === 'dashboard' && (
-                <TeacherDashboard
-                  currentUser={currentUser}
-                  questions={questions}
-                  exams={exams}
-                  submissions={submissions}
-                  onNavigate={(tab) => setActiveTab(tab)}
-                  onOpenExamResults={handleOpenExamResults}
-                />
-              )}
-
-              {activeTab === 'upload_exam' && (
-                <ExamUploader
-                  onSaveToQuestionBank={handleSaveQuestionsToBank}
-                  onCreateExamFromParsed={handleCreateExamFromParsed}
-                />
-              )}
-
-              {activeTab === 'question_bank' && (
-                <QuestionBank
-                  questions={questions}
-                  folders={folders}
-                  onAddQuestion={handleAddQuestion}
-                  onUpdateQuestion={handleUpdateQuestion}
-                  onDeleteQuestion={handleDeleteQuestion}
-                  onCreateExamFromSelected={handleCreateExamFromSelected}
-                />
-              )}
-
-              {activeTab === 'folder_manager' && (
-                <FolderManager
-                  folders={folders}
-                  questions={questions}
-                  exams={exams}
-                  onSaveFolders={handleSaveFolders}
-                  onNavigateToExam={(id) => handleOpenExamResults(id)}
-                />
-              )}
-
-              {activeTab === 'create_exam' && (
-                <ExamCreator
-                  initialTitle={creatorInitialTitle}
-                  initialQuestions={creatorInitialQuestions}
-                  initialGrade={creatorInitialGrade}
-                  folders={folders}
-                  onSaveExam={handleSaveExam}
-                  onCancel={() => setActiveTab('dashboard')}
-                />
-              )}
-
-              {activeTab === 'exam_manager' && (
-                <ExamManager
-                  exams={exams}
-                  submissions={submissions}
-                  onCreateNew={() => {
-                    setCreatorInitialQuestions([]);
-                    setCreatorInitialTitle('Đề thi Hóa học mới');
-                    setActiveTab('create_exam');
-                  }}
-                  onOpenResults={handleOpenExamResults}
-                  onTakeExamAsPreview={(ex) => handleStartExam(ex, currentUser.name, 'Giáo viên xem thử')}
-                  onTogglePublish={handleToggleExamPublish}
-                  onDeleteExam={handleDeleteExam}
-                />
-              )}
-
-              {activeTab === 'exam_results' && (
-                <ExamResults
-                  exam={exams.find((e) => e.id === selectedExamIdForResults) || exams[0]}
-                  submissions={submissions.filter((s) => s.examId === (selectedExamIdForResults || exams[0]?.id))}
-                  onBack={() => setActiveTab('exam_manager')}
-                />
-              )}
-
-              {!['dashboard', 'upload_exam', 'question_bank', 'folder_manager', 'create_exam', 'exam_manager', 'exam_results', 'take_exam', 'review_submission'].includes(activeTab) && (
-                <TeacherDashboard
-                  currentUser={currentUser}
-                  questions={questions}
-                  exams={exams}
-                  submissions={submissions}
-                  onNavigate={(tab) => setActiveTab(tab)}
-                  onOpenExamResults={handleOpenExamResults}
-                />
-              )}
-            </>
+        <ErrorBoundary fallbackTitle="Không thể hiển thị nội dung" onResetToHome={resetToRoleHome}>
+          {isLoadingWorkspace && isAuthenticatedSession && activeTab !== 'take_exam' && activeTab !== 'exam_landing' && (
+            <div className="mb-4 px-4 py-2 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold flex items-center gap-2">
+              <div className="w-3.5 h-3.5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              <span>Đang đồng bộ không gian dữ liệu riêng từ Cloud Firestore...</span>
+            </div>
           )}
 
-          {/* --- STUDENT VIEWS --- */}
-          {currentUser.role === 'student' && (
-            <>
-              {activeTab === 'student_home' && (
-                <StudentHome
-                  currentUser={currentUser}
-                  exams={exams}
-                  submissions={submissions}
-                  onStartExam={handleStartExam}
-                  onReviewSubmission={handleReviewSubmission}
-                />
-              )}
-
-              {activeTab === 'exam_landing' && (
-                <ExamJoinLanding
-                  exam={directJoinExam}
-                  examCode={directJoinCode}
-                  status={directJoinStatus}
-                  statusMessage={directJoinMessage}
-                  currentUser={currentUser}
-                  onStartExam={(ex, name, cls) => {
-                    handleStartExam(ex, name, cls, directJoinOwnerId);
-                  }}
-                  onRetryLookup={() => void resolveDirectExamFromUrl()}
-                  onBackToHome={() => {
-                    clearExamUrlParam();
-                    setDirectJoinExam(null);
-                    setActiveTab('student_home');
-                  }}
-                />
-              )}
-
-              {!['student_home', 'exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
-                <StudentHome
-                  currentUser={currentUser}
-                  exams={exams}
-                  submissions={submissions}
-                  onStartExam={handleStartExam}
-                  onReviewSubmission={handleReviewSubmission}
-                />
-              )}
-            </>
+          {/* --- DIRECT EXAM JOIN LANDING (Guests & Students) --- */}
+          {activeTab === 'exam_landing' && (
+            <ExamJoinLanding
+              exam={directJoinExam}
+              examCode={directJoinCode}
+              status={directJoinStatus}
+              statusMessage={directJoinMessage}
+              currentUser={userProfile}
+              onStartExam={(ex, name, cls) => {
+                handleStartExam(ex, name, cls, directJoinOwnerId);
+              }}
+              onRetryLookup={() => void resolveDirectExamByCode(directJoinCode)}
+              onBackToHome={() => {
+                if (isAuthenticatedSession && userProfile) {
+                  resetToRoleHome();
+                } else {
+                  handleExitGuestModeToAuth();
+                }
+              }}
+            />
           )}
 
-          {/* --- SHARED EXAM TAKING & RESULT VIEWS (Student & Teacher Preview) --- */}
-          {activeTab === 'take_exam' && (
-            activeExamForTaking ? (
+          {/* --- SHARED EXAM TAKING & RESULT VIEWS --- */}
+          {activeTab === 'take_exam' &&
+            (activeExamForTaking ? (
               <ExamTaker
                 exam={activeExamForTaking}
-                studentName={activeStudentName}
-                studentClass={activeStudentClass}
+                studentName={activeStudentName || userProfile?.name || 'Thí sinh'}
+                studentClass={activeStudentClass || userProfile?.className || 'Tự do'}
                 onFinishExam={handleFinishExam}
                 onExitWithoutSave={() => {
-                  clearExamUrlParam();
-                  setActiveTab(currentUser.role === 'teacher' ? 'exam_manager' : 'student_home');
+                  if (isAuthenticatedSession && userProfile) {
+                    clearExamUrlParam();
+                    setGuestExamMode(false);
+                    setActiveTab(userProfile.role === 'teacher' ? 'exam_manager' : 'student_home');
+                  } else {
+                    handleExitGuestModeToAuth();
+                  }
                 }}
               />
             ) : (
@@ -661,17 +761,21 @@ export default function App() {
                   Quay về trang chủ
                 </button>
               </div>
-            )
-          )}
+            ))}
 
-          {activeTab === 'review_submission' && (
-            reviewSubmission ? (
+          {activeTab === 'review_submission' &&
+            (reviewSubmission ? (
               <ExamResultView
                 submission={reviewSubmission}
                 exam={reviewExamOverride || exams.find((e) => e.id === reviewSubmission.examId)}
                 onBackToHome={() => {
-                  clearExamUrlParam();
-                  setActiveTab(currentUser.role === 'teacher' ? 'exam_manager' : 'student_home');
+                  if (isAuthenticatedSession && userProfile) {
+                    clearExamUrlParam();
+                    setGuestExamMode(false);
+                    setActiveTab(userProfile.role === 'teacher' ? 'exam_manager' : 'student_home');
+                  } else {
+                    handleExitGuestModeToAuth();
+                  }
                 }}
               />
             ) : (
@@ -685,19 +789,168 @@ export default function App() {
                   Quay về trang chủ
                 </button>
               </div>
-            )
-          )}
+            ))}
 
-          {/* --- ADMIN VIEW --- */}
-          {currentUser.role === 'admin' && (
-            <AdminDashboard
-              questions={questions}
-              exams={exams}
-              submissions={submissions}
-              folders={folders}
-              onDataResetOrRestored={reloadDataFromStorage}
-            />
-          )}
+          {/* --- AUTHENTICATED TEACHER VIEWS --- */}
+          {isAuthenticatedSession &&
+            userProfile?.role === 'teacher' &&
+            !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
+              <ProtectedRoute allowedRoles={['teacher']} onBackHome={resetToRoleHome}>
+                {activeTab === 'dashboard' && (
+                  <TeacherDashboard
+                    currentUser={userProfile}
+                    questions={questions}
+                    exams={exams}
+                    submissions={submissions}
+                    classesCount={classes.length}
+                    isSeedingSamples={isSeedingSamples}
+                    onNavigate={(tab) => setActiveTab(tab)}
+                    onOpenExamResults={handleOpenExamResults}
+                    onTogglePublish={handleToggleExamPublish}
+                    onSeedStarterSamples={handleSeedStarterSamples}
+                  />
+                )}
+
+                {activeTab === 'upload_exam' && (
+                  <ExamUploader
+                    onSaveToQuestionBank={handleSaveQuestionsToBank}
+                    onCreateExamFromParsed={handleCreateExamFromParsed}
+                    onFileParsedRecord={handleFileParsedRecord}
+                  />
+                )}
+
+                {activeTab === 'question_bank' && (
+                  <QuestionBank
+                    questions={questions}
+                    folders={folders}
+                    onAddQuestion={handleAddQuestion}
+                    onUpdateQuestion={handleUpdateQuestion}
+                    onDeleteQuestion={handleDeleteQuestion}
+                    onCreateExamFromSelected={handleCreateExamFromSelected}
+                  />
+                )}
+
+                {activeTab === 'folder_manager' && (
+                  <FolderManager
+                    folders={folders}
+                    questions={questions}
+                    exams={exams}
+                    onSaveFolders={handleSaveFolders}
+                    onNavigateToExam={(id) => handleOpenExamResults(id)}
+                  />
+                )}
+
+                {activeTab === 'create_exam' && (
+                  <ExamCreator
+                    initialTitle={creatorInitialTitle}
+                    initialQuestions={creatorInitialQuestions}
+                    initialGrade={creatorInitialGrade}
+                    folders={folders}
+                    currentUserId={activeUid}
+                    currentUserName={userProfile.name}
+                    onSaveExam={handleSaveExam}
+                    onCancel={() => setActiveTab('dashboard')}
+                  />
+                )}
+
+                {activeTab === 'exam_manager' && (
+                  <ExamManager
+                    exams={exams}
+                    submissions={submissions}
+                    onCreateNew={() => {
+                      setCreatorInitialQuestions([]);
+                      setCreatorInitialTitle('Đề thi Hóa học mới');
+                      setActiveTab('create_exam');
+                    }}
+                    onOpenResults={handleOpenExamResults}
+                    onTakeExamAsPreview={(ex) => handleStartExam(ex, userProfile.name, 'Giáo viên xem thử', activeUid)}
+                    onTogglePublish={handleToggleExamPublish}
+                    onDeleteExam={handleDeleteExam}
+                  />
+                )}
+
+                {activeTab === 'class_manager' && (
+                  <ClassManager
+                    currentUser={userProfile}
+                    classes={classes}
+                    enrollments={enrollments}
+                    exams={exams}
+                    submissions={submissions}
+                    onSaveClass={handleSaveClass}
+                    onDeleteClass={handleDeleteClass}
+                    onRemoveEnrollment={handleRemoveEnrollment}
+                  />
+                )}
+
+                {activeTab === 'exam_results' && (
+                  <ExamResults
+                    exam={exams.find((e) => e.id === selectedExamIdForResults) || exams[0]}
+                    submissions={submissions.filter(
+                      (s) => s.examId === (selectedExamIdForResults || exams[0]?.id)
+                    )}
+                    onBack={() => setActiveTab('exam_manager')}
+                  />
+                )}
+
+                {![
+                  'dashboard',
+                  'upload_exam',
+                  'question_bank',
+                  'folder_manager',
+                  'create_exam',
+                  'exam_manager',
+                  'class_manager',
+                  'exam_results',
+                ].includes(activeTab) && (
+                  <TeacherDashboard
+                    currentUser={userProfile}
+                    questions={questions}
+                    exams={exams}
+                    submissions={submissions}
+                    classesCount={classes.length}
+                    isSeedingSamples={isSeedingSamples}
+                    onNavigate={(tab) => setActiveTab(tab)}
+                    onOpenExamResults={handleOpenExamResults}
+                    onTogglePublish={handleToggleExamPublish}
+                    onSeedStarterSamples={handleSeedStarterSamples}
+                  />
+                )}
+              </ProtectedRoute>
+            )}
+
+          {/* --- AUTHENTICATED STUDENT VIEWS --- */}
+          {isAuthenticatedSession &&
+            userProfile?.role === 'student' &&
+            !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
+              <ProtectedRoute allowedRoles={['student']} onBackHome={resetToRoleHome}>
+                <StudentHome
+                  currentUser={userProfile}
+                  exams={exams}
+                  submissions={submissions}
+                  enrollments={enrollments}
+                  assignedExams={assignedExams}
+                  onJoinClassByCode={handleJoinClassByCode}
+                  onStartExam={handleStartExam}
+                  onReviewSubmission={handleReviewSubmission}
+                />
+              </ProtectedRoute>
+            )}
+
+          {/* --- AUTHENTICATED ADMIN VIEW --- */}
+          {isAuthenticatedSession &&
+            userProfile?.role === 'admin' &&
+            !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
+              <ProtectedRoute allowedRoles={['admin']} onBackHome={resetToRoleHome}>
+                <AdminDashboard
+                  currentUser={userProfile}
+                  questions={questions}
+                  exams={exams}
+                  submissions={submissions}
+                  folders={folders}
+                  onDataResetOrRestored={reloadDataFromStorage}
+                />
+              </ProtectedRoute>
+            )}
         </ErrorBoundary>
       </main>
 

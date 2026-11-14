@@ -1,5 +1,147 @@
 {
   "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile with server-enforced RBAC role and account approval status.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "role": { "type": "string", "enum": ["teacher", "student", "admin"] },
+        "status": { "type": "string", "enum": ["pending", "active", "locked", "rejected"] },
+        "phone": { "type": "string", "maxLength": 32 },
+        "school": { "type": "string", "maxLength": 200 },
+        "className": { "type": "string", "maxLength": 80 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "approvedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "name", "role", "status", "createdAt", "updatedAt"]
+    },
+    "TeacherQuestion": {
+      "title": "TeacherQuestion",
+      "description": "Private teacher-owned Chemistry question stored in isolated teacher question bank.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "type": { "type": "string", "enum": ["part1_single_choice", "part2_true_false", "part3_short_answer"] },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "topic": { "type": "string", "maxLength": 64 },
+        "level": { "type": "string", "enum": ["nhan_biet", "thong_hieu", "van_dung", "van_dung_cao"] },
+        "folderId": { "type": "string", "maxLength": 128 },
+        "options": { "type": "array" },
+        "correctOptionId": { "type": "string", "maxLength": 8 },
+        "statements": { "type": "array" },
+        "shortAnswerConfig": { "type": "object" },
+        "imageUrl": { "type": "string", "maxLength": 1000 },
+        "explanation": { "type": "string", "maxLength": 20000 },
+        "source": { "type": "string", "maxLength": 300 },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "parseStatus": { "type": "string", "enum": ["verified", "needs_review", "error"] },
+        "parseWarning": { "type": "string", "maxLength": 500 },
+        "teacherVerified": { "type": "boolean" },
+        "section": { "type": "string", "maxLength": 64 },
+        "sectionTitle": { "type": "string", "maxLength": 300 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "code", "content", "type", "grade", "topic", "level", "createdAt", "updatedAt"]
+    },
+    "TeacherFolder": {
+      "title": "TeacherFolder",
+      "description": "Private teacher-owned folder for organizing Chemistry questions and exams.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "parentId": { "type": "string", "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 500 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "color": { "type": "string", "maxLength": 32 },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "itemCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "createdAt", "updatedAt"]
+    },
+    "Classroom": {
+      "title": "Classroom",
+      "description": "Teacher-managed class workspace with join code and assigned exam codes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "school": { "type": "string", "maxLength": 200 },
+        "className": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "description": { "type": "string", "maxLength": 500 },
+        "assignedExamCodes": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "teacherName", "className", "classCode", "assignedExamCodes", "isActive", "createdAt", "updatedAt"]
+    },
+    "ClassJoinLookup": {
+      "title": "ClassJoinLookup",
+      "description": "Single-document lookup by class join code for authenticated students.",
+      "type": "object",
+      "properties": {
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "className": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "school": { "type": "string", "maxLength": 200 },
+        "assignedExamCodes": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["classCode", "classId", "className", "teacherId", "teacherName", "assignedExamCodes", "isActive", "updatedAt"]
+    },
+    "ClassEnrollment": {
+      "title": "ClassEnrollment",
+      "description": "Student membership link between a student UID and a teacher class.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "className": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "studentClassName": { "type": "string", "maxLength": 80 },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "classId", "classCode", "className", "teacherId", "teacherName", "studentId", "studentName", "studentEmail", "joinedAt"]
+    },
+    "TeacherUploadRecord": {
+      "title": "TeacherUploadRecord",
+      "description": "Metadata record of teacher DOCX/PDF exam uploads.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "fileType": { "type": "string", "enum": ["docx", "pdf", "text"] },
+        "examTitle": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "totalQuestions": { "type": "number" },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "fileName", "fileType", "examTitle", "totalQuestions", "grade", "createdAt"]
+    },
     "ExamMaster": {
       "title": "ExamMaster",
       "description": "Teacher-owned complete exam definition including answer keys and detailed solutions.",
@@ -26,6 +168,7 @@
         "showAnswersAfterSubmit": { "type": "boolean" },
         "showSolutionsAfterSubmit": { "type": "boolean" },
         "allowReviewLater": { "type": "boolean" },
+        "assignedClassCodes": { "type": "array" },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "authorId": { "type": "string", "maxLength": 128 },
         "authorName": { "type": "string", "maxLength": 150 },
@@ -33,20 +176,9 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id",
-        "code",
-        "title",
-        "grade",
-        "durationMinutes",
-        "totalQuestions",
-        "totalScore",
-        "questions",
-        "rules",
-        "isPublished",
-        "ownerId",
-        "authorName",
-        "createdAt",
-        "updatedAt"
+        "id", "code", "title", "grade", "durationMinutes", "totalQuestions",
+        "totalScore", "questions", "rules", "isPublished", "ownerId",
+        "authorName", "createdAt", "updatedAt"
       ]
     },
     "ExamStatus": {
@@ -69,17 +201,9 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "examCode",
-        "examId",
-        "title",
-        "grade",
-        "durationMinutes",
-        "totalQuestions",
-        "totalScore",
-        "isPublished",
-        "authorName",
-        "ownerId",
-        "updatedAt"
+        "examCode", "examId", "title", "grade", "durationMinutes",
+        "totalQuestions", "totalScore", "isPublished", "authorName",
+        "ownerId", "updatedAt"
       ]
     },
     "PublicExam": {
@@ -113,22 +237,10 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id",
-        "code",
-        "title",
-        "grade",
-        "durationMinutes",
-        "totalQuestions",
-        "totalScore",
-        "questions",
-        "rules",
-        "isPublished",
-        "showScoreAfterSubmit",
-        "showAnswersAfterSubmit",
-        "showSolutionsAfterSubmit",
-        "authorName",
-        "ownerId",
-        "updatedAt"
+        "id", "code", "title", "grade", "durationMinutes", "totalQuestions",
+        "totalScore", "questions", "rules", "isPublished",
+        "showScoreAfterSubmit", "showAnswersAfterSubmit", "showSolutionsAfterSubmit",
+        "authorName", "ownerId", "updatedAt"
       ]
     },
     "ExamAnswerKey": {
@@ -146,19 +258,13 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "examCode",
-        "examId",
-        "ownerId",
-        "isPublished",
-        "showAnswersAfterSubmit",
-        "showSolutionsAfterSubmit",
-        "answerMap",
-        "updatedAt"
+        "examCode", "examId", "ownerId", "isPublished",
+        "showAnswersAfterSubmit", "showSolutionsAfterSubmit", "answerMap", "updatedAt"
       ]
     },
     "StudentSubmission": {
       "title": "StudentSubmission",
-      "description": "Student exam submission stored for teacher review and analytics.",
+      "description": "Student exam submission stored for teacher review and authenticated student history.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
@@ -184,26 +290,11 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": [
-        "id",
-        "examId",
-        "examTitle",
-        "examCode",
-        "ownerId",
-        "studentId",
-        "studentName",
-        "studentClass",
-        "startedAt",
-        "submittedAt",
-        "durationSeconds",
-        "answers",
-        "part1Score",
-        "part2Score",
-        "part3Score",
-        "totalScore",
-        "maxPossibleScore",
-        "correctQuestionsCount",
-        "status",
-        "createdAt"
+        "id", "examId", "examTitle", "examCode", "ownerId", "studentId",
+        "studentName", "studentClass", "startedAt", "submittedAt",
+        "durationSeconds", "answers", "part1Score", "part2Score",
+        "part3Score", "totalScore", "maxPossibleScore",
+        "correctQuestionsCount", "status", "createdAt"
       ]
     },
     "AdminMarker": {
@@ -218,6 +309,34 @@
     }
   },
   "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles with admin-approved teacher status and non-escalatable role."
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/TeacherQuestion" },
+      "description": "Teacher-isolated Chemistry question bank documents."
+    },
+    "/folders/{folderId}": {
+      "schema": { "$ref": "#/entities/TeacherFolder" },
+      "description": "Teacher-isolated folder hierarchy documents."
+    },
+    "/classes/{classId}": {
+      "schema": { "$ref": "#/entities/Classroom" },
+      "description": "Teacher-owned classrooms with join codes and assigned exam codes."
+    },
+    "/classJoinCodes/{classCode}": {
+      "schema": { "$ref": "#/entities/ClassJoinLookup" },
+      "description": "Single-doc lookup by classCode for authenticated student enrollment."
+    },
+    "/classEnrollments/{enrollmentId}": {
+      "schema": { "$ref": "#/entities/ClassEnrollment" },
+      "description": "Enrollment links keyed by {classId}_{studentUid}."
+    },
+    "/uploadRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/TeacherUploadRecord" },
+      "description": "Teacher-isolated DOCX/PDF upload history records."
+    },
     "/exams/{examId}": {
       "schema": { "$ref": "#/entities/ExamMaster" },
       "description": "Private teacher-owned master exams with answer keys and explanations."
@@ -236,7 +355,7 @@
     },
     "/submissions/{submissionId}": {
       "schema": { "$ref": "#/entities/StudentSubmission" },
-      "description": "Student exam submissions readable only by exam owner teacher or admin."
+      "description": "Student exam submissions readable by exam owner teacher, submitting student, or admin."
     },
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminMarker" },

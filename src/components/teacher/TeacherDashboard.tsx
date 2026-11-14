@@ -24,9 +24,12 @@ interface TeacherDashboardProps {
   questions: Question[];
   exams: Exam[];
   submissions: StudentSubmission[];
+  classesCount?: number;
+  isSeedingSamples?: boolean;
   onNavigate: (tab: string) => void;
   onOpenExamResults: (examId: string) => void;
   onTogglePublish?: (examId: string) => void;
+  onSeedStarterSamples?: () => Promise<void> | void;
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -34,9 +37,12 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
   questions,
   exams,
   submissions,
+  classesCount = 0,
+  isSeedingSamples = false,
   onNavigate,
   onOpenExamResults,
   onTogglePublish,
+  onSeedStarterSamples,
 }) => {
   const totalQuestions = questions.length;
   const activeExamsCount = exams.filter(e => e.isPublished).length;
@@ -86,11 +92,52 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               className="px-4 py-2.5 bg-blue-600/80 hover:bg-blue-600 border border-blue-400/40 text-white font-bold text-xs md:text-sm rounded-xl transition-all flex items-center gap-2"
             >
               <PlusCircle className="w-4 h-4" />
-              <span>Tạo đề & Mở phòng thi</span>
+              <span>Tạo đề &amp; Mở phòng thi</span>
+            </button>
+            <button
+              onClick={() => onNavigate('class_manager')}
+              className="px-4 py-2.5 bg-indigo-500/40 hover:bg-indigo-500/60 border border-indigo-300/40 text-white font-bold text-xs md:text-sm rounded-xl transition-all flex items-center gap-2"
+            >
+              <Users className="w-4 h-4" />
+              <span>Quản lý Lớp học ({classesCount})</span>
             </button>
           </div>
         </div>
       </div>
+
+      {/* Empty Workspace Onboarding for Newly Approved Teachers */}
+      {totalQuestions === 0 && exams.length === 0 && (
+        <div className="bg-white border-2 border-dashed border-blue-200 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs">
+          <div className="space-y-1">
+            <h2 className="text-base font-extrabold text-slate-900 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-blue-600" />
+              <span>Không gian làm việc riêng của bạn đã sẵn sàng</span>
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed max-w-2xl">
+              Dữ liệu câu hỏi, thư mục, lớp học và đề thi của mỗi giáo viên được tách biệt hoàn toàn. Bạn có thể bắt đầu tải đề Word/PDF của riêng mình hoặc nạp nhanh bộ câu hỏi &amp; đề mẫu Hóa học THPT để dùng thử.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => onNavigate('upload_exam')}
+              className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs"
+            >
+              Tải đề Word / PDF ngay
+            </button>
+            {onSeedStarterSamples && (
+              <button
+                type="button"
+                disabled={isSeedingSamples}
+                onClick={() => void onSeedStarterSamples()}
+                className="px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-60 text-indigo-800 text-xs font-bold"
+              >
+                {isSeedingSamples ? 'Đang nạp bộ mẫu...' : 'Nạp bộ câu hỏi mẫu Hóa học'}
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Metric Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -158,7 +205,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           </div>
 
           <div className="space-y-3">
-            {exams.map((exam) => {
+            {exams.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-xl p-6 text-center text-xs text-slate-500">
+                Bạn chưa tạo đề thi nào trong không gian làm việc này.
+              </div>
+            ) : exams.map((exam) => {
               const examSubs = submissions.filter(s => s.examId === exam.id);
               return (
                 <div 

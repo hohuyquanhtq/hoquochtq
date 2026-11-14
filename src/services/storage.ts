@@ -571,152 +571,158 @@ export const DEFAULT_SUBMISSIONS: StudentSubmission[] = [
   },
 ];
 
+let activeWorkspaceUid: string | null = null;
+
+function wsKey(uid: string | null | undefined, entity: string): string {
+  const cleanUid = (uid || activeWorkspaceUid || '').trim();
+  if (!cleanUid) {
+    return `hqtest_guest_${entity}`;
+  }
+  return `hqtest_ws_${cleanUid}_${entity}`;
+}
+
+function readJsonArray<T>(key: string): T[] | null {
+  const saved = safeGetStorageItem(key);
+  if (!saved) return null;
+  try {
+    const parsed = JSON.parse(saved);
+    return Array.isArray(parsed) ? (parsed as T[]) : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Storage Service Helper Functions
+ * Storage Service Helper Functions (UID-isolated workspace cache + legacy/sample fallback)
  */
 export const StorageService = {
-  getCurrentUser(): User {
-    const saved = safeGetStorageItem(STORAGE_KEYS.CURRENT_USER);
-    if (saved) {
-      try {
-        const u: User = JSON.parse(saved);
-        if (u && typeof u === 'object' && u.role) {
-          if (u.name && u.name.includes('Nguyễn Hoàng Long')) {
-            u.name = 'Hồ Ngọc Quốc';
-            u.school = 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng';
-            u.email = 'quochn@chuyennguyenbinhkhiem.edu.vn';
-            this.setCurrentUser(u);
-          }
-          return u;
-        }
-      } catch {
-        // fallback
+  setActiveWorkspaceUid(uid: string | null): void {
+    activeWorkspaceUid = uid ? uid.trim() : null;
+  },
+
+  getActiveWorkspaceUid(): string | null {
+    return activeWorkspaceUid;
+  },
+
+  clearActiveWorkspaceMemory(): void {
+    activeWorkspaceUid = null;
+  },
+
+  getBuiltInPublicExams(): Exam[] {
+    return DEFAULT_EXAMS.map((ex) => sanitizeExamForStudent(ex));
+  },
+
+  getLegacyUnownedData(): {
+    questions: Question[];
+    folders: Folder[];
+    exams: Exam[];
+    submissions: StudentSubmission[];
+  } {
+    return {
+      questions: readJsonArray<Question>(STORAGE_KEYS.QUESTIONS) || [],
+      folders: readJsonArray<Folder>(STORAGE_KEYS.FOLDERS) || [],
+      exams: readJsonArray<Exam>(STORAGE_KEYS.EXAMS) || [],
+      submissions: readJsonArray<StudentSubmission>(STORAGE_KEYS.SUBMISSIONS) || [],
+    };
+  },
+
+  clearLegacyLocalCache(): void {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.removeItem(STORAGE_KEYS.CURRENT_USER);
+        window.localStorage.removeItem(STORAGE_KEYS.QUESTIONS);
+        window.localStorage.removeItem(STORAGE_KEYS.EXAMS);
+        window.localStorage.removeItem(STORAGE_KEYS.FOLDERS);
+        window.localStorage.removeItem(STORAGE_KEYS.SUBMISSIONS);
       }
+    } catch {
+      // ignore
     }
-    return DEFAULT_USERS[0]; // Default: Teacher
   },
 
-  setCurrentUser(user: User): void {
-    safeSetStorageItem(STORAGE_KEYS.CURRENT_USER, JSON.stringify(user));
+  getQuestions(uid?: string): Question[] {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return [];
+    return readJsonArray<Question>(wsKey(targetUid, 'questions')) || [];
   },
 
-  getQuestions(): Question[] {
-    const saved = safeGetStorageItem(STORAGE_KEYS.QUESTIONS);
-    if (saved) {
-      try {
-        const list = JSON.parse(saved);
-        if (Array.isArray(list)) {
-          if (!list.some(q => q?.code?.includes('P1_C1') || q?.content?.includes('methyl salicylate'))) {
-            const merged = [...parsedDe5.questions, ...list];
-            this.saveQuestions(merged);
-            return merged;
-          }
-          return list;
-        }
-      } catch {}
-    }
-    const initialList = [...parsedDe5.questions, ...DEFAULT_QUESTIONS];
-    this.saveQuestions(initialList);
-    return initialList;
+  saveQuestions(questions: Question[], uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    safeSetStorageItem(wsKey(targetUid, 'questions'), JSON.stringify(questions));
   },
 
-  saveQuestions(questions: Question[]): void {
-    safeSetStorageItem(STORAGE_KEYS.QUESTIONS, JSON.stringify(questions));
+  addQuestion(question: Question, uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    const questions = this.getQuestions(targetUid);
+    const filtered = questions.filter((q) => q.id !== question.id);
+    this.saveQuestions([question, ...filtered], targetUid);
   },
 
-  addQuestion(question: Question): void {
-    const questions = this.getQuestions();
-    questions.unshift(question);
-    this.saveQuestions(questions);
-  },
-
-  updateQuestion(question: Question): void {
-    const questions = this.getQuestions();
-    const idx = questions.findIndex(q => q.id === question.id);
+  updateQuestion(question: Question, uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    const questions = this.getQuestions(targetUid);
+    const idx = questions.findIndex((q) => q.id === question.id);
     if (idx !== -1) {
       questions[idx] = question;
-      this.saveQuestions(questions);
+      this.saveQuestions(questions, targetUid);
     }
   },
 
-  deleteQuestion(id: string): void {
-    const questions = this.getQuestions().filter(q => q.id !== id);
-    this.saveQuestions(questions);
+  deleteQuestion(id: string, uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    const questions = this.getQuestions(targetUid).filter((q) => q.id !== id);
+    this.saveQuestions(questions, targetUid);
   },
 
-  getFolders(): Folder[] {
-    const saved = safeGetStorageItem(STORAGE_KEYS.FOLDERS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) return parsed;
-      } catch {}
-    }
-    this.saveFolders(DEFAULT_FOLDERS);
-    return DEFAULT_FOLDERS;
+  getFolders(uid?: string): Folder[] {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return [];
+    return readJsonArray<Folder>(wsKey(targetUid, 'folders')) || [];
   },
 
-  saveFolders(folders: Folder[]): void {
-    safeSetStorageItem(STORAGE_KEYS.FOLDERS, JSON.stringify(folders));
+  saveFolders(folders: Folder[], uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    safeSetStorageItem(wsKey(targetUid, 'folders'), JSON.stringify(folders));
   },
 
-  getExams(): Exam[] {
-    const saved = safeGetStorageItem(STORAGE_KEYS.EXAMS);
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          const list: Exam[] = parsed.filter((e): e is Exam => !!e && typeof e === 'object' && !!e.id);
-          let changed = list.length !== parsed.length;
-          // Ensure official HQ50 exam exists
-          if (!list.some(e => (e.code || '').toUpperCase() === 'HQ50' || e.id === 'exam_hq50_standard')) {
-            list.unshift(EXAM_HQ50);
-            changed = true;
-          }
-          if (!list.some(e => e.id === 'exam_de5_attached')) {
-            list.push(ATTACHED_EXAM_DE5);
-            changed = true;
-          }
-          list.forEach(e => {
-            if (e.authorName && e.authorName.includes('Nguyễn Hoàng Long')) {
-              e.authorName = 'Hồ Ngọc Quốc';
-              changed = true;
-            }
-          });
-          if (changed) {
-            this.saveExams(list);
-          }
-          return list;
-        }
-      } catch {}
-    }
-    this.saveExams(DEFAULT_EXAMS);
-    return DEFAULT_EXAMS;
+  getExams(uid?: string): Exam[] {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return [];
+    const list = readJsonArray<Exam>(wsKey(targetUid, 'exams')) || [];
+    return list.filter((e): e is Exam => !!e && typeof e === 'object' && !!e.id);
   },
 
-  saveExams(exams: Exam[]): void {
-    safeSetStorageItem(STORAGE_KEYS.EXAMS, JSON.stringify(exams));
+  saveExams(exams: Exam[], uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    safeSetStorageItem(wsKey(targetUid, 'exams'), JSON.stringify(exams));
     if (typeof window !== 'undefined') {
       window.dispatchEvent(new CustomEvent('hqtest_exams_updated', { detail: { count: exams.length } }));
     }
   },
 
-  addExam(newExam: Exam): boolean {
+  addExam(newExam: Exam, uid?: string): boolean {
+    const targetUid = uid ?? activeWorkspaceUid ?? newExam.ownerId ?? null;
+    if (!targetUid) return false;
     try {
-      const exams = this.getExams();
-      // Remove any prior exam with exact same id or exact same code to prevent duplicates
-      const newCodeUpper = (newExam.code || '').toUpperCase();
-      const filtered = exams.filter(e => e.id !== newExam.id && (e.code || '').toUpperCase() !== newCodeUpper);
+      const exams = this.getExams(targetUid);
+      const newCodeUpper = normalizeExamCode(newExam.code || '');
+      const filtered = exams.filter(
+        (e) => e.id !== newExam.id && normalizeExamCode(e.code || '') !== newCodeUpper
+      );
       const updated = [newExam, ...filtered];
-      const savedOk = safeSetStorageItem(STORAGE_KEYS.EXAMS, JSON.stringify(updated));
+      const key = wsKey(targetUid, 'exams');
+      const savedOk = safeSetStorageItem(key, JSON.stringify(updated));
       if (typeof window !== 'undefined') {
         window.dispatchEvent(new CustomEvent('hqtest_exams_updated', { detail: { count: updated.length } }));
       }
-      if (!savedOk) {
-        return true; // Still saved in memoryStorageFallback for current session
-      }
-      // Verified readback when localStorage is writable
-      const check = safeGetStorageItem(STORAGE_KEYS.EXAMS);
+      if (!savedOk) return true;
+      const check = safeGetStorageItem(key);
       if (!check || !check.includes(newExam.code)) {
         throw new Error('Không thể xác nhận dữ liệu đã được lưu vào bộ nhớ trình duyệt.');
       }
@@ -727,39 +733,47 @@ export const StorageService = {
     }
   },
 
-  getExamById(id: string): Exam | undefined {
-    return this.getExams().find(e => e.id === id);
+  getExamById(id: string, uid?: string): Exam | undefined {
+    const scoped = this.getExams(uid).find((e) => e.id === id);
+    if (scoped) return scoped;
+    return DEFAULT_EXAMS.find((e) => e.id === id);
   },
 
   /**
-   * Robust search for exams by Code or ID
-   * Normalizes whitespaces, case, prefixes (#, c/, ?examCode=, etc.)
+   * Look up exam in active workspace, legacy unowned local cache, or built-in sample exams.
    */
-  getExamByCode(rawCode: string): Exam | undefined {
+  getExamByCode(rawCode: string, uid?: string): Exam | undefined {
     if (!rawCode || !rawCode.trim()) return undefined;
     const normalized = normalizeExamCode(rawCode);
     const compact = normalizeExamCodeCompact(rawCode);
-    const list = this.getExams();
-    return list.find(e => {
-      const eNorm = normalizeExamCode(e.code || '');
-      const eCompact = normalizeExamCodeCompact(e.code || '');
-      return (
-        (normalized && eNorm === normalized) ||
-        (compact && eCompact === compact) ||
-        (e.id || '').toLowerCase() === rawCode.trim().toLowerCase()
-      );
-    });
+
+    const matchExam = (list: Exam[]) =>
+      list.find((e) => {
+        const eNorm = normalizeExamCode(e.code || '');
+        const eCompact = normalizeExamCodeCompact(e.code || '');
+        return (
+          (normalized && eNorm === normalized) ||
+          (compact && eCompact === compact) ||
+          (e.id || '').toLowerCase() === rawCode.trim().toLowerCase()
+        );
+      });
+
+    return (
+      matchExam(this.getExams(uid)) ||
+      matchExam(readJsonArray<Exam>(STORAGE_KEYS.EXAMS) || []) ||
+      matchExam(DEFAULT_EXAMS)
+    );
   },
 
   /**
    * Diagnostic lookup detailing status: found, not_found, not_published, not_started, expired
    */
-  checkExamStatus(rawCode: string): {
+  checkExamStatus(rawCode: string, uid?: string): {
     exam?: Exam;
     status: 'found' | 'not_found' | 'not_published' | 'not_started' | 'expired';
     message?: string;
   } {
-    const exam = this.getExamByCode(rawCode);
+    const exam = this.getExamByCode(rawCode, uid);
     if (!exam) {
       return {
         status: 'not_found',
@@ -803,8 +817,7 @@ export const StorageService = {
 
   /**
    * Cross-device student-safe exam lookup: checks Firestore cloud projection first
-   * (with stripped answers/solutions), then falls back to local/built-in exams (also sanitized),
-   * while preserving explicit network/permission/unexpected errors instead of masking them.
+   * (with stripped answers/solutions), then falls back to built-in/local exams (also sanitized).
    */
   async checkExamStatusAsync(rawCode: string): Promise<{
     exam?: Exam;
@@ -832,7 +845,6 @@ export const StorageService = {
         };
       }
 
-      // Check local/built-in exams when cloud returns not_found or transient error
       const localResult = this.checkExamStatus(rawCode);
       if (localResult.status !== 'not_found') {
         return {
@@ -870,56 +882,63 @@ export const StorageService = {
     }
   },
 
-  getSubmissions(examId?: string): StudentSubmission[] {
-    const saved = safeGetStorageItem(STORAGE_KEYS.SUBMISSIONS);
-    let subs = DEFAULT_SUBMISSIONS;
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
-          subs = parsed;
-        }
-      } catch {}
-    } else {
-      this.saveSubmissions(DEFAULT_SUBMISSIONS);
-    }
+  getSubmissions(examId?: string, uid?: string): StudentSubmission[] {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return [];
+    const subs = readJsonArray<StudentSubmission>(wsKey(targetUid, 'submissions')) || [];
     if (examId) {
-      return subs.filter(s => s.examId === examId);
+      return subs.filter((s) => s.examId === examId);
     }
     return subs;
   },
 
-  saveSubmissions(subs: StudentSubmission[]): void {
-    safeSetStorageItem(STORAGE_KEYS.SUBMISSIONS, JSON.stringify(subs));
+  saveSubmissions(subs: StudentSubmission[], uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    safeSetStorageItem(wsKey(targetUid, 'submissions'), JSON.stringify(subs));
   },
 
-  addSubmission(sub: StudentSubmission): void {
-    const subs = this.getSubmissions();
-    subs.unshift(sub);
-    this.saveSubmissions(subs);
+  addSubmission(sub: StudentSubmission, uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    const subs = this.getSubmissions(undefined, targetUid);
+    const filtered = subs.filter((s) => s.id !== sub.id);
+    this.saveSubmissions([sub, ...filtered], targetUid);
   },
 
-  // Export full JSON database for Admin/Teacher backup
-  exportDatabaseJson(): string {
+  // Export scoped JSON backup for Teacher/Admin
+  exportDatabaseJson(uid?: string): string {
+    const targetUid = uid ?? activeWorkspaceUid;
     const data = {
-      version: '1.0',
+      version: '2.0',
+      ownerId: targetUid || 'unowned',
       exportedAt: new Date().toISOString(),
-      folders: this.getFolders(),
-      questions: this.getQuestions(),
-      exams: this.getExams(),
-      submissions: this.getSubmissions(),
+      folders: this.getFolders(targetUid || undefined),
+      questions: this.getQuestions(targetUid || undefined),
+      exams: this.getExams(targetUid || undefined),
+      submissions: this.getSubmissions(undefined, targetUid || undefined),
     };
     return JSON.stringify(data, null, 2);
   },
 
-  // Restore database from JSON
-  restoreDatabaseJson(jsonString: string): boolean {
+  // Restore scoped JSON into a specific teacher's workspace
+  restoreDatabaseJson(jsonString: string, uid?: string): boolean {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return false;
     try {
       const data = JSON.parse(jsonString);
-      if (data.folders) this.saveFolders(data.folders);
-      if (data.questions) this.saveQuestions(data.questions);
-      if (data.exams) this.saveExams(data.exams);
-      if (data.submissions) this.saveSubmissions(data.submissions);
+      if (Array.isArray(data.folders)) {
+        this.saveFolders(data.folders.map((f: Folder) => ({ ...f, ownerId: targetUid })), targetUid);
+      }
+      if (Array.isArray(data.questions)) {
+        this.saveQuestions(data.questions.map((q: Question) => ({ ...q, ownerId: targetUid })), targetUid);
+      }
+      if (Array.isArray(data.exams)) {
+        this.saveExams(data.exams.map((e: Exam) => ({ ...e, ownerId: targetUid })), targetUid);
+      }
+      if (Array.isArray(data.submissions)) {
+        this.saveSubmissions(data.submissions, targetUid);
+      }
       return true;
     } catch (err) {
       console.error('Restore failed:', err);
@@ -927,11 +946,50 @@ export const StorageService = {
     }
   },
 
-  // Reset to default sample dataset
-  resetToDefaults(): void {
-    this.saveFolders(DEFAULT_FOLDERS);
-    this.saveQuestions(DEFAULT_QUESTIONS);
-    this.saveExams(DEFAULT_EXAMS);
-    this.saveSubmissions(DEFAULT_SUBMISSIONS);
-  }
+  // Seed sample Chemistry starter pack ONLY when a teacher explicitly asks for sample content
+  seedStarterSamplesForTeacher(uid: string, authorName: string): {
+    folders: Folder[];
+    questions: Question[];
+    exams: Exam[];
+  } {
+    const nowIso = new Date().toISOString();
+    const folders = DEFAULT_FOLDERS.map((f) => ({
+      ...f,
+      id: `${f.id}_${uid.slice(0, 6)}`,
+      ownerId: uid,
+      authorId: uid,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    }));
+    const folderIdMap = new Map<string, string>();
+    DEFAULT_FOLDERS.forEach((f, idx) => folderIdMap.set(f.id, folders[idx].id));
+
+    const questions = [...parsedDe5.questions, ...DEFAULT_QUESTIONS].map((q) => ({
+      ...q,
+      id: `${q.id}_${uid.slice(0, 6)}`,
+      folderId: q.folderId ? folderIdMap.get(q.folderId) || folders[0]?.id : folders[0]?.id,
+      ownerId: uid,
+      authorId: uid,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    }));
+
+    const exams = DEFAULT_EXAMS.slice(0, 2).map((ex, i) => ({
+      ...ex,
+      id: `${ex.id}_${uid.slice(0, 6)}`,
+      code: `${ex.code}-${uid.slice(0, 4).toUpperCase()}${i + 1}`,
+      folderId: ex.folderId ? folderIdMap.get(ex.folderId) || folders[0]?.id : folders[0]?.id,
+      ownerId: uid,
+      authorId: uid,
+      authorName: authorName || ex.authorName,
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    }));
+
+    this.saveFolders(folders, uid);
+    this.saveQuestions(questions, uid);
+    this.saveExams(exams, uid);
+    return { folders, questions, exams };
+  },
 };
+

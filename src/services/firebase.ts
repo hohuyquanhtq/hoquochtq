@@ -1,8 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
-  GoogleAuthProvider,
-  signInWithPopup,
   signOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -94,9 +92,6 @@ export function getFirebaseProjectInfo(): {
   };
 }
 
-const googleProvider = new GoogleAuthProvider();
-googleProvider.setCustomParameters({ prompt: 'select_account' });
-
 // Required Firestore connectivity probe on startup
 async function testFirestoreConnection(): Promise<void> {
   if (firebaseInitError) return;
@@ -167,7 +162,7 @@ export function handleFirestoreError(
 /**
  * Recursively removes undefined keys so Firestore never rejects payloads.
  */
-function stripUndefinedDeep<T>(value: T): T {
+export function stripUndefinedDeep<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((item) => stripUndefinedDeep(item)) as unknown as T;
   }
@@ -274,6 +269,9 @@ export function sanitizeExamForStudent(exam: Exam): Exam {
     showAnswersAfterSubmit: !!exam?.showAnswersAfterSubmit,
     showSolutionsAfterSubmit: !!exam?.showSolutionsAfterSubmit,
     allowReviewLater: !!exam?.allowReviewLater,
+    ...(Array.isArray(exam?.assignedClassCodes) && exam.assignedClassCodes.length > 0
+      ? { assignedClassCodes: exam.assignedClassCodes.slice(0, 100) }
+      : {}),
     authorId: '',
     authorName: (exam?.authorName || 'Giáo viên').slice(0, 150),
     createdAt: exam?.createdAt || '',
@@ -377,29 +375,25 @@ export function subscribeAuthState(callback: (user: FirebaseUser | null) => void
   }
 }
 
-export async function signInWithGoogleForCloudSync(): Promise<FirebaseUser> {
-  if (firebaseInitError) {
-    throw new Error(`Firebase chưa sẵn sàng: ${firebaseInitError}`);
-  }
-  const cred = await signInWithPopup(auth, googleProvider);
-  return cred.user;
-}
-
 export async function signOutFromCloud(): Promise<void> {
   if (firebaseInitError) return;
   await signOut(auth);
 }
 
 // --- Cloud Exam Sync (Teacher) ---
-export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean; reason?: string }> {
+export async function syncExamToFirestore(
+  exam: Exam,
+  explicitOwnerId?: string
+): Promise<{ synced: boolean; reason?: string }> {
   if (firebaseInitError) {
     return { synced: false, reason: 'firebase_not_initialized' };
   }
   const user = auth?.currentUser;
-  if (!user || !user.emailVerified) {
+  if (!user) {
     return { synced: false, reason: 'unauthenticated' };
   }
 
+  const targetOwnerId = (explicitOwnerId || exam.ownerId || user.uid).trim();
   const normalizedCode = normalizeExamCode(exam.code);
   if (!normalizedCode || !/^[A-Z0-9-]+$/.test(normalizedCode)) {
     return { synced: false, reason: 'invalid_code' };
@@ -433,8 +427,11 @@ export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean
     showAnswersAfterSubmit: !!exam.showAnswersAfterSubmit,
     showSolutionsAfterSubmit: !!exam.showSolutionsAfterSubmit,
     allowReviewLater: !!exam.allowReviewLater,
-    ownerId: user.uid,
-    authorId: exam.authorId || user.uid,
+    ...(Array.isArray(exam.assignedClassCodes) && exam.assignedClassCodes.length > 0
+      ? { assignedClassCodes: exam.assignedClassCodes.slice(0, 100) }
+      : {}),
+    ownerId: targetOwnerId,
+    authorId: exam.authorId || targetOwnerId,
     authorName: (exam.authorName || user.displayName || 'Giáo viên').slice(0, 150),
     createdAt: exam.createdAt || nowIso,
     updatedAt: nowIso,
@@ -462,7 +459,7 @@ export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean
     ...(exam.openAt ? { openAt: exam.openAt } : {}),
     ...(exam.closeAt ? { closeAt: exam.closeAt } : {}),
     authorName: masterPayload.authorName,
-    ownerId: user.uid,
+    ownerId: targetOwnerId,
     updatedAt: nowIso,
     serverUpdatedAt: serverTimestamp(),
   });
@@ -473,7 +470,7 @@ export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean
   const publicPayload = stripUndefinedDeep({
     ...sanitized,
     questions: masterPayload.isPublished ? sanitized.questions : [],
-    ownerId: user.uid,
+    ownerId: targetOwnerId,
     updatedAt: nowIso,
     serverUpdatedAt: serverTimestamp(),
   });
@@ -485,7 +482,7 @@ export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean
   const keyPayload = stripUndefinedDeep({
     examCode: normalizedCode,
     examId: safeId,
-    ownerId: user.uid,
+    ownerId: targetOwnerId,
     isPublished: masterPayload.isPublished,
     showAnswersAfterSubmit: masterPayload.showAnswersAfterSubmit,
     showSolutionsAfterSubmit: masterPayload.showSolutionsAfterSubmit,
@@ -506,7 +503,7 @@ export async function syncExamToFirestore(exam: Exam): Promise<{ synced: boolean
 export async function deleteExamFromFirestore(exam: Exam): Promise<void> {
   if (firebaseInitError) return;
   const user = auth?.currentUser;
-  if (!user || !user.emailVerified) return;
+  if (!user) return;
 
   const safeId = exam.id.replace(/[^a-zA-Z0-9_-]/g, '_');
   const normalizedCode = normalizeExamCode(exam.code);

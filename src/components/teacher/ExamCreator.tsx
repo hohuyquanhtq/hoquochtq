@@ -28,6 +28,8 @@ interface ExamCreatorProps {
   initialQuestions?: Question[];
   initialGrade?: ChemGrade;
   folders: Folder[];
+  currentUserId?: string;
+  currentUserName?: string;
   onSaveExam: (exam: Exam) => void;
   onCancel: () => void;
 }
@@ -37,6 +39,8 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   initialQuestions = [],
   initialGrade = '12',
   folders,
+  currentUserId,
+  currentUserName,
   onSaveExam,
   onCancel,
 }) => {
@@ -168,6 +172,9 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       cleanCode = `${cleanCode}${Math.floor(10 + Math.random() * 89)}`;
     }
 
+    const ownerId = currentUserId || auth.currentUser?.uid || 'teacher_1';
+    const resolvedAuthorName = currentUserName || auth.currentUser?.displayName || APP_CONFIG.APP_AUTHOR;
+
     const newExam: Exam = {
       id: `exam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       title: title.trim(),
@@ -194,22 +201,23 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       showAnswersAfterSubmit,
       showSolutionsAfterSubmit,
       allowReviewLater: true,
-      authorId: auth.currentUser?.uid || 'teacher_1',
-      authorName: APP_CONFIG.APP_AUTHOR,
+      ownerId,
+      authorId: ownerId,
+      authorName: resolvedAuthorName,
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     };
 
     // 1. Guaranteed database persistence with verified readback
-    const savedSuccess = StorageService.addExam(newExam);
+    const savedSuccess = StorageService.addExam(newExam, ownerId);
     if (!savedSuccess) {
       setFormError('Không thể lưu đề thi vào bộ nhớ. Vui lòng kiểm tra dung lượng trình duyệt và thử lại!');
       return;
     }
 
-    // Best-effort cloud sync when signed in
-    if (auth.currentUser?.emailVerified) {
-      void syncExamToFirestore(newExam).catch((err) => {
+    // Best-effort cloud sync when signed in with Email/Password
+    if (auth.currentUser) {
+      void syncExamToFirestore(newExam, ownerId).catch((err) => {
         console.warn('Background cloud exam sync failed:', err);
       });
     }

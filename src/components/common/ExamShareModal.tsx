@@ -29,7 +29,7 @@ import {
   getSavedProductionDomainOverride,
   setSavedProductionDomainOverride,
 } from '../../utils/urlHelper';
-import { auth, signInWithGoogleForCloudSync, syncExamToFirestore } from '../../services/firebase';
+import { auth, syncExamToFirestore } from '../../services/firebase';
 
 interface ExamShareModalProps {
   isOpen: boolean;
@@ -74,7 +74,7 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   useEffect(() => {
     if (!isOpen || !exam) return;
     setDomainInput(getSavedProductionDomainOverride());
-    if (auth.currentUser?.emailVerified) {
+    if (auth.currentUser) {
       setIsSyncingCloud(true);
       syncExamToFirestore(exam)
         .then((res) => setCloudSynced(res.synced))
@@ -165,11 +165,17 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   };
 
   const handleCloudSyncClick = async () => {
+    if (!auth.currentUser) {
+      setNotificationMsg({
+        type: 'info',
+        text: 'Vui lòng đăng nhập bằng tài khoản Giáo viên (Email & Mật khẩu) đã được duyệt để đồng bộ đề thi lên Cloud.',
+      });
+      setTimeout(() => setNotificationMsg(null), 4000);
+      return;
+    }
+
     setIsSyncingCloud(true);
     try {
-      if (!auth.currentUser) {
-        await signInWithGoogleForCloudSync();
-      }
       const res = await syncExamToFirestore(exam);
       setCloudSynced(res.synced);
       if (res.synced) {
@@ -180,14 +186,14 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
       } else {
         setNotificationMsg({
           type: 'info',
-          text: 'Vui lòng hoàn tất đăng nhập Google để đồng bộ đề thi lên Cloud.',
+          text: 'Chưa thể đồng bộ đề thi lên Cloud. Vui lòng kiểm tra trạng thái kích hoạt tài khoản giáo viên.',
         });
       }
     } catch (err) {
       console.error('Cloud sync failed:', err);
       setNotificationMsg({
         type: 'info',
-        text: 'Không thể đồng bộ Cloud lúc này. Vui lòng kiểm tra kết nối hoặc cửa sổ đăng nhập Google.',
+        text: 'Không thể đồng bộ Cloud lúc này. Vui lòng kiểm tra kết nối Internet và thử lại.',
       });
     } finally {
       setIsSyncingCloud(false);
@@ -551,7 +557,7 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                       <span className="text-[11px] text-slate-500">
                         {cloudSynced
                           ? 'Chỉ công bố nội dung câu hỏi; đáp án & lời giải được bảo mật riêng.'
-                          : 'Đăng nhập Google 1 lần để học sinh trên điện thoại / ẩn danh truy cập được đề mới tạo.'}
+                          : 'Nhấn Đồng bộ Cloud để đẩy đề thi lên Firestore cho học sinh truy cập từ mọi thiết bị.'}
                       </span>
                     </div>
                   </div>
@@ -562,7 +568,7 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                       disabled={isSyncingCloud}
                       className="px-3 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-[11px] font-bold shrink-0 shadow-2xs transition-colors"
                     >
-                      {isSyncingCloud ? 'Đang xử lý...' : 'Đồng bộ Cloud (Google)'}
+                      {isSyncingCloud ? 'Đang xử lý...' : 'Đồng bộ Cloud'}
                     </button>
                   )}
                 </div>

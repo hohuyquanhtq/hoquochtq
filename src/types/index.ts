@@ -5,14 +5,74 @@
 
 export type UserRole = 'admin' | 'teacher' | 'student';
 
+export type AccountStatus = 'pending' | 'active' | 'locked' | 'rejected';
+
 export interface User {
   id: string;
+  uid?: string;
   name: string;
   email: string;
   role: UserRole;
+  status?: AccountStatus;
+  phone?: string;
   avatar?: string;
   className?: string; // For students
   school?: string;
+  joinedClassIds?: string[];
+  approvedBy?: string;
+  approvedAt?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface Classroom {
+  id: string;
+  ownerId: string;
+  teacherName: string;
+  school?: string;
+  className: string;
+  classCode: string;
+  description?: string;
+  assignedExamCodes: string[];
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ClassJoinLookup {
+  classCode: string;
+  classId: string;
+  className: string;
+  teacherId: string;
+  teacherName: string;
+  school?: string;
+  assignedExamCodes: string[];
+  isActive: boolean;
+  updatedAt: string;
+}
+
+export interface ClassEnrollment {
+  id: string; // `${classId}_${studentId}`
+  classId: string;
+  classCode: string;
+  className: string;
+  teacherId: string;
+  teacherName: string;
+  studentId: string;
+  studentName: string;
+  studentEmail: string;
+  studentClassName?: string;
+  joinedAt: string;
+}
+
+export interface UploadRecord {
+  id: string;
+  ownerId: string;
+  fileName: string;
+  fileType: 'docx' | 'pdf' | 'text';
+  examTitle: string;
+  totalQuestions: number;
+  grade: ChemGrade;
   createdAt: string;
 }
 
@@ -81,6 +141,7 @@ export interface Question {
   imageUrl?: string;          // Sơ đồ thí nghiệm, bảng số liệu, đồ thị
   explanation?: string;       // Hướng dẫn giải chi tiết
   source?: string;            // Đề thi thử THPT Quốc gia 2024, Chuyên Sư Phạm...
+  ownerId?: string;
   authorId: string;
   createdAt: string;
   updatedAt: string;
@@ -107,8 +168,10 @@ export interface Folder {
   description?: string;
   grade?: ChemGrade;
   color?: string;
+  ownerId?: string;
   authorId: string;
   createdAt: string;
+  updatedAt?: string;
   itemCount?: number;
 }
 
@@ -154,7 +217,9 @@ export interface Exam {
   showAnswersAfterSubmit: boolean;
   showSolutionsAfterSubmit: boolean;
   allowReviewLater: boolean;
+  assignedClassCodes?: string[];
   
+  ownerId?: string;
   authorId: string;
   authorName: string;
   createdAt: string;
@@ -183,6 +248,7 @@ export interface StudentSubmission {
   examTitle: string;
   examCode: string;
   variantCode?: string;
+  ownerId?: string;
   
   studentId: string;
   studentName: string;

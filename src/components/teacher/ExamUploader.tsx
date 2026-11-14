@@ -43,11 +43,19 @@ import { isolateAnswerBlock, deepScanWithGemini } from '../../utils/answerExtrac
 interface ExamUploaderProps {
   onSaveToQuestionBank: (questions: Question[]) => void;
   onCreateExamFromParsed: (title: string, questions: Question[], grade: ChemGrade) => void;
+  onFileParsedRecord?: (record: {
+    fileName: string;
+    fileType: 'docx' | 'pdf' | 'text';
+    examTitle: string;
+    totalQuestions: number;
+    grade: ChemGrade;
+  }) => void;
 }
 
 export const ExamUploader: React.FC<ExamUploaderProps> = ({
   onSaveToQuestionBank,
   onCreateExamFromParsed,
+  onFileParsedRecord,
 }) => {
   const [inputText, setInputText] = useState('');
   const [selectedGrade, setSelectedGrade] = useState<ChemGrade>('12');
@@ -86,6 +94,13 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         const { text, result } = await parseDocxExam(buffer, selectedGrade);
         setInputText(text);
         setParsedResult(result);
+        onFileParsedRecord?.({
+          fileName: file.name,
+          fileType: 'docx',
+          examTitle: result.title,
+          totalQuestions: result.totalQuestions,
+          grade: selectedGrade,
+        });
       } else if (fileNameLower.endsWith('.pdf')) {
         const buffer = await file.arrayBuffer();
         let extracted = '';
@@ -105,12 +120,26 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setInputText(extracted);
         const result = parseExamContent(extracted, selectedGrade);
         setParsedResult(result);
+        onFileParsedRecord?.({
+          fileName: file.name,
+          fileType: 'pdf',
+          examTitle: result.title,
+          totalQuestions: result.totalQuestions,
+          grade: selectedGrade,
+        });
       } else {
         // Plain text, md, etc.
         const text = await file.text();
         setInputText(text);
         const result = parseExamContent(text, selectedGrade);
         setParsedResult(result);
+        onFileParsedRecord?.({
+          fileName: file.name,
+          fileType: 'text',
+          examTitle: result.title,
+          totalQuestions: result.totalQuestions,
+          grade: selectedGrade,
+        });
       }
       showToast('Đã phân tích file và tự động nhận dạng đáp án thành công!');
     } catch (err: any) {
