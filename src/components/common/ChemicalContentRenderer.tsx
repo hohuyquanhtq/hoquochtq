@@ -15,6 +15,7 @@
 import React from 'react';
 import katex from 'katex';
 import 'katex/contrib/mhchem';
+import { tokenizeRichContent, normalizeLatexExpression } from '../../utils/latexNormalizer';
 
 export interface ChemicalContentRendererProps {
   content?: string;
@@ -29,7 +30,8 @@ export const ChemicalContentRenderer: React.FC<ChemicalContentRendererProps> = (
   className = '',
   inline = false,
 }) => {
-  const rawText = content !== undefined ? content : text || '';
+  const rawCandidate = content !== undefined ? content : text;
+  const rawText = typeof rawCandidate === 'string' ? rawCandidate : '';
   if (!rawText) return null;
 
   // 1. Check if text contains Markdown table (including multi-column tables |---|---|)
@@ -167,160 +169,124 @@ function renderTextBlocks(text: string, className: string, inline: boolean): Rea
   );
 }
 
+function isSafeImageUrl(url: string): boolean {
+  const trimmed = (url || '').trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith('/')) return true;
+  if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(trimmed)) return true;
+  if (/^https?:\/\//i.test(trimmed)) return true;
+  return false;
+}
+
 function renderInlineTokens(text: string, depth: number): React.ReactNode {
   if (!text) return null;
   if (depth > 6) return renderSmartChemistry(text);
 
-  const masterSplitRegex =
-    /(\$\$[\s\S]*?\$\$|\\\[[\s\S]*?\\\]|(?<!\\)\$[^$\n]+(?<!\\)\$|\\\([\s\S]*?\\\)|\\x(?:right|left|leftrightarrow|rightleftharpoons|rightleftarrows|Rightarrow|Leftarrow|Leftrightarrow|longequal)(?:\[[^\]]*\])?\{[^}]*\}|<sub>[\s\S]*?<\/sub>|<sup>[\s\S]*?<\/sup>|<u>[\s\S]*?<\/u>|<s>[\s\S]*?<\/s>|<b>[\s\S]*?<\/b>|<strong>[\s\S]*?<\/strong>|<i>[\s\S]*?<\/i>|<em>[\s\S]*?<\/em>|<br\s*\/?>|<img\b[^>]*\/>|!\[[^\]]*\]\([^\)]+\)|\*\*\*[^\s*](?:[^*\n]*?[^\s*])?\*\*\*|\*\*[^\s*](?:[^*\n]*?[^\s*])?\*\*)/gi;
+  const segments = tokenizeRichContent(text);
 
-  const parts = text.split(masterSplitRegex);
-
-  return parts.map((part, index) => {
-    if (!part) return null;
-
-    // 1. Display Math: $$ ... $$ or \[ ... \]
-    if ((part.startsWith('$$') && part.endsWith('$$')) || (part.startsWith('\\[') && part.endsWith('\\]'))) {
-      const rawMath = part.slice(2, -2);
-      return <KatexMathBlock key={index} math={rawMath} displayMode={true} />;
+  return segments.map((seg, index) => {
+    if (seg.type === 'math') {
+      return <KatexMathBlock key={index} math={seg.value} displayMode={seg.displayMode} />;
     }
 
-    // 2. Inline Math: $ ... $ or \( ... \)
-    if ((part.startsWith('$') && part.endsWith('$')) || (part.startsWith('\\(') && part.endsWith('\\)'))) {
-      const rawMath = part.startsWith('$') ? part.slice(1, -1) : part.slice(2, -2);
-      return <KatexMathBlock key={index} math={rawMath} displayMode={false} />;
+    if (seg.type === 'html_tag') {
+      if (seg.tag === 'br') return <br key={index} />;
+      if (seg.tag === 'sub') {
+        return (
+          <sub key={index} className="text-[0.73em] font-semibold text-slate-800">
+            {seg.inner.replace(/<[^>]+>/g, '')}
+          </sub>
+        );
+      }
+      if (seg.tag === 'sup') {
+        return (
+          <sup key={index} className="text-[0.73em] font-bold text-blue-800">
+            {seg.inner.replace(/<[^>]+>/g, '')}
+          </sup>
+        );
+      }
+      if (seg.tag === 'u') {
+        return (
+          <u key={index} className="underline decoration-slate-500 underline-offset-2">
+            {renderInlineTokens(seg.inner, depth + 1)}
+          </u>
+        );
+      }
+      if (seg.tag === 's') {
+        return (
+          <s key={index} className="line-through text-slate-500">
+            {renderInlineTokens(seg.inner, depth + 1)}
+          </s>
+        );
+      }
+      if (seg.tag === 'b') {
+        return (
+          <strong key={index} className="font-bold">
+            {renderInlineTokens(seg.inner, depth + 1)}
+          </strong>
+        );
+      }
+      if (seg.tag === 'i') {
+        return (
+          <em key={index} className="italic">
+            {renderInlineTokens(seg.inner, depth + 1)}
+          </em>
+        );
+      }
+      return null;
     }
 
-    // 2b. Unwrapped extensible arrow command e.g. \xrightarrow{t^\circ}
-    if (/^\\x(?:right|left|leftrightarrow|rightleftharpoons|rightleftarrows|Rightarrow|Leftarrow|Leftrightarrow|longequal)/i.test(part)) {
-      return <KatexMathBlock key={index} math={part} displayMode={false} />;
-    }
-
-    // 3. HTML Subscript: <sub>...</sub>
-    const subMatch = part.match(/^<sub>([\s\S]*?)<\/sub>$/i);
-    if (subMatch) {
-      return (
-        <sub key={index} className="text-[0.73em] font-semibold text-slate-800">
-          {subMatch[1].replace(/<[^>]+>/g, '')}
-        </sub>
-      );
-    }
-
-    // 4. HTML Superscript: <sup>...</sup>
-    const supMatch = part.match(/^<sup>([\s\S]*?)<\/sup>$/i);
-    if (supMatch) {
-      return (
-        <sup key={index} className="text-[0.73em] font-bold text-blue-800">
-          {supMatch[1].replace(/<[^>]+>/g, '')}
-        </sup>
-      );
-    }
-
-    // 5. HTML Underline / Strike / Bold / Italic / Break
-    const uMatch = part.match(/^<u>([\s\S]*?)<\/u>$/i);
-    if (uMatch) {
-      return (
-        <u key={index} className="underline decoration-slate-500 underline-offset-2">
-          {renderInlineTokens(uMatch[1], depth + 1)}
-        </u>
-      );
-    }
-
-    const sMatch = part.match(/^<s>([\s\S]*?)<\/s>$/i);
-    if (sMatch) {
-      return (
-        <s key={index} className="line-through text-slate-500">
-          {renderInlineTokens(sMatch[1], depth + 1)}
-        </s>
-      );
-    }
-
-    const bMatch = part.match(/^<(?:b|strong)>([\s\S]*?)<\/(?:b|strong)>$/i);
-    if (bMatch) {
+    if (seg.type === 'md_style') {
+      if (seg.style === 'bold_italic') {
+        return (
+          <strong key={index} className="font-bold italic">
+            {renderInlineTokens(seg.inner, depth + 1)}
+          </strong>
+        );
+      }
       return (
         <strong key={index} className="font-bold">
-          {renderInlineTokens(bMatch[1], depth + 1)}
+          {renderInlineTokens(seg.inner, depth + 1)}
         </strong>
       );
     }
 
-    const iMatch = part.match(/^<(?:i|em)>([\s\S]*?)<\/(?:i|em)>$/i);
-    if (iMatch) {
-      return (
-        <em key={index} className="italic">
-          {renderInlineTokens(iMatch[1], depth + 1)}
-        </em>
-      );
-    }
-
-    if (/^<br\s*\/?>$/i.test(part)) {
-      return <br key={index} />;
-    }
-
-    // 6. Markdown Bold+Italic (***...***) and Bold (**...**)
-    if (part.startsWith('***') && part.endsWith('***') && part.length > 6) {
-      return (
-        <strong key={index} className="font-bold italic">
-          {renderInlineTokens(part.slice(3, -3), depth + 1)}
-        </strong>
-      );
-    }
-
-    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
-      return (
-        <strong key={index} className="font-bold">
-          {renderInlineTokens(part.slice(2, -2), depth + 1)}
-        </strong>
-      );
-    }
-
-    // 7. Markdown Image: ![alt](url)
-    const mdImgMatch = part.match(/^!\[([^\]]*)\]\(([^\)]+)\)$/i);
-    if (mdImgMatch) {
+    if (seg.type === 'image') {
+      if (!isSafeImageUrl(seg.src)) {
+        return <span key={index} className="text-slate-500 text-xs">[{seg.alt}]</span>;
+      }
       return (
         <span key={index} className="my-2 block text-center">
           <img
-            src={mdImgMatch[2]}
-            alt={mdImgMatch[1] || 'Hình ảnh minh họa'}
+            src={seg.src}
+            alt={seg.alt || 'Hình ảnh minh họa'}
             className="max-h-72 max-w-full rounded-xl border border-slate-200 shadow-xs inline-block bg-white p-1"
           />
         </span>
       );
     }
 
-    // 8. HTML Image: <img ... />
-    if (/^<img\b/i.test(part)) {
-      const srcMatch = part.match(/src="([^"]+)"/i);
-      const altMatch = part.match(/alt="([^"]*)"/i);
-      if (srcMatch) {
-        return (
-          <span key={index} className="my-2 block text-center">
-            <img
-              src={srcMatch[1]}
-              alt={altMatch ? altMatch[1] : 'Hình ảnh'}
-              className="max-h-72 max-w-full rounded-xl border border-slate-200 shadow-xs inline-block bg-white p-1"
-            />
-          </span>
-        );
-      }
+    if (seg.type === 'text') {
+      // Plain text with Chemistry Auto-Formatter
+      return <span key={index}>{renderSmartChemistry(seg.value)}</span>;
     }
 
-    // 9. Plain text with Chemistry Auto-Formatter (unescape literal \$ if present)
-    return <span key={index}>{renderSmartChemistry(part.replace(/\\\$/g, '$'))}</span>;
+    return null;
   });
 }
 
 /**
- * KaTeX Safe Math Element (Handles KaTeX errors gracefully and supports mhchem \ce / \pu)
+ * KaTeX Safe Math Element (normalizes escaped syntax, keeps inline baseline aligned, and falls back gracefully)
  */
 const KatexMathBlock: React.FC<{ math: string; displayMode: boolean }> = ({ math, displayMode }) => {
-  const cleanMath = math.trim();
-  if (!cleanMath) return null;
+  const normalized = normalizeLatexExpression(math);
+  if (!normalized) return null;
 
-  const renderWithKatex = (expr: string) =>
+  const renderWithKatex = (expr: string, strictErr: boolean) =>
     katex.renderToString(expr, {
       displayMode,
-      throwOnError: true,
+      throwOnError: strictErr,
+      errorColor: '#b91c1c',
       strict: false,
       trust: false,
     });
@@ -328,34 +294,31 @@ const KatexMathBlock: React.FC<{ math: string; displayMode: boolean }> = ({ math
   try {
     let html: string;
     try {
-      html = renderWithKatex(cleanMath);
+      html = renderWithKatex(normalized, true);
     } catch {
-      // Retry after escaping unescaped '%' which would otherwise comment out trailing braces
-      const repaired = cleanMath.replace(/(?<!\\)%/g, '\\%');
-      try {
-        html = renderWithKatex(repaired);
-      } catch {
-        html = katex.renderToString(repaired, {
-          displayMode,
-          throwOnError: false,
-          strict: false,
-        });
-      }
+      // Fallback: strip stray unescaped backslashes before underscores and retry strict render before falling back to safe text badge
+      const relaxed = normalized.replace(/\\_(?=[A-Za-z0-9{])/g, '_');
+      html = renderWithKatex(relaxed, true);
     }
 
     const Tag = displayMode ? 'div' : 'span';
     return (
       <Tag
         className={`${
-          displayMode ? 'my-2 block overflow-x-auto text-center hq-katex-display' : 'inline-block px-0.5 align-middle hq-katex-inline'
+          displayMode
+            ? 'my-2 block overflow-x-auto text-center hq-katex-display'
+            : 'inline-block px-0.5 align-baseline hq-katex-inline'
         } text-slate-900 select-text`}
         dangerouslySetInnerHTML={{ __html: html }}
       />
     );
   } catch {
     return (
-      <span className="font-mono text-purple-700 font-medium px-1 bg-purple-50 rounded">
-        ${cleanMath}$
+      <span
+        className="font-mono text-amber-800 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded text-[0.9em]"
+        title="Công thức không thể phân tích hoàn toàn bằng KaTeX — đang hiển thị dạng dự phòng"
+      >
+        {normalized}
       </span>
     );
   }
@@ -494,11 +457,41 @@ function formatLineChemistry(line: string): React.ReactNode {
             return <span key={cIdx}>{chunk}</span>;
           }
 
-          if (isChemicalFormulaToken(core)) {
+          // Handle Unicode chemistry & equilibrium constants like K_C, [H₂]·[Br₂], [HBr]², SO₄²⁻
+          if (core.includes('·') && /[\[\]₀-₉¹²³⁰⁴⁵⁶⁷⁸⁹⁺⁻\d]/.test(core)) {
             return (
               <React.Fragment key={cIdx}>
                 {lead && <span>{lead}</span>}
-                <FormattedChemicalFormula formula={core} />
+                {core.split('·').map((subTok, stIdx) => (
+                  <React.Fragment key={stIdx}>
+                    {stIdx > 0 && <span className="px-0.5 font-bold text-slate-700">·</span>}
+                    {formatCompoundOrConstant(subTok)}
+                  </React.Fragment>
+                ))}
+                {trail && <span>{trail}</span>}
+              </React.Fragment>
+            );
+          }
+
+          if (isEquilibriumOrVarSubscript(core)) {
+            const [base, subPart] = core.split('_');
+            return (
+              <React.Fragment key={cIdx}>
+                {lead && <span>{lead}</span>}
+                <span className="font-semibold text-slate-900">
+                  <em className="italic font-serif">{base}</em>
+                  <sub className="text-[0.73em] font-semibold text-slate-800">{subPart}</sub>
+                </span>
+                {trail && <span>{trail}</span>}
+              </React.Fragment>
+            );
+          }
+
+          if (isChemicalFormulaToken(normalizeUnicodeSubSup(core))) {
+            return (
+              <React.Fragment key={cIdx}>
+                {lead && <span>{lead}</span>}
+                <FormattedChemicalFormula formula={normalizeUnicodeSubSup(core)} />
                 {trail && <span>{trail}</span>}
               </React.Fragment>
             );
@@ -519,6 +512,65 @@ function formatLineChemistry(line: string): React.ReactNode {
       </span>
     );
   });
+}
+
+const UNICODE_SUB_MAP: Record<string, string> = {
+  '₀': '0',
+  '₁': '1',
+  '₂': '2',
+  '₃': '3',
+  '₄': '4',
+  '₅': '5',
+  '₆': '6',
+  '₇': '7',
+  '₈': '8',
+  '₉': '9',
+};
+
+const UNICODE_SUP_MAP: Record<string, string> = {
+  '⁰': '0',
+  '¹': '1',
+  '²': '2',
+  '³': '3',
+  '⁴': '4',
+  '⁵': '5',
+  '⁶': '6',
+  '⁷': '7',
+  '⁸': '8',
+  '⁹': '9',
+  '⁺': '+',
+  '⁻': '-',
+};
+
+function normalizeUnicodeSubSup(token: string): string {
+  let out = token.replace(/[₀-₉]/g, ch => UNICODE_SUB_MAP[ch] || ch);
+  out = out.replace(/[¹²³⁰⁴⁵⁶⁷⁸⁹⁺⁻]+/g, seq => {
+    const ascii = seq
+      .split('')
+      .map(c => UNICODE_SUP_MAP[c] || c)
+      .join('');
+    return `^{${ascii}}`;
+  });
+  return out;
+}
+
+function isEquilibriumOrVarSubscript(token: string): boolean {
+  return /^(?:K|pK)_(?:[CcPpAaBbWw]|sp|eq|b|a)$/i.test(token);
+}
+
+function formatCompoundOrConstant(tok: string): React.ReactNode {
+  const { lead, core, trail } = peelOuterPunctuation(tok);
+  const norm = normalizeUnicodeSubSup(core);
+  if (isChemicalFormulaToken(norm)) {
+    return (
+      <>
+        {lead && <span>{lead}</span>}
+        <FormattedChemicalFormula formula={norm} />
+        {trail && <span>{trail}</span>}
+      </>
+    );
+  }
+  return tok;
 }
 
 /**
@@ -593,26 +645,26 @@ function isChemicalFormulaToken(rawToken: string): boolean {
   }
 
   // Organic structural formulas with hyphens, equals, triples e.g. CH3-CH2-OH, CH2=CH2, CH≡CH
-  if (/[A-Z][a-z0-9]*[–\-=≡][A-Z]/.test(token) && /^[A-Za-z0-9()\[\]–\-=≡+^]+$/.test(token)) {
+  if (/[A-Z][a-z0-9]*[–\-=≡][A-Z]/.test(token) && /^[A-Za-z0-9()\[\]–\-=≡+^{}]+$/.test(token)) {
     return true;
   }
 
-  // Complex ions e.g. [Cu(NH3)4]2+, [Cu(NH3)4]^2+, [Ag(NH3)2]+
-  if (/^\[[A-Z][A-Za-z0-9()]+\](?:\^?[0-9]*[+-]?)$/.test(token)) {
+  // Concentration / complex ions e.g. [HBr]^2, [H2], [Cu(NH3)4]2+, [Cu(NH3)4]^2+, [Ag(NH3)2]+
+  if (/^\[[A-Z][A-Za-z0-9()]+\](?:\^\{?[0-9]*[+-]?\}?|\^?[0-9]*[+-]?)$/.test(token)) {
     return true;
   }
 
-  // Element with digits e.g. H2, CO2, H2SO4, C6H12O6, Fe2O3, KMnO4, Fe(NO3)3
+  // Element with digits or caret superscripts e.g. H2, CO2, H2SO4, C6H12O6, Fe2O3, KMnO4, Fe(NO3)3, Fe^{3+}
   const hasElementAndDigits = /^[A-Z][a-z]?[0-9]/.test(token) || /[A-Z][a-z]?[0-9]+[A-Z\)]/.test(token) || /\)[0-9]+/.test(token);
 
-  // Element with charges e.g. Fe3+, Cu2+, Al3+, Cl-, Na+, SO42-, SO4^2-
-  const hasCharge = /(?:[0-9]*[+-]|\^[0-9]*[+-])$/.test(token);
+  // Element with charges e.g. Fe3+, Cu2+, Al3+, Cl-, Na+, SO42-, SO4^2-, Fe^{3+}
+  const hasCharge = /(?:[0-9]*[+-]|\^\{?[0-9]*[+-]?\}?)$/.test(token);
 
   // Parentheses in formula e.g. Ca(OH)2, Ba(NO3)2, Al2(SO4)3, Fe(NO3)3
   const hasFormulaParens = /^[A-Z][a-z]?\d*\([A-Za-z0-9]+\)\d*/.test(token);
 
   // Valid chemical formula characters (also allow leading/trailing stoichiometry or caret charges)
-  const validCharsOnly = /^[A-Z\[][A-Za-z0-9()\[\]+\-^–=≡]+$/.test(token);
+  const validCharsOnly = /^[A-Z\[][A-Za-z0-9()\[\]+\-^–=≡{}]+$/.test(token);
 
   return validCharsOnly && (hasElementAndDigits || hasCharge || hasFormulaParens);
 }

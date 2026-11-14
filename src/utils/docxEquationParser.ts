@@ -1608,6 +1608,7 @@ function mapRightDelimiter(chr: string): string {
  */
 function cleanMathText(text: string): string {
   if (!text) return '';
+  text = text.replace(/[\r\n]+/g, ' ');
 
   // 1. Protect segments containing Vietnamese diacritics (plus optional surrounding parens/spaces like " (đặc) ")
   //    so KaTeX preserves Vietnamese accents & spaces instead of collapsing math-italic letters.

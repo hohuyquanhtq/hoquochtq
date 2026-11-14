@@ -527,13 +527,13 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
                 const relatedQ = parsedResult.questions.find(q => q.code?.includes(`P2_C${qNum}`) || q.content?.includes(`Câu ${qNum}`));
                 return (
                   <div key={qNum} className="border border-slate-200 rounded-xl p-4 bg-slate-50/40 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="font-extrabold text-sm text-indigo-900">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-extrabold text-sm text-indigo-900 shrink-0">
                         Câu {qNum} (Phần II - Đúng / Sai)
                       </span>
-                      <span className="text-xs text-slate-500">
-                        {relatedQ?.content ? relatedQ.content.slice(0, 80) + '...' : ''}
-                      </span>
+                      <div className="text-xs text-slate-500 line-clamp-1">
+                        {relatedQ?.content ? <ChemRenderer text={relatedQ.content} inline /> : null}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
@@ -549,11 +549,11 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
                             className="bg-white p-2.5 rounded-lg border border-slate-200 flex items-center justify-between gap-3 shadow-2xs"
                           >
                             <div className="flex items-start gap-2 min-w-0">
-                              <span className="font-bold text-xs font-mono text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">
+                              <span className="font-bold text-xs font-mono text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded shrink-0">
                                 {sub})
                               </span>
                               <span className="text-xs text-slate-700 line-clamp-2">
-                                {stmtObj?.statement || `Lệnh hỏi ý ${sub}`}
+                                {stmtObj?.statement ? <ChemRenderer text={stmtObj.statement} inline /> : `Lệnh hỏi ý ${sub}`}
                               </span>
                             </div>
 

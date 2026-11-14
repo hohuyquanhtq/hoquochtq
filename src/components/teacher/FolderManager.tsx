@@ -12,6 +12,7 @@ import {
   BookOpen,
   FileCheck
 } from 'lucide-react';
+import { ChemRenderer } from '../../utils/chemRenderer';
 
 interface FolderManagerProps {
   folders: Folder[];
@@ -238,7 +239,9 @@ export const FolderManager: React.FC<FolderManagerProps> = ({
                         {q.type === 'part1_single_choice' ? 'Phần I' : q.type === 'part2_true_false' ? 'Phần II' : 'Phần III'}
                       </span>
                     </div>
-                    <p className="text-slate-800 line-clamp-2">{q.content}</p>
+                    <div className="text-slate-800 line-clamp-2">
+                      <ChemRenderer text={q.content} inline />
+                    </div>
                   </div>
                 ))}
               </div>
