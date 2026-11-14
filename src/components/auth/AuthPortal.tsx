@@ -189,8 +189,11 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   if (authState === 'profile_read_error') {
     const activeDiag = authDiagnostic || syncDiag?.userDocError || errorDiag;
     const headingByCategory: Record<string, string> = {
-      read_permission_denied: 'Không đủ quyền đọc hồ sơ Firestore',
-      write_permission_denied: 'Không đủ quyền ghi hồ sơ Firestore',
+      read_permission_denied: 'Không đủ quyền đọc hồ sơ Firestore (Permission denied)',
+      write_permission_denied: 'Không đủ quyền ghi hồ sơ Firestore (Permission denied)',
+      profile_creation_failed: 'Tạo hồ sơ Firestore thất bại (Profile creation failed)',
+      admin_not_initialized: 'Quyền Admin chưa được khởi tạo (Admin role not initialized)',
+      authentication_required: 'Yêu cầu xác thực đăng nhập (Authentication required)',
       project_mismatch: 'Sai cấu hình Firebase Project hoặc Database ID',
       network_error: 'Lỗi kết nối mạng tới Firebase Firestore',
     };
@@ -693,11 +696,16 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
               <>
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
-                    Họ và tên hiển thị {syncDiag?.existingName ? '(giữ nguyên nếu đã có)' : <span className="text-rose-500">*</span>}
+                    Họ và tên hiển thị{' '}
+                    {hasAdminAuthority || syncDiag?.existingName ? (
+                      '(tùy chọn / giữ nguyên nếu đã có)'
+                    ) : (
+                      <span className="text-rose-500">*</span>
+                    )}
                   </label>
                   <input
                     type="text"
-                    required={!syncDiag?.existingName}
+                    required={!hasAdminAuthority && !syncDiag?.existingName}
                     value={recoverName}
                     onChange={(e) => setRecoverName(e.target.value)}
                     placeholder="Nhập họ và tên của bạn"

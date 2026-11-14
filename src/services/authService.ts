@@ -73,6 +73,9 @@ export type ProfileErrorCategory =
   | 'profile_not_found'
   | 'read_permission_denied'
   | 'write_permission_denied'
+  | 'authentication_required'
+  | 'admin_not_initialized'
+  | 'profile_creation_failed'
   | 'pending_approval'
   | 'locked'
   | 'rejected'
@@ -178,16 +181,22 @@ export function classifyFirestoreOperationError(
   ) {
     category = 'network_error';
     userMessage = `Lỗi kết nối mạng tới máy chủ Firebase Firestore khi thực hiện ${operation} ${path} (mã lỗi: ${code}). Vui lòng kiểm tra Internet và thử lại.`;
+  } else if (code.includes('unauthenticated')) {
+    category = 'authentication_required';
+    userMessage = `Yêu cầu đăng nhập Firebase Authentication (Authentication required) trước khi ${operation} ${path} (mã lỗi: ${code}).`;
   } else if (
     code.includes('permission-denied') ||
     rawMessage.includes('missing or insufficient permissions')
   ) {
     if (operation === 'GET' || operation === 'LIST') {
       category = 'read_permission_denied';
-      userMessage = `Không đủ quyền đọc hồ sơ (${operation} ${path}, mã lỗi: ${code}). Vui lòng kiểm tra Firestore Security Rules hoặc trạng thái tài khoản.`;
+      userMessage = `Không đủ quyền đọc hồ sơ — Permission denied / Missing or insufficient permissions (${operation} ${path}, mã lỗi: ${code}). Vui lòng kiểm tra Firestore Security Rules hoặc trạng thái tài khoản.`;
+    } else if (operation === 'CREATE') {
+      category = 'profile_creation_failed';
+      userMessage = `Không thể tạo hồ sơ trên Firestore — Profile creation failed: Permission denied / Missing or insufficient permissions (${operation} ${path}, mã lỗi: ${code}).`;
     } else {
       category = 'write_permission_denied';
-      userMessage = `Không đủ quyền ghi hồ sơ (${operation} ${path}, mã lỗi: ${code}). Nếu đang đồng bộ tài khoản Admin, cần tạo trước document admins/${uid || '{uid}'} hoặc Admin Custom Claim trên Firebase.`;
+      userMessage = `Không đủ quyền ghi hồ sơ — Permission denied / Missing or insufficient permissions (${operation} ${path}, mã lỗi: ${code}).`;
     }
   }
 
@@ -586,8 +595,7 @@ export async function inspectAccountSyncStatus(
 
   const hasTrustedAdminAuthority =
     adminInfo.adminDocActive ||
-    adminInfo.hasAdminClaim ||
-    (existingRole === 'admin' && existingStatus === 'active');
+    adminInfo.hasAdminClaim;
 
   return {
     uid: fbUser.uid,
@@ -651,6 +659,22 @@ export async function fetchUserProfileFromFirestore(
     return null;
   }
 
+  // If users/{uid} declares admin role without trusted server authority (admins/{uid} or Claim),
+  // surface explicit admin_not_initialized error instead of opening a broken Admin UI.
+  if (raw.role === 'admin' && !hasTrustedAdminAuthority) {
+    const projectInfo = getFirebaseProjectInfo();
+    throw new ProfileAccessError({
+      category: 'admin_not_initialized',
+      code: 'admin-role-not-initialized',
+      operation: 'GET',
+      path: `admins/${fbUser.uid}`,
+      projectId: projectInfo.projectId,
+      databaseId: projectInfo.databaseId,
+      uid: fbUser.uid,
+      userMessage: `Quyền Admin chưa được khởi tạo trên máy chủ (Admin role not initialized). Tài khoản có role: "admin" tại ${userPath} nhưng chưa có document admins/${fbUser.uid} hợp lệ hoặc Admin Custom Claim.`,
+    });
+  }
+
   // If user holds trusted server admin authority but their users/{uid} still says student/teacher,
   // route to profile sync so users/{uid} is properly reconciled to admin/active on Firestore.
   if (hasTrustedAdminAuthority && (raw.role !== 'admin' || raw.status !== 'active')) {
@@ -665,7 +689,21 @@ export async function syncUserProfileByUid(
   options: SyncProfileByUidOptions
 ): Promise<AuthActionResult> {
   if (firebaseInitError || !fbUser?.uid) {
-    return { success: false, errorMessage: 'Firebase chưa được khởi tạo hoặc chưa có phiên đăng nhập.' };
+    const projectInfo = getFirebaseProjectInfo();
+    const diag: ProfileDiagnosticError = {
+      category: 'authentication_required',
+      code: 'authentication-required',
+      operation: 'GET',
+      path: 'users/{uid}',
+      projectId: projectInfo.projectId,
+      databaseId: projectInfo.databaseId,
+      userMessage: 'Chưa xác thực đăng nhập Firebase (Authentication required). Vui lòng đăng nhập lại.',
+    };
+    return {
+      success: false,
+      errorMessage: diag.userMessage,
+      errorDiagnostic: diag,
+    };
   }
 
   const uid = (auth.currentUser || fbUser).uid;
@@ -693,10 +731,8 @@ export async function syncUserProfileByUid(
     ]);
 
     const existingRaw = existingSnap.exists() ? (existingSnap.data() as Record<string, unknown>) : null;
-    const existingIsActiveAdmin =
-      existingRaw?.role === 'admin' && existingRaw?.status === 'active';
     const hasTrustedAdminAuthority =
-      adminInfo.adminDocActive || adminInfo.hasAdminClaim || existingIsActiveAdmin;
+      adminInfo.adminDocActive || adminInfo.hasAdminClaim;
 
     const nowIso = new Date().toISOString();
     let warningMessage: string | undefined;
@@ -704,16 +740,27 @@ export async function syncUserProfileByUid(
     if (existingSnap.exists() && existingRaw) {
       // 3A. Preserve all existing valid fields; only update missing/required fields via updateDoc (never overwrite whole doc)
       if (options.intendedRole === 'admin' && !hasTrustedAdminAuthority) {
+        const projectInfo = getFirebaseProjectInfo();
+        const diag: ProfileDiagnosticError = {
+          category: 'admin_not_initialized',
+          code: 'admin-role-not-initialized',
+          operation: 'GET',
+          path: `admins/${currentFbUser.uid}`,
+          projectId: projectInfo.projectId,
+          databaseId: projectInfo.databaseId,
+          uid: currentFbUser.uid,
+          userMessage: `Quyền Admin chưa được khởi tạo (Admin role not initialized): Tài khoản ${cleanEmail} (UID: ${currentFbUser.uid}) chưa có document admins/${currentFbUser.uid} hoặc Admin Custom Claim trên Firebase.`,
+        };
         return {
           success: false,
-          errorMessage:
-            `Tài khoản ${cleanEmail} (UID: ${currentFbUser.uid}) chưa được xác nhận quyền Admin hợp lệ trên máy chủ (chưa có document admins/${currentFbUser.uid} hoặc Admin Custom Claim).`,
+          errorMessage: diag.userMessage,
+          errorDiagnostic: diag,
         };
       }
 
       const existingName = typeof existingRaw.name === 'string' ? existingRaw.name.trim() : '';
       const candidateName = existingName || options.name?.trim() || currentFbUser.displayName?.trim() || '';
-      if (candidateName.length < 2) {
+      if (!hasTrustedAdminAuthority && candidateName.length < 2) {
         return {
           success: false,
           errorMessage: 'Hồ sơ hiện tại còn thiếu Họ và tên. Vui lòng nhập Họ và tên (ít nhất 2 ký tự) để hoàn tất đồng bộ.',
@@ -727,7 +774,7 @@ export async function syncUserProfileByUid(
 
       if (!existingRaw.uid) patchPayload.uid = currentFbUser.uid;
       if (!existingRaw.email) patchPayload.email = cleanEmail;
-      if (!existingName) patchPayload.name = candidateName.slice(0, 150);
+      if (!existingName && candidateName) patchPayload.name = candidateName.slice(0, 150);
       if (!existingRaw.createdAt) patchPayload.createdAt = nowIso;
       if (!existingRaw.serverCreatedAt) patchPayload.serverCreatedAt = serverTimestamp();
 
@@ -753,26 +800,30 @@ export async function syncUserProfileByUid(
       if (options.intendedRole === 'admin' || hasTrustedAdminAuthority) {
         // Security: NEVER create an admin profile from client without trusted server marker/claim!
         if (!hasTrustedAdminAuthority) {
+          const projectInfo = getFirebaseProjectInfo();
+          const diag: ProfileDiagnosticError = {
+            category: 'admin_not_initialized',
+            code: 'admin-role-not-initialized',
+            operation: 'GET',
+            path: `admins/${currentFbUser.uid}`,
+            projectId: projectInfo.projectId,
+            databaseId: projectInfo.databaseId,
+            uid: currentFbUser.uid,
+            userMessage: `Quyền Admin chưa được khởi tạo (Admin role not initialized): Không thể tự cấp quyền Admin từ trình duyệt khi chưa có document admins/${currentFbUser.uid} hoặc Admin Custom Claim trên Firebase.`,
+          };
           return {
             success: false,
-            errorMessage:
-              `Không thể tự cấp quyền Admin từ trình duyệt: Tài khoản ${cleanEmail} (UID: ${currentFbUser.uid}) chưa có document admins/${currentFbUser.uid} hoặc Admin Custom Claim trên Firebase. Vui lòng thiết lập admins/${currentFbUser.uid} trên Firebase Console hoặc chạy script Admin SDK rồi bấm "Đồng bộ hồ sơ" lại.`,
+            errorMessage: diag.userMessage,
+            errorDiagnostic: diag,
           };
         }
 
         const confirmedName = options.name?.trim() || currentFbUser.displayName?.trim() || '';
-        if (confirmedName.length < 2) {
-          return {
-            success: false,
-            errorMessage:
-              'Vui lòng nhập Họ và tên xác nhận (ít nhất 2 ký tự) trước khi đồng bộ hồ sơ Admin.',
-          };
-        }
 
         const adminProfilePayload = stripUndefinedDeep({
           uid: currentFbUser.uid,
           email: cleanEmail,
-          name: confirmedName.slice(0, 150),
+          ...(confirmedName ? { name: confirmedName.slice(0, 150) } : {}),
           role: 'admin' as const,
           status: 'active' as const,
           ...(options.phone?.trim() ? { phone: options.phone.trim().slice(0, 32) } : {}),

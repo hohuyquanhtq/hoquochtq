@@ -275,13 +275,13 @@ async function main() {
     (existingUser.name && String(existingUser.name).trim()) ||
     args.name ||
     (authUser.displayName && String(authUser.displayName).trim()) ||
-    actualEmail.split('@')[0];
+    '';
 
   const nextUserFields = {
     ...existingUser,
     uid: args.uid,
     email: actualEmail,
-    name: resolvedName,
+    ...(resolvedName ? { name: resolvedName } : {}),
     role: 'admin',
     status: 'active',
     createdAt: existingUser.createdAt || nowIso,
