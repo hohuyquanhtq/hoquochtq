@@ -13,12 +13,20 @@ import {
 import {
   doc,
   getDoc,
+  getDocFromServer,
   setDoc,
   updateDoc,
   serverTimestamp,
   writeBatch,
 } from 'firebase/firestore';
-import { auth, db, firebaseInitError, stripUndefinedDeep } from './firebase';
+import {
+  auth,
+  db,
+  firebaseInitError,
+  stripUndefinedDeep,
+  handleFirestoreError,
+  OperationType,
+} from './firebase';
 import {
   User,
   UserRole,
@@ -28,7 +36,7 @@ import {
 } from '../types';
 import { normalizeExamCode } from '../utils/urlHelper';
 
-export const ADMIN_BOOTSTRAP_EMAIL = 'hohuyquanhtq@gmail.com';
+export const EXPECTED_PRIMARY_ADMIN_EMAIL = 'hohuyquanhtq@gmail.com';
 const PENDING_PROFILE_STORAGE_KEY = 'hqtest_pending_profile_draft';
 
 export interface PendingProfileDraft {
@@ -65,7 +73,34 @@ export interface AuthActionResult {
   user?: User;
   warningMessage?: string;
   profileSyncFailed?: boolean;
+  verifiedFromServer?: boolean;
   errorMessage?: string;
+}
+
+export interface AccountSyncDiagnostic {
+  uid: string;
+  email: string;
+  emailVerified: boolean;
+  displayName: string;
+  userDocExists: boolean;
+  userDocMissingFields: string[];
+  adminDocExists: boolean;
+  adminDocActive: boolean;
+  adminDocError?: string;
+  hasAdminClaim: boolean;
+  hasTrustedAdminAuthority: boolean;
+  existingRole?: UserRole;
+  existingStatus?: AccountStatus;
+  existingName?: string;
+}
+
+export interface SyncProfileByUidOptions {
+  intendedRole: 'admin' | 'teacher' | 'student';
+  name?: string;
+  phone?: string;
+  school?: string;
+  className?: string;
+  classCode?: string;
 }
 
 export function isValidEmailFormat(email: string): boolean {
@@ -286,77 +321,348 @@ export async function createOrSyncUserProfileDoc(
   };
 }
 
-export async function fetchUserProfileFromFirestore(fbUser: FirebaseUser): Promise<User | null> {
+function parseUserDoc(uid: string, fbUser: FirebaseUser, raw: Record<string, unknown>, hasTrustedAdminAuthority: boolean): User {
+  const role: UserRole = hasTrustedAdminAuthority
+    ? 'admin'
+    : ((raw.role as UserRole) || 'student');
+  const status: AccountStatus = hasTrustedAdminAuthority
+    ? 'active'
+    : ((raw.status as AccountStatus) || (role === 'teacher' ? 'pending' : 'active'));
+
+  return {
+    id: uid,
+    uid,
+    email: String(raw.email || fbUser.email || '').trim().toLowerCase(),
+    name: String(raw.name || fbUser.displayName || '').trim() || String(raw.email || fbUser.email || '').split('@')[0] || 'Người dùng HQTest',
+    role,
+    status,
+    phone: typeof raw.phone === 'string' ? raw.phone : undefined,
+    school: typeof raw.school === 'string' ? raw.school : undefined,
+    className: typeof raw.className === 'string' ? raw.className : undefined,
+    approvedBy: typeof raw.approvedBy === 'string' ? raw.approvedBy : undefined,
+    approvedAt: typeof raw.approvedAt === 'string' ? raw.approvedAt : undefined,
+    createdAt: String(raw.createdAt || new Date().toISOString()),
+    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : undefined,
+  };
+}
+
+async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
+  adminDocExists: boolean;
+  adminDocActive: boolean;
+  adminDocError?: string;
+  hasAdminClaim: boolean;
+}> {
+  let hasAdminClaim = false;
+  try {
+    const tokenRes = await fbUser.getIdTokenResult();
+    hasAdminClaim =
+      tokenRes.claims?.admin === true ||
+      tokenRes.claims?.role === 'admin';
+  } catch {
+    hasAdminClaim = false;
+  }
+
+  let adminDocExists = false;
+  let adminDocActive = false;
+  let adminDocError: string | undefined;
+
+  try {
+    const adminRef = doc(db, 'admins', fbUser.uid);
+    const adminSnap = await getDocFromServer(adminRef).catch(() => getDoc(adminRef));
+    adminDocExists = adminSnap.exists();
+    if (adminSnap.exists()) {
+      const data = adminSnap.data() as Record<string, unknown>;
+      const isRoleOk = !('role' in data) || data.role === 'admin';
+      const isActiveOk = !('active' in data) || data.active === true;
+      adminDocActive = isRoleOk && isActiveOk;
+    }
+  } catch (err) {
+    adminDocError = mapFirebaseAuthError(err);
+  }
+
+  return { adminDocExists, adminDocActive, adminDocError, hasAdminClaim };
+}
+
+export async function inspectAccountSyncStatus(
+  fbUser: FirebaseUser,
+  forceTokenRefresh = false
+): Promise<AccountSyncDiagnostic> {
+  if (forceTokenRefresh) {
+    await fbUser.reload().catch(() => {});
+    await fbUser.getIdToken(true).catch(() => {});
+  }
+
+  const [userSnap, adminInfo] = await Promise.all([
+    getDocFromServer(doc(db, 'users', fbUser.uid)).catch(() => getDoc(doc(db, 'users', fbUser.uid))),
+    readTrustedAdminStatus(fbUser),
+  ]);
+
+  const raw = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
+  const requiredFields = [
+    'uid',
+    'email',
+    'name',
+    'role',
+    'status',
+    'createdAt',
+    'updatedAt',
+    'serverCreatedAt',
+    'serverUpdatedAt',
+  ];
+  const userDocMissingFields = raw
+    ? requiredFields.filter((field) => raw[field] === undefined || raw[field] === null || raw[field] === '')
+    : requiredFields;
+
+  const existingRole = typeof raw?.role === 'string' ? (raw.role as UserRole) : undefined;
+  const existingStatus = typeof raw?.status === 'string' ? (raw.status as AccountStatus) : undefined;
+  const existingName = typeof raw?.name === 'string' ? raw.name : undefined;
+
+  const hasTrustedAdminAuthority =
+    adminInfo.adminDocActive ||
+    adminInfo.hasAdminClaim ||
+    (existingRole === 'admin' && existingStatus === 'active');
+
+  return {
+    uid: fbUser.uid,
+    email: (fbUser.email || '').trim().toLowerCase(),
+    emailVerified: Boolean(fbUser.emailVerified),
+    displayName: (fbUser.displayName || '').trim(),
+    userDocExists: userSnap.exists(),
+    userDocMissingFields,
+    adminDocExists: adminInfo.adminDocExists,
+    adminDocActive: adminInfo.adminDocActive,
+    adminDocError: adminInfo.adminDocError,
+    hasAdminClaim: adminInfo.hasAdminClaim,
+    hasTrustedAdminAuthority,
+    existingRole,
+    existingStatus,
+    existingName,
+  };
+}
+
+export async function fetchUserProfileFromFirestore(
+  fbUser: FirebaseUser,
+  forceServer = false
+): Promise<User | null> {
   if (firebaseInitError || !fbUser?.uid) return null;
 
   const userRef = doc(db, 'users', fbUser.uid);
-  const adminRef = doc(db, 'admins', fbUser.uid);
 
-  const [userSnap, adminSnap] = await Promise.all([
-    getDoc(userRef),
-    getDoc(adminRef).catch(() => null),
+  const [userSnap, adminInfo] = await Promise.all([
+    forceServer ? getDocFromServer(userRef) : getDoc(userRef),
+    readTrustedAdminStatus(fbUser),
   ]);
 
-  const hasAdminMarker = Boolean(adminSnap?.exists());
-  const isVerifiedBootstrapEmail =
-    (fbUser.email || '').trim().toLowerCase() === ADMIN_BOOTSTRAP_EMAIL && fbUser.emailVerified;
-
-  if (userSnap.exists()) {
-    const raw = userSnap.data() as Record<string, unknown>;
-    const role: UserRole = hasAdminMarker
-      ? 'admin'
-      : ((raw.role as UserRole) || 'student');
-    const status: AccountStatus = hasAdminMarker
-      ? 'active'
-      : ((raw.status as AccountStatus) || (role === 'teacher' ? 'pending' : 'active'));
-
-    return {
-      id: fbUser.uid,
-      uid: fbUser.uid,
-      email: String(raw.email || fbUser.email || ''),
-      name: String(raw.name || fbUser.displayName || 'Người dùng HQTest'),
-      role,
-      status,
-      phone: typeof raw.phone === 'string' ? raw.phone : undefined,
-      school: typeof raw.school === 'string' ? raw.school : undefined,
-      className: typeof raw.className === 'string' ? raw.className : undefined,
-      approvedBy: typeof raw.approvedBy === 'string' ? raw.approvedBy : undefined,
-      approvedAt: typeof raw.approvedAt === 'string' ? raw.approvedAt : undefined,
-      createdAt: String(raw.createdAt || new Date().toISOString()),
-      updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : undefined,
-    };
+  if (!userSnap.exists()) {
+    return null;
   }
 
-  // Auto-create admin profile doc ONLY if user holds trusted admin marker or verified bootstrap email
-  if (hasAdminMarker || isVerifiedBootstrapEmail) {
+  const raw = userSnap.data() as Record<string, unknown>;
+  const hasTrustedAdminAuthority = adminInfo.adminDocActive || adminInfo.hasAdminClaim;
+
+  // Require core profile fields so partial/incomplete manual docs are surfaced for sync completion
+  const hasRequiredShape =
+    typeof raw.uid === 'string' &&
+    raw.uid.trim().length > 0 &&
+    typeof raw.email === 'string' &&
+    raw.email.trim().length > 0 &&
+    typeof raw.name === 'string' &&
+    raw.name.trim().length > 0 &&
+    typeof raw.role === 'string' &&
+    typeof raw.status === 'string' &&
+    typeof raw.createdAt === 'string';
+
+  if (!hasRequiredShape) {
+    return null;
+  }
+
+  // If user holds trusted server admin authority but their users/{uid} still says student/teacher,
+  // treat as needing profile sync so users/{uid} is properly reconciled to admin/active on Firestore.
+  if (hasTrustedAdminAuthority && (raw.role !== 'admin' || raw.status !== 'active')) {
+    return null;
+  }
+
+  return parseUserDoc(fbUser.uid, fbUser, raw, hasTrustedAdminAuthority);
+}
+
+export async function syncUserProfileByUid(
+  fbUser: FirebaseUser,
+  options: SyncProfileByUidOptions
+): Promise<AuthActionResult> {
+  if (firebaseInitError || !fbUser?.uid) {
+    return { success: false, errorMessage: 'Firebase chưa được khởi tạo hoặc chưa có phiên đăng nhập.' };
+  }
+
+  try {
+    // 1. Refresh Auth user and force-refresh ID token so claims & email_verified reflect immediately in Firestore Rules
+    await fbUser.reload().catch(() => {});
+    await fbUser.getIdToken(true).catch(() => {});
+
+    const currentFbUser = auth.currentUser || fbUser;
+    const uid = currentFbUser.uid;
+    const cleanEmail = (currentFbUser.email || '').trim().toLowerCase();
+    if (!uid || !cleanEmail) {
+      return { success: false, errorMessage: 'Không xác định được UID hoặc Email từ Firebase Auth.' };
+    }
+
+    const userRef = doc(db, 'users', uid);
+
+    // 2. Inspect live Firestore documents & claims from server
+    const [existingSnap, adminInfo] = await Promise.all([
+      getDocFromServer(userRef),
+      readTrustedAdminStatus(currentFbUser),
+    ]);
+
+    const existingRaw = existingSnap.exists() ? (existingSnap.data() as Record<string, unknown>) : null;
+    const existingIsActiveAdmin =
+      existingRaw?.role === 'admin' && existingRaw?.status === 'active';
+    const hasTrustedAdminAuthority =
+      adminInfo.adminDocActive || adminInfo.hasAdminClaim || existingIsActiveAdmin;
+
     const nowIso = new Date().toISOString();
-    const adminProfile = {
-      uid: fbUser.uid,
-      email: (fbUser.email || ADMIN_BOOTSTRAP_EMAIL).toLowerCase(),
-      name: fbUser.displayName || 'Quản trị viên HQTest',
-      role: 'admin' as const,
-      status: 'active' as const,
-      school: 'Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng',
-      createdAt: nowIso,
-      updatedAt: nowIso,
-      serverCreatedAt: serverTimestamp(),
-      serverUpdatedAt: serverTimestamp(),
-    };
-    await setDoc(userRef, adminProfile);
+    let warningMessage: string | undefined;
+
+    if (existingSnap.exists() && existingRaw) {
+      // 3A. Preserve all existing valid fields; only backfill missing fields cleanly
+      if (options.intendedRole === 'admin' && !hasTrustedAdminAuthority) {
+        return {
+          success: false,
+          errorMessage:
+            `Tài khoản ${cleanEmail} (UID: ${uid}) chưa được xác nhận quyền Admin hợp lệ trên máy chủ (chưa có document admins/${uid} hoặc Admin Custom Claim). Xác minh email không tự động cấp quyền Admin.`,
+        };
+      }
+
+      const existingName = typeof existingRaw.name === 'string' ? existingRaw.name.trim() : '';
+      const candidateName = existingName || options.name?.trim() || currentFbUser.displayName?.trim() || '';
+      if (candidateName.length < 2) {
+        return {
+          success: false,
+          errorMessage: 'Hồ sơ hiện tại còn thiếu Họ và tên. Vui lòng nhập Họ và tên (ít nhất 2 ký tự) để hoàn tất đồng bộ.',
+        };
+      }
+
+      const patchPayload: Record<string, unknown> = {
+        updatedAt: nowIso,
+        serverUpdatedAt: serverTimestamp(),
+      };
+
+      if (!existingRaw.uid) patchPayload.uid = uid;
+      if (!existingRaw.email) patchPayload.email = cleanEmail;
+      if (!existingName) patchPayload.name = candidateName.slice(0, 150);
+      if (!existingRaw.createdAt) patchPayload.createdAt = nowIso;
+      if (!existingRaw.serverCreatedAt) patchPayload.serverCreatedAt = serverTimestamp();
+
+      if (hasTrustedAdminAuthority) {
+        if (existingRaw.role !== 'admin') patchPayload.role = 'admin';
+        if (existingRaw.status !== 'active') patchPayload.status = 'active';
+      }
+
+      if (!existingRaw.school && options.school?.trim()) {
+        patchPayload.school = options.school.trim().slice(0, 200);
+      }
+      if (!existingRaw.phone && options.phone?.trim()) {
+        patchPayload.phone = options.phone.trim().slice(0, 32);
+      }
+      if (!existingRaw.className && options.className?.trim()) {
+        patchPayload.className = options.className.trim().slice(0, 80);
+      }
+
+      await updateDoc(userRef, stripUndefinedDeep(patchPayload));
+    } else {
+      // 3B. Document users/{uid} does not exist yet
+      if (options.intendedRole === 'admin' || hasTrustedAdminAuthority) {
+        // Security: NEVER create an admin profile from client without trusted server marker/claim!
+        if (!hasTrustedAdminAuthority) {
+          return {
+            success: false,
+            errorMessage:
+              `Không thể tự cấp quyền Admin từ trình duyệt: Tài khoản ${cleanEmail} (UID: ${uid}) chưa có document admins/${uid} hoặc Admin Custom Claim trên Firebase. Xác minh email không tự động cấp quyền Admin. Vui lòng tạo admins/${uid} qua Firebase Console hoặc chạy script Admin SDK rồi bấm "Đồng bộ hồ sơ" lại.`,
+          };
+        }
+
+        const confirmedName = options.name?.trim() || currentFbUser.displayName?.trim() || '';
+        if (confirmedName.length < 2) {
+          return {
+            success: false,
+            errorMessage:
+              'Vui lòng nhập Họ và tên xác nhận (ít nhất 2 ký tự) trước khi đồng bộ hồ sơ Admin.',
+          };
+        }
+
+        const adminProfilePayload = stripUndefinedDeep({
+          uid,
+          email: cleanEmail,
+          name: confirmedName.slice(0, 150),
+          role: 'admin' as const,
+          status: 'active' as const,
+          ...(options.phone?.trim() ? { phone: options.phone.trim().slice(0, 32) } : {}),
+          ...(options.school?.trim() ? { school: options.school.trim().slice(0, 200) } : {}),
+          createdAt: nowIso,
+          updatedAt: nowIso,
+          serverCreatedAt: serverTimestamp(),
+          serverUpdatedAt: serverTimestamp(),
+        });
+
+        await setDoc(userRef, adminProfilePayload);
+      } else {
+        const cleanName = options.name?.trim() || currentFbUser.displayName?.trim() || '';
+        if (cleanName.length < 2) {
+          return {
+            success: false,
+            errorMessage: 'Vui lòng nhập đầy đủ Họ và tên (ít nhất 2 ký tự) trước khi đồng bộ hồ sơ.',
+          };
+        }
+
+        const created = await createOrSyncUserProfileDoc(currentFbUser, {
+          name: cleanName,
+          role: options.intendedRole === 'teacher' ? 'teacher' : 'student',
+          phone: options.phone?.trim(),
+          school: options.school?.trim(),
+          className: options.className?.trim(),
+          classCode: options.classCode?.trim(),
+        });
+        warningMessage = created.warningMessage;
+      }
+    }
+
+    // 4. Mandatory verification: read back directly from Firestore server
+    const verifySnap = await getDocFromServer(userRef);
+    if (!verifySnap.exists()) {
+      return {
+        success: false,
+        errorMessage: 'Đã gửi lệnh ghi nhưng không đọc lại được document users/{uid} từ máy chủ Firestore.',
+      };
+    }
+
+    const verifiedRaw = verifySnap.data() as Record<string, unknown>;
+    const verifiedUser = parseUserDoc(uid, currentFbUser, verifiedRaw, hasTrustedAdminAuthority);
+
+    if (options.intendedRole === 'admin' && (verifiedUser.role !== 'admin' || verifiedUser.status !== 'active')) {
+      return {
+        success: false,
+        errorMessage: 'Đồng bộ không đạt quyền Admin hợp lệ trên Firestore.',
+      };
+    }
+
+    clearPendingDraft();
+
     return {
-      id: fbUser.uid,
-      uid: fbUser.uid,
-      email: adminProfile.email,
-      name: adminProfile.name,
-      role: 'admin',
-      status: 'active',
-      school: adminProfile.school,
-      createdAt: nowIso,
-      updatedAt: nowIso,
+      success: true,
+      user: verifiedUser,
+      verifiedFromServer: true,
+      warningMessage,
+    };
+  } catch (err) {
+    try {
+      handleFirestoreError(err, OperationType.WRITE, `users/${fbUser.uid}`);
+    } catch {
+      // handled cleanly below for UI display
+    }
+    return {
+      success: false,
+      errorMessage: mapFirebaseAuthError(err),
     };
   }
-
-  return null;
 }
 
 export async function loginWithEmailPassword(
@@ -598,15 +904,56 @@ export async function updateOwnUserProfile(
   }
 }
 
-export async function sendVerificationForBootstrapAdmin(): Promise<AuthActionResult> {
-  if (!auth.currentUser) {
-    return { success: false, errorMessage: 'Chưa có người dùng đăng nhập.' };
+export async function sendVerificationEmailToCurrentUser(): Promise<AuthActionResult> {
+  if (firebaseInitError || !auth?.currentUser) {
+    return { success: false, errorMessage: 'Chưa có tài khoản Firebase Auth đang đăng nhập.' };
+  }
+  if (auth.currentUser.emailVerified) {
+    return {
+      success: true,
+      warningMessage: 'Email của tài khoản này đã được xác minh trước đó.',
+    };
   }
   try {
     await sendEmailVerification(auth.currentUser);
     return { success: true };
   } catch (err) {
     return { success: false, errorMessage: mapFirebaseAuthError(err) };
+  }
+}
+
+export async function reloadAndRefreshCurrentUser(): Promise<{
+  success: boolean;
+  emailVerified: boolean;
+  uid?: string;
+  email?: string;
+  errorMessage?: string;
+}> {
+  if (firebaseInitError || !auth?.currentUser) {
+    return {
+      success: false,
+      emailVerified: false,
+      errorMessage: 'Không tìm thấy phiên đăng nhập Firebase hiện tại.',
+    };
+  }
+  try {
+    await auth.currentUser.reload();
+    await auth.currentUser.getIdToken(true);
+    const refreshed = auth.currentUser;
+    return {
+      success: true,
+      emailVerified: Boolean(refreshed.emailVerified),
+      uid: refreshed.uid,
+      email: refreshed.email || '',
+    };
+  } catch (err) {
+    return {
+      success: false,
+      emailVerified: Boolean(auth.currentUser?.emailVerified),
+      uid: auth.currentUser?.uid,
+      email: auth.currentUser?.email || '',
+      errorMessage: mapFirebaseAuthError(err),
+    };
   }
 }
 

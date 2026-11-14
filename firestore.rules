@@ -32,11 +32,20 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    function hasActiveAdminMarker() {
+      return exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && (!('active' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data)
+            || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true)
+        && (!('role' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data)
+            || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin');
+    }
+
     function isAdmin() {
       return isSignedIn() && (
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (userProfileExists() && currentUserData().role == 'admin' && currentUserData().status == 'active') ||
-        (request.auth.token.email == 'hohuyquanhtq@gmail.com' && request.auth.token.email_verified == true)
+        request.auth.token.admin == true ||
+        request.auth.token.role == 'admin' ||
+        hasActiveAdminMarker() ||
+        (userProfileExists() && currentUserData().role == 'admin' && currentUserData().status == 'active')
       );
     }
 
@@ -437,15 +446,22 @@ service cloud.firestore {
       allow update: if isSignedIn()
         && isValidId(userId)
         && isValidUserProfile(incoming())
-        && incoming().uid == existing().uid
-        && incoming().email == existing().email
-        && incoming().createdAt == existing().createdAt
-        && incoming().serverCreatedAt == existing().serverCreatedAt
+        && incoming().uid == userId
+        && (!('uid' in existing()) || incoming().uid == existing().uid)
+        && (
+          ('email' in existing() && incoming().email == existing().email) ||
+          (!('email' in existing()) && (!('email' in request.auth.token) || incoming().email == request.auth.token.email))
+        )
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && (
+          ('serverCreatedAt' in existing() && incoming().serverCreatedAt == existing().serverCreatedAt) ||
+          (!('serverCreatedAt' in existing()) && incoming().serverCreatedAt == request.time)
+        )
         && incoming().serverUpdatedAt == request.time
         && (
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'name', 'phone', 'school', 'className', 'role', 'status',
-            'approvedBy', 'approvedAt', 'updatedAt', 'serverUpdatedAt'
+            'uid', 'email', 'name', 'phone', 'school', 'className', 'role', 'status',
+            'approvedBy', 'approvedAt', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
           ])) ||
           (isOwner(userId)
             && existing().status != 'locked'
@@ -453,7 +469,8 @@ service cloud.firestore {
             && incoming().role == existing().role
             && incoming().status == existing().status
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'name', 'phone', 'school', 'className', 'updatedAt', 'serverUpdatedAt'
+              'uid', 'email', 'name', 'phone', 'school', 'className',
+              'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ]))
         );
       allow delete: if isValidId(userId) && isAdmin() && userId != request.auth.uid;

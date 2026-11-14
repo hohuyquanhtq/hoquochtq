@@ -4,11 +4,13 @@ import { User, UserRole } from '../types';
 import { subscribeAuthState, auth, firebaseInitError } from '../services/firebase';
 import {
   fetchUserProfileFromFirestore,
-  createOrSyncUserProfileDoc,
+  syncUserProfileByUid,
+  reloadAndRefreshCurrentUser,
   loadPendingDraft,
   logoutAccount,
   mapFirebaseAuthError,
   PendingProfileDraft,
+  SyncProfileByUidOptions,
 } from '../services/authService';
 import { StorageService } from '../services/storage';
 
@@ -28,9 +30,18 @@ interface AuthContextValue {
   userProfile: User | null;
   authError: string | null;
   pendingDraft: PendingProfileDraft | null;
-  refreshProfile: () => Promise<void>;
-  retrySyncMissingProfile: (overrideDraft?: Omit<PendingProfileDraft, 'uid' | 'email'>) => Promise<{
+  postSyncNotice: string | null;
+  clearPostSyncNotice: () => void;
+  refreshProfile: () => Promise<{
     success: boolean;
+    emailVerified: boolean;
+    errorMessage?: string;
+  }>;
+  retrySyncMissingProfile: (
+    options?: SyncProfileByUidOptions | Omit<PendingProfileDraft, 'uid' | 'email'>
+  ) => Promise<{
+    success: boolean;
+    user?: User;
     errorMessage?: string;
     warningMessage?: string;
   }>;
@@ -48,6 +59,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [userProfile, setUserProfile] = useState<User | null>(null);
   const [authError, setAuthError] = useState<string | null>(firebaseInitError);
   const [pendingDraft, setPendingDraft] = useState<PendingProfileDraft | null>(null);
+  const [postSyncNotice, setPostSyncNotice] = useState<string | null>(null);
+
+  const clearPostSyncNotice = useCallback(() => {
+    setPostSyncNotice(null);
+  }, []);
 
   const resolveUserSession = useCallback(async (fbUser: FirebaseUser | null) => {
     if (firebaseInitError) {
@@ -73,7 +89,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setAuthError(null);
 
     try {
-      const profile = await fetchUserProfileFromFirestore(fbUser);
+      let profile = await fetchUserProfileFromFirestore(fbUser);
+
+      // Avoid brief flash if signup just triggered onAuthStateChanged while initial setDoc is finishing
+      if (!profile && loadPendingDraft(fbUser.uid)) {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        profile = await fetchUserProfileFromFirestore(fbUser);
+      }
+
       if (!profile) {
         StorageService.clearActiveWorkspaceMemory();
         setUserProfile(null);
@@ -128,34 +151,71 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [resolveUserSession]);
 
   const refreshProfile = useCallback(async () => {
-    const current = auth?.currentUser || firebaseUser;
+    const refreshRes = await reloadAndRefreshCurrentUser();
+    const current = auth?.currentUser || firebaseUser || null;
     if (current) {
-      try {
-        await current.reload();
-      } catch {
-        // ignore network hiccup on reload
-      }
+      setFirebaseUser(current);
     }
-    await resolveUserSession(auth?.currentUser || current || null);
+    await resolveUserSession(current);
+    return {
+      success: refreshRes.success,
+      emailVerified: refreshRes.emailVerified,
+      errorMessage: refreshRes.errorMessage,
+    };
   }, [firebaseUser, resolveUserSession]);
 
   const retrySyncMissingProfile = useCallback(
-    async (overrideDraft?: Omit<PendingProfileDraft, 'uid' | 'email'>) => {
+    async (options?: SyncProfileByUidOptions | Omit<PendingProfileDraft, 'uid' | 'email'>) => {
       const current = auth?.currentUser || firebaseUser;
       if (!current) {
         return { success: false, errorMessage: 'Không tìm thấy phiên đăng nhập Firebase hiện tại.' };
       }
-      const draftToUse = overrideDraft || loadPendingDraft(current.uid);
-      if (!draftToUse) {
+
+      const draft = loadPendingDraft(current.uid);
+      let syncOpts: SyncProfileByUidOptions;
+
+      if (options && 'intendedRole' in options) {
+        syncOpts = options;
+      } else if (options) {
+        syncOpts = {
+          intendedRole: options.role,
+          name: options.name,
+          phone: options.phone,
+          school: options.school,
+          className: options.className,
+          classCode: options.classCode,
+        };
+      } else if (draft) {
+        syncOpts = {
+          intendedRole: draft.role,
+          name: draft.name,
+          phone: draft.phone,
+          school: draft.school,
+          className: draft.className,
+          classCode: draft.classCode,
+        };
+      } else {
         return { success: false, errorMessage: 'Vui lòng điền thông tin hồ sơ để hoàn tất đồng bộ.' };
       }
 
       try {
-        const res = await createOrSyncUserProfileDoc(current, draftToUse);
+        const res = await syncUserProfileByUid(current, syncOpts);
+        if (!res.success || !res.user) {
+          return {
+            success: false,
+            errorMessage: res.errorMessage || 'Đồng bộ hồ sơ chưa thành công.',
+          };
+        }
+
+        setPostSyncNotice('Đồng bộ hồ sơ thành công');
         setUserProfile(res.user);
         setPendingDraft(null);
-        await resolveUserSession(current);
-        return { success: true, warningMessage: res.warningMessage };
+        await resolveUserSession(auth?.currentUser || current);
+        return {
+          success: true,
+          user: res.user,
+          warningMessage: res.warningMessage,
+        };
       } catch (err) {
         return { success: false, errorMessage: mapFirebaseAuthError(err) };
       }
@@ -172,6 +232,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUserProfile(null);
     setPendingDraft(null);
     setAuthError(null);
+    setPostSyncNotice(null);
     await logoutAccount();
     setAuthState('unauthenticated');
   }, []);
@@ -184,6 +245,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         userProfile,
         authError,
         pendingDraft,
+        postSyncNotice,
+        clearPostSyncNotice,
         refreshProfile,
         retrySyncMissingProfile,
         setLocalUpdatedProfile,

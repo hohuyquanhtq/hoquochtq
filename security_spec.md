@@ -30,6 +30,6 @@
 5. Unauthenticated or student caller attempting `get`/`list` on `/exams/{examId}` or `/questions/{questionId}` -> `PERMISSION_DENIED`.
 6. Scraping `list` query on `/examStatus`, `/publicExams`, `/examKeys`, or `/classJoinCodes` -> `PERMISSION_DENIED`.
 7. Student reading `/submissions` belonging to another student or tampering with `totalScore` -> `PERMISSION_DENIED`.
-8. Unverified admin email token spoofing `request.auth.token.email` without `email_verified == true` -> `PERMISSION_DENIED`.
+8. Email verification alone or client-side claims attempting to write `/admins/{uid}` or self-assign `role: 'admin'` -> `PERMISSION_DENIED`.
 9. Client timestamp tampering (`serverCreatedAt != request.time` / `serverUpdatedAt != request.time`) -> `PERMISSION_DENIED`.
 10. Document ID poisoning or shadow field injection (`hasOnly()` gate) -> `PERMISSION_DENIED`.

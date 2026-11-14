@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   FlaskConical,
   Mail,
@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Clock,
   ShieldAlert,
+  ShieldCheck,
   RefreshCw,
   LogOut,
   ArrowLeft,
@@ -23,13 +24,16 @@ import {
 } from 'lucide-react';
 import { APP_CONFIG } from '../../constants/brand';
 import { useAuth } from '../../contexts/AuthContext';
+import { auth } from '../../services/firebase';
 import {
   loginWithEmailPassword,
   registerTeacherAccount,
   registerStudentAccount,
   requestPasswordReset,
-  sendVerificationForBootstrapAdmin,
-  ADMIN_BOOTSTRAP_EMAIL,
+  sendVerificationEmailToCurrentUser,
+  inspectAccountSyncStatus,
+  EXPECTED_PRIMARY_ADMIN_EMAIL,
+  AccountSyncDiagnostic,
 } from '../../services/authService';
 import { normalizeExamCode } from '../../utils/urlHelper';
 
@@ -87,12 +91,49 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   const [recoverName, setRecoverName] = useState(
     pendingDraft?.name || firebaseUser?.displayName || ''
   );
-  const [recoverRole, setRecoverRole] = useState<'teacher' | 'student'>(
-    pendingDraft?.role || 'student'
-  );
+  const [recoverRole, setRecoverRole] = useState<'admin' | 'teacher' | 'student'>(() => {
+    if (pendingDraft?.role) return pendingDraft.role;
+    if ((firebaseUser?.email || '').trim().toLowerCase() === EXPECTED_PRIMARY_ADMIN_EMAIL) {
+      return 'admin';
+    }
+    return 'student';
+  });
   const [recoverSchool, setRecoverSchool] = useState(pendingDraft?.school || '');
   const [recoverClassName, setRecoverClassName] = useState(pendingDraft?.className || '');
   const [recoverClassCode, setRecoverClassCode] = useState(pendingDraft?.classCode || '');
+
+  // Live Auth/Firestore sync diagnostic state
+  const [syncDiag, setSyncDiag] = useState<AccountSyncDiagnostic | null>(null);
+  const [isCheckingDiag, setIsCheckingDiag] = useState(false);
+  const [isSendingVerification, setIsSendingVerification] = useState(false);
+  const [isRefreshingAuth, setIsRefreshingAuth] = useState(false);
+
+  const loadSyncDiagnostic = useCallback(async (forceTokenRefresh = false) => {
+    const targetUser = auth?.currentUser || firebaseUser;
+    if (!targetUser) return;
+    setIsCheckingDiag(true);
+    try {
+      const diag = await inspectAccountSyncStatus(targetUser, forceTokenRefresh);
+      setSyncDiag(diag);
+      if (diag.hasTrustedAdminAuthority) {
+        setRecoverRole('admin');
+      }
+      setRecoverName((prev) => {
+        if (prev.trim()) return prev;
+        if (diag.existingName) return diag.existingName;
+        if (diag.displayName) return diag.displayName;
+        return prev;
+      });
+    } finally {
+      setIsCheckingDiag(false);
+    }
+  }, [firebaseUser]);
+
+  useEffect(() => {
+    if (authState === 'missing_profile' && firebaseUser) {
+      void loadSyncDiagnostic(false);
+    }
+  }, [authState, firebaseUser, loadSyncDiagnostic]);
 
   const clearBanners = () => {
     setErrorMsg(null);
@@ -241,12 +282,12 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   }
 
   if (authState === 'missing_profile') {
-    const isBootstrapEmail =
-      (firebaseUser?.email || '').trim().toLowerCase() === ADMIN_BOOTSTRAP_EMAIL;
+    const isEmailVerified = Boolean(syncDiag?.emailVerified ?? firebaseUser?.emailVerified);
+    const hasAdminAuthority = Boolean(syncDiag?.hasTrustedAdminAuthority);
 
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="bg-white border border-amber-200 rounded-3xl shadow-xl p-8 max-w-lg w-full space-y-5">
+        <div className="bg-white border border-amber-200 rounded-3xl shadow-xl p-7 sm:p-8 max-w-xl w-full space-y-5">
           <div className="flex items-center gap-3">
             <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
               <AlertCircle className="w-6 h-6" />
@@ -261,101 +302,232 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
             </div>
           </div>
 
-          <p className="text-xs text-slate-600 leading-relaxed">
-            {authError ||
-              'Tài khoản Firebase Auth đã được tạo/đăng nhập, nhưng chưa có hồ sơ người dùng tương ứng trên Firestore. Hãy đồng bộ lại hồ sơ bên dưới (không tạo trùng tài khoản).'}
-          </p>
+          <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5 leading-relaxed">
+            <p className="font-bold">
+              Hồ sơ tài khoản chưa được đồng bộ. Vui lòng hoàn tất đồng bộ.
+            </p>
+            <p>
+              {authError ||
+                'Tài khoản Firebase Auth đã đăng nhập hợp lệ, nhưng hồ sơ users/{uid} trên Firestore chưa tồn tại hoặc chưa đầy đủ các trường bắt buộc.'}
+            </p>
+          </div>
 
-          {isBootstrapEmail && !firebaseUser?.emailVerified && (
-            <div className="p-3.5 rounded-2xl bg-purple-50 border border-purple-200 text-xs text-purple-900 space-y-2">
-              <p className="font-bold">Tài khoản Quản trị mặc định ({ADMIN_BOOTSTRAP_EMAIL})</p>
-              <p>
-                Nếu đây là tài khoản Admin chính của hệ thống, vui lòng xác minh email (nhấn nút gửi email xác minh bên dưới) hoặc thêm UID <code className="font-mono bg-purple-100 px-1 rounded">{firebaseUser?.uid}</code> vào collection <code className="font-mono bg-purple-100 px-1 rounded">admins</code> trên Firebase Console.
-              </p>
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const res = await sendVerificationForBootstrapAdmin();
-                    if (res.success) setSuccessMsg('Đã gửi email xác minh tới hộp thư của bạn!');
-                    else setErrorMsg(res.errorMessage || 'Không thể gửi email xác minh.');
-                  }}
-                  className="px-3 py-1.5 rounded-lg bg-purple-700 text-white text-[11px] font-bold"
-                >
-                  Gửi email xác minh Admin
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void refreshProfile()}
-                  className="px-3 py-1.5 rounded-lg border border-purple-300 bg-white text-purple-800 text-[11px] font-bold"
-                >
-                  Tôi đã xác minh / Làm mới
-                </button>
+          {/* Live Auth + Firestore Inspection Status */}
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1.5">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-800 uppercase tracking-wide">
+                Trạng thái xác thực &amp; Firestore
+              </span>
+              {isCheckingDiag && (
+                <span className="text-blue-600 font-semibold flex items-center gap-1">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  Đang kiểm tra...
+                </span>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+              <div>
+                <span className="text-slate-500">UID Auth:</span>{' '}
+                <code className="font-mono bg-slate-200/70 px-1.5 py-0.5 rounded text-[10px]">
+                  {firebaseUser?.uid || '—'}
+                </code>
+              </div>
+              <div>
+                <span className="text-slate-500">Hồ sơ users/&#123;uid&#125;:</span>{' '}
+                <strong className={syncDiag?.userDocExists ? 'text-amber-700' : 'text-rose-700'}>
+                  {syncDiag
+                    ? syncDiag.userDocExists
+                      ? `Thiếu: ${syncDiag.userDocMissingFields.join(', ') || 'cần đồng bộ'}`
+                      : 'Chưa tồn tại'
+                    : 'Đang kiểm tra...'}
+                </strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Xác minh email:</span>{' '}
+                <strong className={isEmailVerified ? 'text-emerald-700' : 'text-amber-700'}>
+                  {isEmailVerified ? 'Đã xác minh' : 'Chưa xác minh'}
+                </strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Quyền Admin máy chủ:</span>{' '}
+                <strong className={hasAdminAuthority ? 'text-emerald-700' : 'text-slate-600'}>
+                  {syncDiag
+                    ? hasAdminAuthority
+                      ? 'Hợp lệ (admins/{uid} / Claim)'
+                      : syncDiag.adminDocError
+                      ? 'Không thể xác nhận quyền Admin'
+                      : 'Chưa được cấp quyền Admin'
+                    : 'Đang kiểm tra...'}
+                </strong>
               </div>
             </div>
-          )}
+          </div>
+
+          {/* Independent Email Verification Section */}
+          <div
+            className={`p-3.5 rounded-2xl border text-xs space-y-2 ${
+              isEmailVerified
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                : 'bg-slate-50 border-slate-200 text-slate-800'
+            }`}
+          >
+            {isEmailVerified ? (
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 font-bold text-emerald-800">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>Email đã được xác minh ({firebaseUser?.email})</span>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="flex items-center gap-2 font-bold text-slate-900">
+                  <Mail className="w-4 h-4 text-blue-600 shrink-0" />
+                  <span>Xác minh địa chỉ email</span>
+                </div>
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  Email của tài khoản chưa được xác minh trên Firebase Auth. Lưu ý: Xác minh email không tự động cấp quyền Admin; quyền Admin phải được xác lập riêng bằng cơ chế bảo mật (<code className="font-mono">admins/&#123;uid&#125;</code> hoặc Admin Custom Claim).
+                </p>
+                <div className="flex flex-wrap gap-2 pt-0.5">
+                  <button
+                    type="button"
+                    disabled={isSendingVerification || isRefreshingAuth}
+                    onClick={async () => {
+                      clearBanners();
+                      setIsSendingVerification(true);
+                      try {
+                        const res = await sendVerificationEmailToCurrentUser();
+                        if (res.success) {
+                          setSuccessMsg(
+                            res.warningMessage ||
+                              `Đã gửi email xác minh tới ${firebaseUser?.email || 'hộp thư của bạn'}. Vui lòng kiểm tra Hộp thư đến hoặc Thư rác (Spam).`
+                          );
+                        } else {
+                          setErrorMsg(res.errorMessage || 'Không thể gửi email xác minh.');
+                        }
+                      } finally {
+                        setIsSendingVerification(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-[11px] font-bold flex items-center gap-1.5"
+                  >
+                    <Mail className="w-3.5 h-3.5" />
+                    <span>{isSendingVerification ? 'Đang gửi...' : 'Gửi email xác minh'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isRefreshingAuth || isSendingVerification}
+                    onClick={async () => {
+                      clearBanners();
+                      setIsRefreshingAuth(true);
+                      try {
+                        const res = await refreshProfile();
+                        await loadSyncDiagnostic(true);
+                        if (!res.success && res.errorMessage) {
+                          setErrorMsg(res.errorMessage);
+                        } else if (res.emailVerified) {
+                          setSuccessMsg('Email đã được xác minh và đã làm mới phiên đăng nhập.');
+                        } else {
+                          setErrorMsg(
+                            'Email vẫn chưa được xác minh trên Firebase Auth. Vui lòng mở liên kết trong email trước rồi bấm làm mới lại.'
+                          );
+                        }
+                      } finally {
+                        setIsRefreshingAuth(false);
+                      }
+                    }}
+                    className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-60 text-slate-800 text-[11px] font-bold flex items-center gap-1.5"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${isRefreshingAuth ? 'animate-spin' : ''}`} />
+                    <span>{isRefreshingAuth ? 'Đang làm mới...' : 'Tôi đã xác minh – Làm mới'}</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
 
           {errorMsg && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
-              {errorMsg}
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>{errorMsg}</span>
             </div>
           )}
           {successMsg && (
-            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold">
-              {successMsg}
+            <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 text-xs font-semibold flex items-start gap-2">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <span>{successMsg}</span>
             </div>
           )}
 
+          {/* Dedicated Profile Sync Form */}
           <form
             onSubmit={async (e) => {
               e.preventDefault();
               clearBanners();
               setIsSubmitting(true);
-              const res = await retrySyncMissingProfile(
-                pendingDraft
-                  ? undefined
-                  : {
-                      name: recoverName.trim(),
-                      role: recoverRole,
-                      school: recoverSchool.trim() || undefined,
-                      className: recoverClassName.trim() || undefined,
-                      classCode: recoverClassCode.trim() || undefined,
-                    }
-              );
-              setIsSubmitting(false);
-              if (!res.success) {
-                setErrorMsg(res.errorMessage || 'Chưa thể đồng bộ hồ sơ.');
-              } else if (res.warningMessage) {
-                setSuccessMsg(res.warningMessage);
+              try {
+                const res = await retrySyncMissingProfile(
+                  pendingDraft
+                    ? undefined
+                    : {
+                        intendedRole: recoverRole,
+                        name: recoverName.trim() || undefined,
+                        school: recoverSchool.trim() || undefined,
+                        className: recoverClassName.trim() || undefined,
+                        classCode: recoverClassCode.trim() || undefined,
+                      }
+                );
+                await loadSyncDiagnostic(false);
+                if (!res.success) {
+                  setErrorMsg(res.errorMessage || 'Chưa thể đồng bộ hồ sơ.');
+                } else {
+                  setSuccessMsg(res.warningMessage || 'Đồng bộ hồ sơ thành công');
+                }
+              } finally {
+                setIsSubmitting(false);
               }
             }}
-            className="space-y-3"
+            className="space-y-3 pt-1 border-t border-slate-100"
           >
+            {hasAdminAuthority && (
+              <div className="p-3 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-900 text-xs font-semibold flex items-start gap-2">
+                <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0 mt-0.5" />
+                <span>
+                  Quyền Admin hợp lệ đã được xác thực trên máy chủ. Nhấn <strong>“Đồng bộ hồ sơ”</strong> để tạo hoặc bổ sung các trường còn thiếu cho <code className="font-mono">users/{firebaseUser?.uid}</code>.
+                </span>
+              </div>
+            )}
+
             {!pendingDraft && (
               <>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Họ và tên</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Họ và tên hiển thị {syncDiag?.existingName ? '(giữ nguyên nếu đã có)' : <span className="text-rose-500">*</span>}
+                  </label>
                   <input
                     type="text"
-                    required
+                    required={!syncDiag?.existingName}
                     value={recoverName}
                     onChange={(e) => setRecoverName(e.target.value)}
-                    placeholder="Nguyễn Văn A"
+                    placeholder="Nhập họ và tên của bạn"
                     className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">Vai trò đăng ký</label>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">Vai trò hồ sơ</label>
                   <select
-                    value={recoverRole}
-                    onChange={(e) => setRecoverRole(e.target.value as 'teacher' | 'student')}
-                    className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold bg-white"
+                    value={hasAdminAuthority ? 'admin' : recoverRole}
+                    disabled={hasAdminAuthority}
+                    onChange={(e) => setRecoverRole(e.target.value as 'admin' | 'teacher' | 'student')}
+                    className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold bg-white disabled:bg-slate-100"
                   >
+                    <option value="admin">
+                      Quản trị viên (Admin — yêu cầu admins/&#123;uid&#125; hoặc Claim hợp lệ)
+                    </option>
                     <option value="student">Học sinh</option>
                     <option value="teacher">Giáo viên (Chờ Admin duyệt)</option>
                   </select>
                 </div>
-                {recoverRole === 'teacher' ? (
+                {recoverRole === 'teacher' && !hasAdminAuthority && (
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">Trường / Đơn vị (tùy chọn)</label>
                     <input
@@ -365,7 +537,8 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                       className="w-full p-2.5 rounded-xl border border-slate-200 text-xs"
                     />
                   </div>
-                ) : (
+                )}
+                {recoverRole === 'student' && !hasAdminAuthority && (
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1">Lớp (tùy chọn)</label>
@@ -399,12 +572,12 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                 className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5"
               >
                 <RefreshCw className={`w-4 h-4 ${isSubmitting ? 'animate-spin' : ''}`} />
-                <span>{isSubmitting ? 'Đang đồng bộ...' : 'Thử đồng bộ lại hồ sơ'}</span>
+                <span>{isSubmitting ? 'Đang đồng bộ hồ sơ...' : 'Đồng bộ hồ sơ'}</span>
               </button>
               <button
                 type="button"
                 onClick={() => void logout()}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold"
+                className="px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold"
               >
                 Đăng xuất
               </button>

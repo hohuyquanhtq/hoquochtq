@@ -80,7 +80,14 @@ function getDefaultTabForRole(role: UserRole): string {
 }
 
 export default function App() {
-  const { authState, userProfile, setLocalUpdatedProfile, logout } = useAuth();
+  const {
+    authState,
+    userProfile,
+    postSyncNotice,
+    clearPostSyncNotice,
+    setLocalUpdatedProfile,
+    logout,
+  } = useAuth();
 
   const [initialDirectCode] = useState<string | null>(() => {
     if (typeof window === 'undefined') return null;
@@ -702,6 +709,19 @@ export default function App() {
       {/* Main Content Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
         <ErrorBoundary fallbackTitle="Không thể hiển thị nội dung" onResetToHome={resetToRoleHome}>
+          {postSyncNotice && isAuthenticatedSession && (
+            <div className="mb-4 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-between gap-2">
+              <span>{postSyncNotice}</span>
+              <button
+                type="button"
+                onClick={clearPostSyncNotice}
+                className="text-emerald-700 hover:text-emerald-950 font-bold text-[11px]"
+              >
+                Đóng
+              </button>
+            </div>
+          )}
+
           {isLoadingWorkspace && isAuthenticatedSession && activeTab !== 'take_exam' && activeTab !== 'exam_landing' && (
             <div className="mb-4 px-4 py-2 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold flex items-center gap-2">
               <div className="w-3.5 h-3.5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
