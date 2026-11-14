@@ -203,6 +203,11 @@ export function sanitizeQuestionForStudent(q: Question): Question {
   };
 
   if (safeQ.imageUrl) sanitized.imageUrl = safeQ.imageUrl;
+  if (safeQ.sectionId) sanitized.sectionId = safeQ.sectionId;
+  if (safeQ.section) sanitized.section = safeQ.section;
+  if (safeQ.part) sanitized.part = safeQ.part;
+  if (safeQ.sectionTitle) sanitized.sectionTitle = safeQ.sectionTitle;
+  if (safeQ.partTitle) sanitized.partTitle = safeQ.partTitle;
 
   if (Array.isArray(safeQ.options)) {
     sanitized.options = safeQ.options

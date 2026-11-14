@@ -93,6 +93,10 @@ export interface Question {
   teacherVerified?: boolean;
   recognitionSource?: RecognitionSource;
   sectionId?: string;
+  section?: string;
+  part?: string;
+  sectionTitle?: string;
+  partTitle?: string;
   rawSourceText?: string;
 }
 
@@ -134,6 +138,7 @@ export interface Exam {
   totalScore: number;           // Mặc định 10.0
   
   questions: Question[];
+  detectedSections?: DetectedExamSection[];
   rules: ExamRuleScore;
   
   variants?: ExamVariant[];     // Các mã đề đảo

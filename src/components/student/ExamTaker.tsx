@@ -1,21 +1,26 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import confetti from 'canvas-confetti';
-import { Exam, StudentAnswer, Question, StudentSubmission } from '../../types';
+import { Exam, StudentAnswer, StudentSubmission } from '../../types';
 import { 
   Clock, 
   Flag, 
-  CheckCircle2, 
   AlertCircle, 
   ChevronLeft, 
   ChevronRight, 
+  ChevronDown,
+  ChevronUp,
   Send, 
-  Sparkles,
   ShieldAlert,
-  HelpCircle,
-  FlaskConical
+  LayoutGrid,
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { gradeSubmission } from '../../utils/gradingEngine';
+import {
+  groupExamQuestionsBySection,
+  getQuestionProgress,
+  SHORT_PART_BADGES,
+} from '../../utils/examSectionGrouping';
+import { ExamQuestionNavigator } from './ExamQuestionNavigator';
 
 interface ExamTakerProps {
   exam: Exam;
@@ -47,6 +52,8 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
   const [showConfirmExit, setShowConfirmExit] = useState(false);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   // Restore saved state from localStorage if available
   useEffect(() => {
@@ -208,15 +215,45 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   const timeFormatted = `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   const isUrgent = timeLeftSeconds < 300; // Under 5 mins
 
-  // Count answered questions
-  const answeredCount = safeQuestions.filter(q => {
-    const a = answers[q.id];
-    if (!a) return false;
-    if (q.type === 'part1_single_choice') return !!a.selectedOptionId;
-    if (q.type === 'part2_true_false') return a.selectedStatements && Object.keys(a.selectedStatements).length > 0;
-    if (q.type === 'part3_short_answer') return !!a.textAnswer && a.textAnswer.trim().length > 0;
-    return false;
-  }).length;
+  // Group questions strictly from real exam structure without mutating questions or numbering
+  const sectionGroups = useMemo(() => groupExamQuestionsBySection(exam), [exam]);
+
+  const questionSectionMap = useMemo(() => {
+    const map = new Map<string, { title: string; partType: ReturnType<typeof groupExamQuestionsBySection>[number]['partType'] }>();
+    for (const sec of sectionGroups) {
+      for (const item of sec.items) {
+        map.set(item.question.id, { title: sec.title, partType: sec.partType });
+      }
+    }
+    return map;
+  }, [sectionGroups]);
+
+  // Compute strict dynamic completion counts (Part II requires all statements; Part III requires valid input)
+  const { totalCompleted, totalPartial } = useMemo(() => {
+    let completed = 0;
+    let partial = 0;
+    for (const q of safeQuestions) {
+      const prog = getQuestionProgress(q, answers[q.id]);
+      if (prog.isCompleted) completed++;
+      else if (prog.isPartial) partial++;
+    }
+    return { totalCompleted: completed, totalPartial: partial };
+  }, [safeQuestions, answers]);
+
+  const handleToggleSectionCollapse = (sectionKey: string) => {
+    setCollapsedSections(prev => ({
+      ...prev,
+      [sectionKey]: !prev[sectionKey],
+    }));
+  };
+
+  const handleNavigateToQuestion = (index: number, fromMobile = false) => {
+    if (index < 0 || index >= safeQuestions.length) return;
+    setCurrentIndex(index);
+    if (fromMobile) {
+      setMobileNavOpen(false);
+    }
+  };
 
   if (!exam || safeQuestions.length === 0 || !currentQuestion) {
     return (
@@ -287,39 +324,97 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
         </div>
       </div>
 
-      {/* Main Examination Layout: 2 Columns */}
-      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+      {/* Mobile Collapsible Accordion Navigator */}
+      <div className="lg:hidden bg-white border border-slate-200 rounded-2xl shadow-xs overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setMobileNavOpen(prev => !prev)}
+          aria-expanded={mobileNavOpen}
+          className="w-full px-4 py-3 flex items-center justify-between gap-3 bg-slate-50/80 hover:bg-slate-100/80 transition-colors text-left"
+        >
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center shrink-0">
+              <LayoutGrid className="w-4 h-4" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-extrabold text-slate-900 truncate">
+                Bảng điều hướng câu hỏi ({totalCompleted}/{safeQuestions.length})
+              </p>
+              <p className="text-[11px] text-slate-600 truncate">
+                Đang xem Câu {safeIndex + 1} •{' '}
+                {questionSectionMap.get(currentQuestion.id)?.title ||
+                  SHORT_PART_BADGES[currentQuestion.type]}
+              </p>
+            </div>
+          </div>
+          <span className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 shrink-0">
+            <span>{mobileNavOpen ? 'Thu gọn' : 'Mở danh sách'}</span>
+            {mobileNavOpen ? (
+              <ChevronUp className="w-4 h-4" />
+            ) : (
+              <ChevronDown className="w-4 h-4" />
+            )}
+          </span>
+        </button>
+
+        {mobileNavOpen && (
+          <div className="p-2 border-t border-slate-100">
+            <ExamQuestionNavigator
+              sections={sectionGroups}
+              answers={answers}
+              currentIndex={safeIndex}
+              totalQuestions={safeQuestions.length}
+              totalCompleted={totalCompleted}
+              totalPartial={totalPartial}
+              collapsedSections={collapsedSections}
+              onToggleSectionCollapse={handleToggleSectionCollapse}
+              onSelectQuestion={(idx) => handleNavigateToQuestion(idx, true)}
+              showActions={false}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Main Examination Layout: 2 Columns on Desktop */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
-        {/* Left Column: Current Question Workspace (3 Cols) */}
-        <div className="lg:col-span-3 space-y-4">
-          <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-5">
+        {/* Left Column: Current Question Workspace (8 Cols) */}
+        <div className="lg:col-span-8 space-y-4">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-5">
             
             {/* Question Header & Flag Action */}
-            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-              <div className="flex items-center gap-2">
-                <span className="w-8 h-8 rounded-xl bg-blue-600 text-white font-extrabold text-sm flex items-center justify-center">
-                  {currentIndex + 1}
+            <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="w-8 h-8 rounded-xl bg-blue-600 text-white font-extrabold text-sm flex items-center justify-center shrink-0">
+                  {safeIndex + 1}
                 </span>
                 <span className="font-mono text-xs font-bold text-slate-500">
-                  Câu {currentIndex + 1} / {exam.questions.length}
+                  Câu {safeIndex + 1} / {safeQuestions.length}
                 </span>
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${
-                  currentQuestion.type === 'part1_single_choice'
-                    ? 'bg-blue-100 text-blue-800'
-                    : currentQuestion.type === 'part2_true_false'
-                    ? 'bg-indigo-100 text-indigo-800'
-                    : 'bg-purple-100 text-purple-800'
-                }`}>
-                  {currentQuestion.type === 'part1_single_choice' 
-                    ? 'Phần I: 4 Lựa chọn' 
-                    : currentQuestion.type === 'part2_true_false' 
-                    ? 'Phần II: Đúng - Sai' 
-                    : 'Phần III: Trả lời ngắn'}
-                </span>
+                {(() => {
+                  const secMeta = questionSectionMap.get(currentQuestion.id);
+                  const partType = secMeta?.partType || currentQuestion.type;
+                  const label = secMeta?.title || SHORT_PART_BADGES[partType];
+                  return (
+                    <span
+                      className={`text-[10px] font-bold px-2.5 py-0.5 rounded-md uppercase max-w-xs truncate ${
+                        partType === 'part1_single_choice'
+                          ? 'bg-blue-100 text-blue-800'
+                          : partType === 'part2_true_false'
+                          ? 'bg-indigo-100 text-indigo-800'
+                          : 'bg-purple-100 text-purple-800'
+                      }`}
+                      title={label}
+                    >
+                      {label}
+                    </span>
+                  );
+                })()}
               </div>
 
               {/* Flag for Review */}
               <button
+                type="button"
                 onClick={() => toggleFlag(currentQuestion.id)}
                 className={`px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-colors ${
                   currentAnswer.isMarkedForReview
@@ -384,12 +479,27 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
               )}
 
               {/* Part II: 4 True/False Statements */}
-              {currentQuestion.type === 'part2_true_false' && currentQuestion.statements && (
-                <div className="space-y-3">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1">
-                    Chọn Đúng hoặc Sai cho mỗi mệnh đề:
-                  </p>
-                  <div className="space-y-2">
+              {currentQuestion.type === 'part2_true_false' && currentQuestion.statements && (() => {
+                const p2Prog = getQuestionProgress(currentQuestion, currentAnswer);
+                return (
+                  <div className="space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-1">
+                      <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                        Chọn Đúng hoặc Sai cho mỗi mệnh đề:
+                      </p>
+                      <span
+                        className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${
+                          p2Prog.isCompleted
+                            ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                            : p2Prog.isPartial
+                            ? 'bg-sky-50 text-sky-700 border border-sky-200'
+                            : 'bg-slate-100 text-slate-600'
+                        }`}
+                      >
+                        Đã trả lời {p2Prog.answeredUnits}/{p2Prog.totalUnits} ý
+                      </span>
+                    </div>
+                    <div className="space-y-2">
                     {currentQuestion.statements.map((stmt) => {
                       const val = currentAnswer.selectedStatements?.[stmt.id];
                       return (
@@ -431,38 +541,53 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
                         </div>
                       );
                     })}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Part III: Short Answer */}
-              {currentQuestion.type === 'part3_short_answer' && (
-                <div className="space-y-3">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Điền kết quả tính toán hoặc câu trả lời ngắn:
-                  </p>
-                  <div className="max-w-md">
-                    <input
-                      type="text"
-                      value={currentAnswer.textAnswer || ''}
-                      onChange={(e) => handleTextAnswerChange(e.target.value)}
-                      placeholder="Nhập số thập phân (VD: 4 hoặc 6.72 hoặc 6,72)..."
-                      className="w-full p-3.5 text-sm font-semibold rounded-xl border-2 border-slate-300 focus:border-blue-600 focus:outline-none bg-slate-50"
-                    />
-                    <p className="text-[11px] text-slate-500 mt-1.5">
-                      Hỗ trợ cả dấu chấm (.) và dấu phẩy (,) thập phân. Hệ thống tự động tính sai số cho phép.
+              {currentQuestion.type === 'part3_short_answer' && (() => {
+                const qProg = getQuestionProgress(currentQuestion, currentAnswer);
+                return (
+                  <div className="space-y-3">
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
+                      Điền kết quả tính toán hoặc câu trả lời ngắn:
                     </p>
+                    <div className="max-w-md">
+                      <input
+                        type="text"
+                        value={currentAnswer.textAnswer || ''}
+                        onChange={(e) => handleTextAnswerChange(e.target.value)}
+                        placeholder="Nhập số thập phân (VD: 4 hoặc 6.72 hoặc 6,72)..."
+                        className={`w-full p-3.5 text-sm font-semibold rounded-xl border-2 focus:outline-none bg-slate-50 ${
+                          qProg.invalidInput
+                            ? 'border-amber-400 focus:border-amber-500'
+                            : 'border-slate-300 focus:border-blue-600'
+                        }`}
+                      />
+                      {qProg.invalidInput ? (
+                        <p className="text-[11px] text-amber-700 font-semibold mt-1.5">
+                          Câu này yêu cầu đáp án dạng số hợp lệ (VD: 4, -2.5 hoặc 6,72).
+                        </p>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 mt-1.5">
+                          Hỗ trợ cả dấu chấm (.) và dấu phẩy (,) thập phân. Hệ thống tự động tính sai số cho phép.
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
             </div>
 
             {/* Bottom Nav: Prev / Next */}
             <div className="flex items-center justify-between pt-4 border-t border-slate-100">
               <button
-                disabled={currentIndex === 0}
-                onClick={() => setCurrentIndex(prev => prev - 1)}
+                type="button"
+                disabled={safeIndex === 0}
+                onClick={() => handleNavigateToQuestion(safeIndex - 1)}
                 className="px-4 py-2 rounded-xl border border-slate-200 text-slate-700 font-semibold text-xs disabled:opacity-40 hover:bg-slate-50 transition-colors flex items-center gap-1.5"
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -470,12 +595,13 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
               </button>
 
               <span className="text-xs text-slate-500 font-medium">
-                Đã làm: <b className="text-blue-600">{answeredCount}</b> / {exam.questions.length} câu
+                Đã hoàn thành: <b className="text-blue-600">{totalCompleted}</b> / {safeQuestions.length} câu
               </span>
 
               <button
-                disabled={currentIndex === exam.questions.length - 1}
-                onClick={() => setCurrentIndex(prev => prev + 1)}
+                type="button"
+                disabled={safeIndex === safeQuestions.length - 1}
+                onClick={() => handleNavigateToQuestion(safeIndex + 1)}
                 className="px-4 py-2 rounded-xl bg-blue-600 text-white font-semibold text-xs disabled:opacity-40 hover:bg-blue-700 transition-colors flex items-center gap-1.5"
               >
                 <span>Câu tiếp theo</span>
@@ -486,82 +612,22 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
           </div>
         </div>
 
-        {/* Right Column: Question Navigator Palette (1 Col) */}
-        <div className="space-y-4">
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
-            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center justify-between">
-              <span>Bảng danh sách câu hỏi</span>
-              <span className="text-blue-600">{answeredCount}/{exam.questions.length}</span>
-            </h2>
-
-            {/* Color Legend */}
-            <div className="grid grid-cols-3 gap-1.5 text-[10px] text-slate-600 border-b border-slate-100 pb-3">
-              <div className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-emerald-500" />
-                <span>Đã làm</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-amber-400" />
-                <span>Đã gắn cờ</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <span className="w-2.5 h-2.5 rounded bg-slate-200" />
-                <span>Chưa làm</span>
-              </div>
-            </div>
-
-            {/* Questions Grid */}
-            <div className="grid grid-cols-5 gap-2">
-              {exam.questions.map((q, idx) => {
-                const ans = answers[q.id];
-                const isAnswered = ans && (
-                  (q.type === 'part1_single_choice' && !!ans.selectedOptionId) ||
-                  (q.type === 'part2_true_false' && ans.selectedStatements && Object.keys(ans.selectedStatements).length > 0) ||
-                  (q.type === 'part3_short_answer' && !!ans.textAnswer && ans.textAnswer.trim().length > 0)
-                );
-                const isFlagged = ans?.isMarkedForReview;
-                const isCurrent = idx === currentIndex;
-
-                let btnClass = 'bg-slate-100 text-slate-700 border-slate-200';
-                if (isAnswered) {
-                  btnClass = 'bg-emerald-500 text-white border-emerald-600 font-bold';
-                }
-                if (isFlagged) {
-                  btnClass = 'bg-amber-400 text-amber-950 border-amber-500 font-bold';
-                }
-                if (isCurrent) {
-                  btnClass += ' ring-2 ring-blue-600 ring-offset-2';
-                }
-
-                return (
-                  <button
-                    key={q.id}
-                    onClick={() => setCurrentIndex(idx)}
-                    className={`h-9 rounded-xl border text-xs font-semibold flex items-center justify-center transition-all ${btnClass}`}
-                  >
-                    {idx + 1}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="pt-3 border-t border-slate-100 space-y-2">
-              <button
-                onClick={() => setShowConfirmSubmit(true)}
-                className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center justify-center gap-2"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>Nộp bài & Hoàn thành</span>
-              </button>
-              
-              <button
-                onClick={() => setShowConfirmExit(true)}
-                className="w-full py-1.5 text-slate-500 hover:text-slate-700 text-xs text-center"
-              >
-                Rời khỏi phòng thi
-              </button>
-            </div>
-          </div>
+        {/* Right Column: Desktop Sticky Grouped Question Navigator (4 Cols) */}
+        <div className="hidden lg:block lg:col-span-4 lg:sticky lg:top-28">
+          <ExamQuestionNavigator
+            sections={sectionGroups}
+            answers={answers}
+            currentIndex={safeIndex}
+            totalQuestions={safeQuestions.length}
+            totalCompleted={totalCompleted}
+            totalPartial={totalPartial}
+            collapsedSections={collapsedSections}
+            onToggleSectionCollapse={handleToggleSectionCollapse}
+            onSelectQuestion={(idx) => handleNavigateToQuestion(idx, false)}
+            onRequestSubmit={() => setShowConfirmSubmit(true)}
+            onRequestExit={() => setShowConfirmExit(true)}
+            showActions={true}
+          />
         </div>
 
       </div>
@@ -610,11 +676,12 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
             <div className="text-center">
               <h3 className="text-lg font-bold text-slate-900">Xác nhận nộp bài thi?</h3>
               <p className="text-xs text-slate-600 mt-1">
-                Bạn đã hoàn thành <b className="text-emerald-600">{answeredCount}</b> trên tổng số <b>{exam.questions.length}</b> câu hỏi.
+                Bạn đã hoàn thành đầy đủ <b className="text-emerald-600">{totalCompleted}</b> trên tổng số <b>{safeQuestions.length}</b> câu hỏi.
               </p>
-              {answeredCount < exam.questions.length && (
+              {totalCompleted < safeQuestions.length && (
                 <p className="text-xs text-amber-700 bg-amber-50 p-2 rounded-lg mt-2 font-medium">
-                  Lưu ý: Vẫn còn {exam.questions.length - answeredCount} câu chưa có câu trả lời.
+                  Lưu ý: Vẫn còn {safeQuestions.length - totalCompleted} câu chưa hoàn thành đầy đủ
+                  {totalPartial > 0 ? ` (trong đó ${totalPartial} câu Đúng/Sai mới trả lời một phần)` : ''}.
                 </p>
               )}
             </div>

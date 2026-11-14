@@ -381,7 +381,16 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       showToast('Vui lòng kiểm tra và xác nhận cấu trúc các phần trước khi tạo đề thi!');
       return;
     }
-    onCreateExamFromParsed(parsedResult.title, parsedResult.questions, selectedGrade);
+    const secTitleMap = new Map<string, string>();
+    for (const sec of parsedResult.detectedSections || []) {
+      if (sec.id && sec.rawTitle) secTitleMap.set(sec.id, sec.rawTitle);
+    }
+    const enrichedQuestions = parsedResult.questions.map(q =>
+      q.sectionId && !q.sectionTitle && secTitleMap.has(q.sectionId)
+        ? { ...q, sectionTitle: secTitleMap.get(q.sectionId) }
+        : q
+    );
+    onCreateExamFromParsed(parsedResult.title, enrichedQuestions, selectedGrade);
   };
 
   // Dedicated Answer Item Handlers (Section V & Section VIII)
@@ -870,7 +879,16 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                     if (pendingActionNotice === 'bank') {
                       onSaveToQuestionBank(parsedResult.questions);
                     } else {
-                      onCreateExamFromParsed(parsedResult.title, parsedResult.questions, selectedGrade);
+                      const secTitleMap = new Map<string, string>();
+                      for (const sec of parsedResult.detectedSections || []) {
+                        if (sec.id && sec.rawTitle) secTitleMap.set(sec.id, sec.rawTitle);
+                      }
+                      const enrichedQuestions = parsedResult.questions.map(q =>
+                        q.sectionId && !q.sectionTitle && secTitleMap.has(q.sectionId)
+                          ? { ...q, sectionTitle: secTitleMap.get(q.sectionId) }
+                          : q
+                      );
+                      onCreateExamFromParsed(parsedResult.title, enrichedQuestions, selectedGrade);
                     }
                   }}
                   className="px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-bold shrink-0"
