@@ -34,18 +34,15 @@ service cloud.firestore {
 
     function hasActiveAdminMarker() {
       return exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-        && (!('active' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data)
-            || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true)
-        && (!('role' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data)
-            || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin');
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('active', true) == true
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', 'admin') == 'admin';
     }
 
     function isAdmin() {
       return isSignedIn() && (
         request.auth.token.admin == true ||
         request.auth.token.role == 'admin' ||
-        hasActiveAdminMarker() ||
-        (userProfileExists() && currentUserData().role == 'admin' && currentUserData().status == 'active')
+        hasActiveAdminMarker()
       );
     }
 
@@ -71,8 +68,7 @@ service cloud.firestore {
     // 3. Entity Validation Blueprints
     function isValidUserProfile(data) {
       return data.keys().hasAll([
-          'uid', 'email', 'name', 'role', 'status', 'createdAt', 'updatedAt',
-          'serverCreatedAt', 'serverUpdatedAt'
+          'uid', 'email', 'name', 'role', 'status', 'createdAt', 'updatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
           'uid', 'email', 'name', 'role', 'status', 'phone', 'school', 'className',
@@ -89,9 +85,9 @@ service cloud.firestore {
         && (!('className' in data) || (data.className is string && data.className.size() <= 80))
         && (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128))
         && (!('approvedAt' in data) || (data.approvedAt is string && data.approvedAt.size() <= 64))
-        && data.createdAt is string && data.createdAt.size() <= 64
-        && data.updatedAt is string && data.updatedAt.size() <= 64
-        && data.serverCreatedAt is timestamp
+        && ((data.createdAt is string && data.createdAt.size() <= 64) || data.createdAt is timestamp)
+        && ((data.updatedAt is string && data.updatedAt.size() <= 64) || data.updatedAt is timestamp)
+        && (!('serverCreatedAt' in data) || data.serverCreatedAt is timestamp)
         && data.serverUpdatedAt is timestamp;
     }
 
@@ -434,13 +430,12 @@ service cloud.firestore {
       allow create: if isSignedIn()
         && isValidId(userId)
         && isValidUserProfile(incoming())
-        && request.auth.uid == userId
         && incoming().uid == userId
         && incoming().serverCreatedAt == request.time
         && incoming().serverUpdatedAt == request.time
         && (
-          (incoming().role == 'student' && incoming().status == 'active') ||
-          (incoming().role == 'teacher' && incoming().status == 'pending') ||
+          (request.auth.uid == userId && incoming().role == 'student' && incoming().status == 'active') ||
+          (request.auth.uid == userId && incoming().role == 'teacher' && incoming().status == 'pending') ||
           (isAdmin() && incoming().role == 'admin' && incoming().status == 'active')
         );
       allow update: if isSignedIn()

@@ -34,6 +34,7 @@ import {
   inspectAccountSyncStatus,
   EXPECTED_PRIMARY_ADMIN_EMAIL,
   AccountSyncDiagnostic,
+  ProfileDiagnosticError,
 } from '../../services/authService';
 import { normalizeExamCode } from '../../utils/urlHelper';
 
@@ -49,6 +50,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
     firebaseUser,
     userProfile,
     authError,
+    authDiagnostic,
     pendingDraft,
     refreshProfile,
     retrySyncMissingProfile,
@@ -58,6 +60,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   const [mode, setMode] = useState<AuthViewMode>('login');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [errorDiag, setErrorDiag] = useState<ProfileDiagnosticError | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [quickExamCode, setQuickExamCode] = useState('');
 
@@ -93,9 +96,6 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   );
   const [recoverRole, setRecoverRole] = useState<'admin' | 'teacher' | 'student'>(() => {
     if (pendingDraft?.role) return pendingDraft.role;
-    if ((firebaseUser?.email || '').trim().toLowerCase() === EXPECTED_PRIMARY_ADMIN_EMAIL) {
-      return 'admin';
-    }
     return 'student';
   });
   const [recoverSchool, setRecoverSchool] = useState(pendingDraft?.school || '');
@@ -130,13 +130,14 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   }, [firebaseUser]);
 
   useEffect(() => {
-    if (authState === 'missing_profile' && firebaseUser) {
+    if ((authState === 'missing_profile' || authState === 'profile_read_error') && firebaseUser) {
       void loadSyncDiagnostic(false);
     }
   }, [authState, firebaseUser, loadSyncDiagnostic]);
 
   const clearBanners = () => {
     setErrorMsg(null);
+    setErrorDiag(null);
     setSuccessMsg(null);
   };
 
@@ -180,6 +181,122 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
           >
             Tải lại trang
           </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (authState === 'profile_read_error') {
+    const activeDiag = authDiagnostic || syncDiag?.userDocError || errorDiag;
+    const headingByCategory: Record<string, string> = {
+      read_permission_denied: 'Không đủ quyền đọc hồ sơ Firestore',
+      write_permission_denied: 'Không đủ quyền ghi hồ sơ Firestore',
+      project_mismatch: 'Sai cấu hình Firebase Project hoặc Database ID',
+      network_error: 'Lỗi kết nối mạng tới Firebase Firestore',
+    };
+    const title =
+      (activeDiag?.category && headingByCategory[activeDiag.category]) ||
+      'Lỗi truy cập hồ sơ Firestore';
+
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+        <div className="bg-white border border-rose-200 rounded-3xl shadow-xl p-7 sm:p-8 max-w-xl w-full space-y-5">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-700 flex items-center justify-center shrink-0">
+              <ShieldAlert className="w-6 h-6" />
+            </div>
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-rose-700">
+                CHẨN ĐOÁN LỖI FIRESTORE
+              </span>
+              <h2 className="text-base font-extrabold text-slate-900">{title}</h2>
+            </div>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-900 space-y-1.5 leading-relaxed">
+            <p className="font-bold">{authError || activeDiag?.userMessage || 'Không thể đọc dữ liệu hồ sơ người dùng từ Firestore.'}</p>
+            <p className="text-[11px] text-rose-800">
+              Hệ thống giữ nguyên phiên Firebase Auth hiện tại ({firebaseUser?.email || 'đã đăng nhập'}) để bạn kiểm tra nguyên nhân thực tế mà không tự ý chuyển hướng hay tạo tài khoản trùng.
+            </p>
+          </div>
+
+          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1.5">
+            <div className="font-bold text-slate-800 uppercase tracking-wide">Thông số kỹ thuật</div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+              <div>
+                <span className="text-slate-500">UID Auth:</span>{' '}
+                <code className="font-mono bg-slate-200/70 px-1.5 py-0.5 rounded text-[10px]">
+                  {firebaseUser?.uid || '—'}
+                </code>
+              </div>
+              <div>
+                <span className="text-slate-500">Email Auth:</span>{' '}
+                <strong>{firebaseUser?.email || '—'}</strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Project ID:</span>{' '}
+                <code className="font-mono bg-slate-200/70 px-1 py-0.5 rounded text-[10px]">
+                  {activeDiag?.projectId || syncDiag?.projectId || '—'}
+                </code>
+              </div>
+              <div>
+                <span className="text-slate-500">Database ID:</span>{' '}
+                <code className="font-mono bg-slate-200/70 px-1 py-0.5 rounded text-[10px]">
+                  {activeDiag?.databaseId || syncDiag?.databaseId || '—'}
+                </code>
+              </div>
+              <div>
+                <span className="text-slate-500">Thao tác bị lỗi:</span>{' '}
+                <code className="font-mono bg-slate-200/70 px-1 py-0.5 rounded text-[10px]">
+                  {activeDiag ? `${activeDiag.operation} ${activeDiag.path}` : 'GET users/{uid}'}
+                </code>
+              </div>
+              <div>
+                <span className="text-slate-500">Mã lỗi Firebase:</span>{' '}
+                <code className="font-mono bg-rose-100 text-rose-800 px-1 py-0.5 rounded text-[10px]">
+                  {activeDiag?.code || 'unknown'}
+                </code>
+              </div>
+            </div>
+          </div>
+
+          {errorMsg && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+              {errorMsg}
+            </div>
+          )}
+
+          <div className="flex items-center justify-between gap-3 pt-1">
+            <button
+              type="button"
+              disabled={isSubmitting}
+              onClick={async () => {
+                clearBanners();
+                setIsSubmitting(true);
+                try {
+                  const res = await refreshProfile();
+                  await loadSyncDiagnostic(true);
+                  if (!res.success && res.errorMessage) {
+                    setErrorMsg(res.errorMessage);
+                  }
+                } finally {
+                  setIsSubmitting(false);
+                }
+              }}
+              className="flex-1 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold flex items-center justify-center gap-1.5"
+            >
+              <RefreshCw className={`w-4 h-4 ${isSubmitting ? 'animate-spin' : ''}`} />
+              <span>{isSubmitting ? 'Đang kiểm tra lại...' : 'Thử kiểm tra lại'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="px-4 py-2.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold flex items-center gap-1.5"
+            >
+              <LogOut className="w-4 h-4" />
+              <span>Đăng xuất</span>
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -284,6 +401,8 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   if (authState === 'missing_profile') {
     const isEmailVerified = Boolean(syncDiag?.emailVerified ?? firebaseUser?.emailVerified);
     const hasAdminAuthority = Boolean(syncDiag?.hasTrustedAdminAuthority);
+    const isExpectedPrimaryAdmin =
+      (firebaseUser?.email || '').trim().toLowerCase() === EXPECTED_PRIMARY_ADMIN_EMAIL;
 
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
@@ -304,13 +423,19 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
 
           <div className="p-3.5 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5 leading-relaxed">
             <p className="font-bold">
-              Hồ sơ tài khoản chưa được đồng bộ. Vui lòng hoàn tất đồng bộ.
+              Tài khoản Firebase Auth đã đăng nhập hợp lệ, nhưng hồ sơ trên Firestore chưa tồn tại hoặc chưa đầy đủ các trường bắt buộc.
             </p>
             <p>
               {authError ||
-                'Tài khoản Firebase Auth đã đăng nhập hợp lệ, nhưng hồ sơ users/{uid} trên Firestore chưa tồn tại hoặc chưa đầy đủ các trường bắt buộc.'}
+                'Hệ thống giữ nguyên phiên Auth hiện tại và không tạo tài khoản trùng lặp.'}
             </p>
           </div>
+
+          {syncDiag?.projectMismatchSuspected && (
+            <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-xs text-rose-800 font-semibold">
+              Cảnh báo: Biến môi trường trên Vercel/môi trường chạy có Project ID hoặc Database ID khác với <code className="font-mono">firebase-applet-config.json</code>.
+            </div>
+          )}
 
           {/* Live Auth + Firestore Inspection Status */}
           <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 text-[11px] text-slate-700 space-y-1.5">
@@ -333,12 +458,40 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                 </code>
               </div>
               <div>
+                <span className="text-slate-500">Project / DB:</span>{' '}
+                <code className="font-mono bg-slate-200/70 px-1 py-0.5 rounded text-[10px]">
+                  {syncDiag ? `${syncDiag.projectId} / ${syncDiag.databaseId}` : 'Đang kiểm tra...'}
+                </code>
+              </div>
+              <div>
                 <span className="text-slate-500">Hồ sơ users/&#123;uid&#125;:</span>{' '}
-                <strong className={syncDiag?.userDocExists ? 'text-amber-700' : 'text-rose-700'}>
+                <strong
+                  className={
+                    syncDiag?.userDocError
+                      ? 'text-rose-700'
+                      : syncDiag?.userDocExists
+                      ? 'text-amber-700'
+                      : 'text-rose-700'
+                  }
+                >
                   {syncDiag
-                    ? syncDiag.userDocExists
+                    ? syncDiag.userDocError
+                      ? `Lỗi ${syncDiag.userDocError.code} (${syncDiag.userDocError.operation})`
+                      : syncDiag.userDocExists
                       ? `Thiếu: ${syncDiag.userDocMissingFields.join(', ') || 'cần đồng bộ'}`
                       : 'Chưa tồn tại'
+                    : 'Đang kiểm tra...'}
+                </strong>
+              </div>
+              <div>
+                <span className="text-slate-500">Quyền Admin máy chủ:</span>{' '}
+                <strong className={hasAdminAuthority ? 'text-emerald-700' : 'text-slate-600'}>
+                  {syncDiag
+                    ? hasAdminAuthority
+                      ? 'Hợp lệ (admins/{uid} / Claim)'
+                      : syncDiag.adminDocDiagnostic
+                      ? `Lỗi ${syncDiag.adminDocDiagnostic.code} tại ${syncDiag.adminDocDiagnostic.path}`
+                      : 'Chưa có admins/{uid}'
                     : 'Đang kiểm tra...'}
                 </strong>
               </div>
@@ -348,20 +501,45 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                   {isEmailVerified ? 'Đã xác minh' : 'Chưa xác minh'}
                 </strong>
               </div>
-              <div>
-                <span className="text-slate-500">Quyền Admin máy chủ:</span>{' '}
-                <strong className={hasAdminAuthority ? 'text-emerald-700' : 'text-slate-600'}>
-                  {syncDiag
-                    ? hasAdminAuthority
-                      ? 'Hợp lệ (admins/{uid} / Claim)'
-                      : syncDiag.adminDocError
-                      ? 'Không thể xác nhận quyền Admin'
-                      : 'Chưa được cấp quyền Admin'
-                    : 'Đang kiểm tra...'}
-                </strong>
-              </div>
             </div>
           </div>
+
+          {!hasAdminAuthority && isExpectedPrimaryAdmin && (
+            <div className="p-3.5 rounded-2xl bg-indigo-50 border border-indigo-200 text-[11px] text-indigo-950 space-y-2 leading-relaxed">
+              <div className="font-bold text-indigo-900 flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-indigo-600 shrink-0" />
+                <span>Khởi tạo quyền Admin chính một lần trên máy chủ Firebase</span>
+              </div>
+              <p>
+                Vì lý do bảo mật, trình duyệt không được phép tự tạo document <code className="font-mono">admins/{firebaseUser?.uid}</code> hoặc tự gán <code className="font-mono">role: &quot;admin&quot;</code>. Hãy thực hiện 1 trong 2 cách sau:
+              </p>
+              <ul className="list-disc list-inside space-y-1 text-indigo-900">
+                <li>
+                  <strong>Cách A (Firebase Console):</strong> Mở Firestore Database{' '}
+                  <code className="font-mono bg-white/80 px-1 rounded">{syncDiag?.databaseId || 'ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e'}</code> → tạo collection <code className="font-mono">admins</code> → Document ID{' '}
+                  <code className="font-mono bg-white/80 px-1 rounded">{firebaseUser?.uid}</code> với{' '}
+                  <code className="font-mono">{`{ uid, email, role: "admin", active: true }`}</code>.
+                </li>
+                <li>
+                  <strong>Cách B (Admin SDK Script):</strong> Chạy{' '}
+                  <code className="font-mono bg-white/80 px-1 rounded">node scripts/restore-admin-profile.mjs</code> cùng Service Account JSON ở máy quản trị.
+                </li>
+              </ul>
+              <button
+                type="button"
+                disabled={isCheckingDiag}
+                onClick={async () => {
+                  clearBanners();
+                  await refreshProfile();
+                  await loadSyncDiagnostic(true);
+                }}
+                className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-[11px] font-bold inline-flex items-center gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isCheckingDiag ? 'animate-spin' : ''}`} />
+                <span>Kiểm tra lại quyền Admin từ máy chủ</span>
+              </button>
+            </div>
+          )}
 
           {/* Independent Email Verification Section */}
           <div
@@ -446,9 +624,16 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
           </div>
 
           {errorMsg && (
-            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-              <span>{errorMsg}</span>
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-1">
+              <div className="font-semibold flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{errorMsg}</span>
+              </div>
+              {errorDiag && (
+                <div className="pl-6 text-[11px] font-mono text-rose-700">
+                  [{errorDiag.category}] {errorDiag.operation} {errorDiag.path} • code: {errorDiag.code} • project: {errorDiag.projectId}
+                </div>
+              )}
             </div>
           )}
           {successMsg && (
@@ -465,11 +650,17 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
               clearBanners();
               setIsSubmitting(true);
               try {
+                const effectiveRole = hasAdminAuthority
+                  ? 'admin'
+                  : recoverRole === 'teacher'
+                  ? 'teacher'
+                  : 'student';
+
                 const res = await retrySyncMissingProfile(
                   pendingDraft
                     ? undefined
                     : {
-                        intendedRole: recoverRole,
+                        intendedRole: effectiveRole,
                         name: recoverName.trim() || undefined,
                         school: recoverSchool.trim() || undefined,
                         className: recoverClassName.trim() || undefined,
@@ -479,6 +670,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                 await loadSyncDiagnostic(false);
                 if (!res.success) {
                   setErrorMsg(res.errorMessage || 'Chưa thể đồng bộ hồ sơ.');
+                  setErrorDiag(res.errorDiagnostic || null);
                 } else {
                   setSuccessMsg(res.warningMessage || 'Đồng bộ hồ sơ thành công');
                 }
@@ -515,16 +707,21 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">Vai trò hồ sơ</label>
                   <select
-                    value={hasAdminAuthority ? 'admin' : recoverRole}
+                    value={hasAdminAuthority ? 'admin' : recoverRole === 'admin' ? 'student' : recoverRole}
                     disabled={hasAdminAuthority}
-                    onChange={(e) => setRecoverRole(e.target.value as 'admin' | 'teacher' | 'student')}
+                    onChange={(e) => setRecoverRole(e.target.value as 'teacher' | 'student')}
                     className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold bg-white disabled:bg-slate-100"
                   >
-                    <option value="admin">
-                      Quản trị viên (Admin — yêu cầu admins/&#123;uid&#125; hoặc Claim hợp lệ)
-                    </option>
-                    <option value="student">Học sinh</option>
-                    <option value="teacher">Giáo viên (Chờ Admin duyệt)</option>
+                    {hasAdminAuthority ? (
+                      <option value="admin">
+                        Quản trị viên (Admin — Đã xác thực admins/&#123;uid&#125; / Claim)
+                      </option>
+                    ) : (
+                      <>
+                        <option value="student">Học sinh</option>
+                        <option value="teacher">Giáo viên (Chờ Admin duyệt)</option>
+                      </>
+                    )}
                   </select>
                 </div>
                 {recoverRole === 'teacher' && !hasAdminAuthority && (

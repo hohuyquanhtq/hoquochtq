@@ -9,6 +9,8 @@ import {
   loadPendingDraft,
   logoutAccount,
   mapFirebaseAuthError,
+  ProfileAccessError,
+  ProfileDiagnosticError,
   PendingProfileDraft,
   SyncProfileByUidOptions,
 } from '../services/authService';
@@ -22,6 +24,7 @@ export type SessionAuthState =
   | 'rejected'
   | 'locked'
   | 'missing_profile'
+  | 'profile_read_error'
   | 'firebase_error';
 
 interface AuthContextValue {
@@ -29,6 +32,7 @@ interface AuthContextValue {
   firebaseUser: FirebaseUser | null;
   userProfile: User | null;
   authError: string | null;
+  authDiagnostic: ProfileDiagnosticError | null;
   pendingDraft: PendingProfileDraft | null;
   postSyncNotice: string | null;
   clearPostSyncNotice: () => void;
@@ -43,6 +47,7 @@ interface AuthContextValue {
     success: boolean;
     user?: User;
     errorMessage?: string;
+    errorDiagnostic?: ProfileDiagnosticError;
     warningMessage?: string;
   }>;
   setLocalUpdatedProfile: (profile: User) => void;
@@ -58,6 +63,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<User | null>(null);
   const [authError, setAuthError] = useState<string | null>(firebaseInitError);
+  const [authDiagnostic, setAuthDiagnostic] = useState<ProfileDiagnosticError | null>(null);
   const [pendingDraft, setPendingDraft] = useState<PendingProfileDraft | null>(null);
   const [postSyncNotice, setPostSyncNotice] = useState<string | null>(null);
 
@@ -69,6 +75,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (firebaseInitError) {
       setAuthState('firebase_error');
       setAuthError(firebaseInitError);
+      setAuthDiagnostic(null);
       setFirebaseUser(null);
       setUserProfile(null);
       StorageService.clearActiveWorkspaceMemory();
@@ -80,6 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUserProfile(null);
       setPendingDraft(null);
       setAuthError(null);
+      setAuthDiagnostic(null);
       StorageService.clearActiveWorkspaceMemory();
       setAuthState('unauthenticated');
       return;
@@ -87,6 +95,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     setFirebaseUser(fbUser);
     setAuthError(null);
+    setAuthDiagnostic(null);
 
     try {
       let profile = await fetchUserProfileFromFirestore(fbUser);
@@ -130,9 +139,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err) {
       console.error('[HQTest AuthContext] Failed to resolve user profile:', err);
       StorageService.clearActiveWorkspaceMemory();
-      setAuthError(mapFirebaseAuthError(err));
       setPendingDraft(loadPendingDraft(fbUser.uid));
-      setAuthState('missing_profile');
+
+      if (err instanceof ProfileAccessError) {
+        setAuthDiagnostic(err.diagnostic);
+        setAuthError(err.diagnostic.userMessage);
+        setAuthState('profile_read_error');
+        return;
+      }
+
+      setAuthError(mapFirebaseAuthError(err));
+      setAuthState('profile_read_error');
     }
   }, []);
 
@@ -201,12 +218,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       try {
         const res = await syncUserProfileByUid(current, syncOpts);
         if (!res.success || !res.user) {
+          if (res.errorDiagnostic) {
+            setAuthDiagnostic(res.errorDiagnostic);
+          }
           return {
             success: false,
             errorMessage: res.errorMessage || 'Đồng bộ hồ sơ chưa thành công.',
+            errorDiagnostic: res.errorDiagnostic,
           };
         }
 
+        setAuthDiagnostic(null);
         setPostSyncNotice('Đồng bộ hồ sơ thành công');
         setUserProfile(res.user);
         setPendingDraft(null);
@@ -232,6 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUserProfile(null);
     setPendingDraft(null);
     setAuthError(null);
+    setAuthDiagnostic(null);
     setPostSyncNotice(null);
     await logoutAccount();
     setAuthState('unauthenticated');
@@ -244,6 +267,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         firebaseUser,
         userProfile,
         authError,
+        authDiagnostic,
         pendingDraft,
         postSyncNotice,
         clearPostSyncNotice,

@@ -6,7 +6,7 @@
 3. **Non-Escalatable User Accounts (`/users/{userId}`)**:
    - Public registration may only create `/users/{uid}` with `role == 'student'` (`status == 'active'`) or `role == 'teacher'` (`status == 'pending'`).
    - Users can never self-assign `role: 'admin'`, self-approve `'teacher'`, or unlock themselves (`status: 'locked'`).
-   - Only verified Admins (`isAdmin()`) may `list` users or update `role`, `status`, `approvedBy`, `approvedAt`.
+   - Only verified Admins (`isAdmin()`, evaluated strictly from Admin Custom Claims or `/admins/{uid}` without circular reads to `/users/{uid}`) may `list` users or update `role`, `status`, `approvedBy`, `approvedAt`.
 4. **Teacher Isolated Workspaces (`/questions`, `/folders`, `/exams`, `/classes`, `/uploadRecords`)**:
    - All private teacher resources require `isActiveTeacher()` (`role == 'teacher' && status == 'active'` or Admin) and `ownerId == request.auth.uid`.
    - Teachers with `status == 'pending'`, `'locked'`, or `'rejected'` cannot create, read, or publish private exams/questions.

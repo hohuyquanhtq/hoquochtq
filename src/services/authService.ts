@@ -23,6 +23,7 @@ import {
   auth,
   db,
   firebaseInitError,
+  getFirebaseProjectInfo,
   stripUndefinedDeep,
   handleFirestoreError,
   OperationType,
@@ -68,6 +69,37 @@ export interface RegisterStudentInput {
   className?: string;
 }
 
+export type ProfileErrorCategory =
+  | 'profile_not_found'
+  | 'read_permission_denied'
+  | 'write_permission_denied'
+  | 'pending_approval'
+  | 'locked'
+  | 'rejected'
+  | 'project_mismatch'
+  | 'network_error'
+  | 'unexpected_error';
+
+export interface ProfileDiagnosticError {
+  category: ProfileErrorCategory;
+  code: string;
+  operation: 'GET' | 'CREATE' | 'UPDATE' | 'LIST';
+  path: string;
+  projectId: string;
+  databaseId: string;
+  uid?: string;
+  userMessage: string;
+}
+
+export class ProfileAccessError extends Error {
+  public readonly diagnostic: ProfileDiagnosticError;
+  constructor(diagnostic: ProfileDiagnosticError) {
+    super(diagnostic.userMessage);
+    this.name = 'ProfileAccessError';
+    this.diagnostic = diagnostic;
+  }
+}
+
 export interface AuthActionResult {
   success: boolean;
   user?: User;
@@ -75,6 +107,7 @@ export interface AuthActionResult {
   profileSyncFailed?: boolean;
   verifiedFromServer?: boolean;
   errorMessage?: string;
+  errorDiagnostic?: ProfileDiagnosticError;
 }
 
 export interface AccountSyncDiagnostic {
@@ -82,11 +115,16 @@ export interface AccountSyncDiagnostic {
   email: string;
   emailVerified: boolean;
   displayName: string;
+  projectId: string;
+  databaseId: string;
+  projectMismatchSuspected: boolean;
   userDocExists: boolean;
   userDocMissingFields: string[];
+  userDocError?: ProfileDiagnosticError;
   adminDocExists: boolean;
   adminDocActive: boolean;
   adminDocError?: string;
+  adminDocDiagnostic?: ProfileDiagnosticError;
   hasAdminClaim: boolean;
   hasTrustedAdminAuthority: boolean;
   existingRole?: UserRole;
@@ -107,7 +145,82 @@ export function isValidEmailFormat(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
 }
 
+export function classifyFirestoreOperationError(
+  error: unknown,
+  operation: 'GET' | 'CREATE' | 'UPDATE' | 'LIST',
+  path: string,
+  uid?: string
+): ProfileDiagnosticError {
+  const errObj = error as { code?: string; message?: string } | undefined;
+  const code = (errObj?.code || 'unknown').toLowerCase();
+  const rawMessage = (errObj?.message || String(error || '')).toLowerCase();
+  const projectInfo = getFirebaseProjectInfo();
+
+  let category: ProfileErrorCategory = 'unexpected_error';
+  let userMessage = `Đã xảy ra lỗi không mong muốn khi ${operation} ${path} (mã lỗi: ${code}).`;
+
+  if (
+    projectInfo.projectMismatchSuspected ||
+    (code.includes('not-found') && rawMessage.includes('database')) ||
+    code.includes('app-not-authorized') ||
+    code.includes('invalid-api-key') ||
+    (code.includes('failed-precondition') && rawMessage.includes('project'))
+  ) {
+    category = 'project_mismatch';
+    userMessage = `Firebase có thể đang kết nối nhầm Project hoặc sai Database ID (hiện tại: Project "${projectInfo.projectId}", DB "${projectInfo.databaseId}", mã lỗi: ${code}).`;
+  } else if (
+    code.includes('network-request-failed') ||
+    code.includes('unavailable') ||
+    code.includes('deadline-exceeded') ||
+    rawMessage.includes('network') ||
+    rawMessage.includes('failed to fetch') ||
+    rawMessage.includes('offline')
+  ) {
+    category = 'network_error';
+    userMessage = `Lỗi kết nối mạng tới máy chủ Firebase Firestore khi thực hiện ${operation} ${path} (mã lỗi: ${code}). Vui lòng kiểm tra Internet và thử lại.`;
+  } else if (
+    code.includes('permission-denied') ||
+    rawMessage.includes('missing or insufficient permissions')
+  ) {
+    if (operation === 'GET' || operation === 'LIST') {
+      category = 'read_permission_denied';
+      userMessage = `Không đủ quyền đọc hồ sơ (${operation} ${path}, mã lỗi: ${code}). Vui lòng kiểm tra Firestore Security Rules hoặc trạng thái tài khoản.`;
+    } else {
+      category = 'write_permission_denied';
+      userMessage = `Không đủ quyền ghi hồ sơ (${operation} ${path}, mã lỗi: ${code}). Nếu đang đồng bộ tài khoản Admin, cần tạo trước document admins/${uid || '{uid}'} hoặc Admin Custom Claim trên Firebase.`;
+    }
+  }
+
+  const diagnostic: ProfileDiagnosticError = {
+    category,
+    code,
+    operation,
+    path,
+    projectId: projectInfo.projectId,
+    databaseId: projectInfo.databaseId,
+    uid,
+    userMessage,
+  };
+
+  console.error('[HQTest Firestore Diagnostic]', {
+    category: diagnostic.category,
+    code: diagnostic.code,
+    operation: diagnostic.operation,
+    path: diagnostic.path,
+    projectId: diagnostic.projectId,
+    databaseId: diagnostic.databaseId,
+    uid: diagnostic.uid,
+    message: errObj?.message || String(error || ''),
+  });
+
+  return diagnostic;
+}
+
 export function mapFirebaseAuthError(error: unknown): string {
+  if (error instanceof ProfileAccessError) {
+    return error.diagnostic.userMessage;
+  }
+
   const errObj = error as { code?: string; message?: string } | undefined;
   const code = (errObj?.code || '').toLowerCase();
   const rawMessage = (errObj?.message || String(error || '')).toLowerCase();
@@ -152,7 +265,7 @@ export function mapFirebaseAuthError(error: unknown): string {
     return 'Lỗi kết nối mạng tới máy chủ Firebase. Vui lòng kiểm tra Internet và thử lại.';
   }
   if (code.includes('permission-denied') || rawMessage.includes('missing or insufficient permissions')) {
-    return 'Không đủ quyền thực hiện thao tác dữ liệu trên Firestore. Vui lòng kiểm tra trạng thái tài khoản hoặc liên hệ Quản trị viên.';
+    return 'Thao tác Firestore bị từ chối (permission-denied). Vui lòng kiểm tra Firestore Security Rules và quyền tài khoản.';
   }
 
   return errObj?.message || 'Đã xảy ra lỗi xác thực không mong muốn. Vui lòng thử lại.';
@@ -321,7 +434,30 @@ export async function createOrSyncUserProfileDoc(
   };
 }
 
-function parseUserDoc(uid: string, fbUser: FirebaseUser, raw: Record<string, unknown>, hasTrustedAdminAuthority: boolean): User {
+function toIsoString(val: unknown): string | undefined {
+  if (!val) return undefined;
+  if (typeof val === 'string') return val.trim() || undefined;
+  if (val instanceof Date) return isNaN(val.getTime()) ? undefined : val.toISOString();
+  if (typeof val === 'object') {
+    const maybeTs = val as { toDate?: () => Date; seconds?: number };
+    if (typeof maybeTs.toDate === 'function') {
+      const d = maybeTs.toDate();
+      return isNaN(d.getTime()) ? undefined : d.toISOString();
+    }
+    if (typeof maybeTs.seconds === 'number') {
+      const d = new Date(maybeTs.seconds * 1000);
+      return isNaN(d.getTime()) ? undefined : d.toISOString();
+    }
+  }
+  return undefined;
+}
+
+function parseUserDoc(
+  uid: string,
+  fbUser: FirebaseUser,
+  raw: Record<string, unknown>,
+  hasTrustedAdminAuthority: boolean
+): User {
   const role: UserRole = hasTrustedAdminAuthority
     ? 'admin'
     : ((raw.role as UserRole) || 'student');
@@ -329,20 +465,26 @@ function parseUserDoc(uid: string, fbUser: FirebaseUser, raw: Record<string, unk
     ? 'active'
     : ((raw.status as AccountStatus) || (role === 'teacher' ? 'pending' : 'active'));
 
+  const cleanEmail = String(raw.email || fbUser.email || '').trim().toLowerCase();
+  const cleanName =
+    String(raw.name || fbUser.displayName || '').trim() ||
+    cleanEmail.split('@')[0] ||
+    'Người dùng HQTest';
+
   return {
     id: uid,
     uid,
-    email: String(raw.email || fbUser.email || '').trim().toLowerCase(),
-    name: String(raw.name || fbUser.displayName || '').trim() || String(raw.email || fbUser.email || '').split('@')[0] || 'Người dùng HQTest',
+    email: cleanEmail,
+    name: cleanName,
     role,
     status,
     phone: typeof raw.phone === 'string' ? raw.phone : undefined,
     school: typeof raw.school === 'string' ? raw.school : undefined,
     className: typeof raw.className === 'string' ? raw.className : undefined,
     approvedBy: typeof raw.approvedBy === 'string' ? raw.approvedBy : undefined,
-    approvedAt: typeof raw.approvedAt === 'string' ? raw.approvedAt : undefined,
-    createdAt: String(raw.createdAt || new Date().toISOString()),
-    updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : undefined,
+    approvedAt: toIsoString(raw.approvedAt),
+    createdAt: toIsoString(raw.createdAt) || new Date().toISOString(),
+    updatedAt: toIsoString(raw.updatedAt),
   };
 }
 
@@ -350,6 +492,7 @@ async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
   adminDocExists: boolean;
   adminDocActive: boolean;
   adminDocError?: string;
+  adminDocDiagnostic?: ProfileDiagnosticError;
   hasAdminClaim: boolean;
 }> {
   let hasAdminClaim = false;
@@ -365,10 +508,18 @@ async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
   let adminDocExists = false;
   let adminDocActive = false;
   let adminDocError: string | undefined;
+  let adminDocDiagnostic: ProfileDiagnosticError | undefined;
 
+  const adminPath = `admins/${fbUser.uid}`;
   try {
     const adminRef = doc(db, 'admins', fbUser.uid);
-    const adminSnap = await getDocFromServer(adminRef).catch(() => getDoc(adminRef));
+    const adminSnap = await getDocFromServer(adminRef).catch((serverErr) => {
+      const code = ((serverErr as { code?: string })?.code || '').toLowerCase();
+      if (code.includes('unavailable')) {
+        return getDoc(adminRef);
+      }
+      throw serverErr;
+    });
     adminDocExists = adminSnap.exists();
     if (adminSnap.exists()) {
       const data = adminSnap.data() as Record<string, unknown>;
@@ -377,10 +528,11 @@ async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
       adminDocActive = isRoleOk && isActiveOk;
     }
   } catch (err) {
-    adminDocError = mapFirebaseAuthError(err);
+    adminDocDiagnostic = classifyFirestoreOperationError(err, 'GET', adminPath, fbUser.uid);
+    adminDocError = adminDocDiagnostic.userMessage;
   }
 
-  return { adminDocExists, adminDocActive, adminDocError, hasAdminClaim };
+  return { adminDocExists, adminDocActive, adminDocError, adminDocDiagnostic, hasAdminClaim };
 }
 
 export async function inspectAccountSyncStatus(
@@ -392,25 +544,40 @@ export async function inspectAccountSyncStatus(
     await fbUser.getIdToken(true).catch(() => {});
   }
 
-  const [userSnap, adminInfo] = await Promise.all([
-    getDocFromServer(doc(db, 'users', fbUser.uid)).catch(() => getDoc(doc(db, 'users', fbUser.uid))),
-    readTrustedAdminStatus(fbUser),
-  ]);
+  const projectInfo = getFirebaseProjectInfo();
+  const userPath = `users/${fbUser.uid}`;
 
-  const raw = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
+  let userSnapExists = false;
+  let raw: Record<string, unknown> | null = null;
+  let userDocError: ProfileDiagnosticError | undefined;
+
+  try {
+    const userRef = doc(db, 'users', fbUser.uid);
+    const userSnap = await getDocFromServer(userRef).catch((serverErr) => {
+      const code = ((serverErr as { code?: string })?.code || '').toLowerCase();
+      if (code.includes('unavailable')) {
+        return getDoc(userRef);
+      }
+      throw serverErr;
+    });
+    userSnapExists = userSnap.exists();
+    raw = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
+  } catch (err) {
+    userDocError = classifyFirestoreOperationError(err, 'GET', userPath, fbUser.uid);
+  }
+
+  const adminInfo = await readTrustedAdminStatus(fbUser);
+
   const requiredFields = [
     'uid',
     'email',
-    'name',
     'role',
     'status',
     'createdAt',
     'updatedAt',
-    'serverCreatedAt',
-    'serverUpdatedAt',
   ];
   const userDocMissingFields = raw
-    ? requiredFields.filter((field) => raw[field] === undefined || raw[field] === null || raw[field] === '')
+    ? requiredFields.filter((field) => raw![field] === undefined || raw![field] === null || raw![field] === '')
     : requiredFields;
 
   const existingRole = typeof raw?.role === 'string' ? (raw.role as UserRole) : undefined;
@@ -427,11 +594,16 @@ export async function inspectAccountSyncStatus(
     email: (fbUser.email || '').trim().toLowerCase(),
     emailVerified: Boolean(fbUser.emailVerified),
     displayName: (fbUser.displayName || '').trim(),
-    userDocExists: userSnap.exists(),
+    projectId: projectInfo.projectId,
+    databaseId: projectInfo.databaseId,
+    projectMismatchSuspected: projectInfo.projectMismatchSuspected,
+    userDocExists: userSnapExists,
     userDocMissingFields,
+    userDocError,
     adminDocExists: adminInfo.adminDocExists,
     adminDocActive: adminInfo.adminDocActive,
     adminDocError: adminInfo.adminDocError,
+    adminDocDiagnostic: adminInfo.adminDocDiagnostic,
     hasAdminClaim: adminInfo.hasAdminClaim,
     hasTrustedAdminAuthority,
     existingRole,
@@ -446,12 +618,18 @@ export async function fetchUserProfileFromFirestore(
 ): Promise<User | null> {
   if (firebaseInitError || !fbUser?.uid) return null;
 
+  const userPath = `users/${fbUser.uid}`;
   const userRef = doc(db, 'users', fbUser.uid);
 
-  const [userSnap, adminInfo] = await Promise.all([
-    forceServer ? getDocFromServer(userRef) : getDoc(userRef),
-    readTrustedAdminStatus(fbUser),
-  ]);
+  let userSnap;
+  try {
+    userSnap = forceServer ? await getDocFromServer(userRef) : await getDoc(userRef);
+  } catch (err) {
+    const diag = classifyFirestoreOperationError(err, 'GET', userPath, fbUser.uid);
+    throw new ProfileAccessError(diag);
+  }
+
+  const adminInfo = await readTrustedAdminStatus(fbUser);
 
   if (!userSnap.exists()) {
     return null;
@@ -460,24 +638,21 @@ export async function fetchUserProfileFromFirestore(
   const raw = userSnap.data() as Record<string, unknown>;
   const hasTrustedAdminAuthority = adminInfo.adminDocActive || adminInfo.hasAdminClaim;
 
-  // Require core profile fields so partial/incomplete manual docs are surfaced for sync completion
-  const hasRequiredShape =
+  // Require core identity/RBAC fields (supports Console Timestamp createdAt & optional name)
+  const hasRequiredCore =
     typeof raw.uid === 'string' &&
     raw.uid.trim().length > 0 &&
     typeof raw.email === 'string' &&
     raw.email.trim().length > 0 &&
-    typeof raw.name === 'string' &&
-    raw.name.trim().length > 0 &&
     typeof raw.role === 'string' &&
-    typeof raw.status === 'string' &&
-    typeof raw.createdAt === 'string';
+    typeof raw.status === 'string';
 
-  if (!hasRequiredShape) {
+  if (!hasRequiredCore) {
     return null;
   }
 
   // If user holds trusted server admin authority but their users/{uid} still says student/teacher,
-  // treat as needing profile sync so users/{uid} is properly reconciled to admin/active on Firestore.
+  // route to profile sync so users/{uid} is properly reconciled to admin/active on Firestore.
   if (hasTrustedAdminAuthority && (raw.role !== 'admin' || raw.status !== 'active')) {
     return null;
   }
@@ -493,21 +668,25 @@ export async function syncUserProfileByUid(
     return { success: false, errorMessage: 'Firebase chưa được khởi tạo hoặc chưa có phiên đăng nhập.' };
   }
 
+  const uid = (auth.currentUser || fbUser).uid;
+  const userPath = `users/${uid}`;
+  let currentOp: 'GET' | 'CREATE' | 'UPDATE' = 'GET';
+
   try {
-    // 1. Refresh Auth user and force-refresh ID token so claims & email_verified reflect immediately in Firestore Rules
+    // 1. Refresh Auth user and force-refresh ID token so claims & email_verified reflect immediately
     await fbUser.reload().catch(() => {});
     await fbUser.getIdToken(true).catch(() => {});
 
     const currentFbUser = auth.currentUser || fbUser;
-    const uid = currentFbUser.uid;
     const cleanEmail = (currentFbUser.email || '').trim().toLowerCase();
-    if (!uid || !cleanEmail) {
+    if (!currentFbUser.uid || !cleanEmail) {
       return { success: false, errorMessage: 'Không xác định được UID hoặc Email từ Firebase Auth.' };
     }
 
-    const userRef = doc(db, 'users', uid);
+    const userRef = doc(db, 'users', currentFbUser.uid);
 
     // 2. Inspect live Firestore documents & claims from server
+    currentOp = 'GET';
     const [existingSnap, adminInfo] = await Promise.all([
       getDocFromServer(userRef),
       readTrustedAdminStatus(currentFbUser),
@@ -523,12 +702,12 @@ export async function syncUserProfileByUid(
     let warningMessage: string | undefined;
 
     if (existingSnap.exists() && existingRaw) {
-      // 3A. Preserve all existing valid fields; only backfill missing fields cleanly
+      // 3A. Preserve all existing valid fields; only update missing/required fields via updateDoc (never overwrite whole doc)
       if (options.intendedRole === 'admin' && !hasTrustedAdminAuthority) {
         return {
           success: false,
           errorMessage:
-            `Tài khoản ${cleanEmail} (UID: ${uid}) chưa được xác nhận quyền Admin hợp lệ trên máy chủ (chưa có document admins/${uid} hoặc Admin Custom Claim). Xác minh email không tự động cấp quyền Admin.`,
+            `Tài khoản ${cleanEmail} (UID: ${currentFbUser.uid}) chưa được xác nhận quyền Admin hợp lệ trên máy chủ (chưa có document admins/${currentFbUser.uid} hoặc Admin Custom Claim).`,
         };
       }
 
@@ -546,7 +725,7 @@ export async function syncUserProfileByUid(
         serverUpdatedAt: serverTimestamp(),
       };
 
-      if (!existingRaw.uid) patchPayload.uid = uid;
+      if (!existingRaw.uid) patchPayload.uid = currentFbUser.uid;
       if (!existingRaw.email) patchPayload.email = cleanEmail;
       if (!existingName) patchPayload.name = candidateName.slice(0, 150);
       if (!existingRaw.createdAt) patchPayload.createdAt = nowIso;
@@ -567,6 +746,7 @@ export async function syncUserProfileByUid(
         patchPayload.className = options.className.trim().slice(0, 80);
       }
 
+      currentOp = 'UPDATE';
       await updateDoc(userRef, stripUndefinedDeep(patchPayload));
     } else {
       // 3B. Document users/{uid} does not exist yet
@@ -576,7 +756,7 @@ export async function syncUserProfileByUid(
           return {
             success: false,
             errorMessage:
-              `Không thể tự cấp quyền Admin từ trình duyệt: Tài khoản ${cleanEmail} (UID: ${uid}) chưa có document admins/${uid} hoặc Admin Custom Claim trên Firebase. Xác minh email không tự động cấp quyền Admin. Vui lòng tạo admins/${uid} qua Firebase Console hoặc chạy script Admin SDK rồi bấm "Đồng bộ hồ sơ" lại.`,
+              `Không thể tự cấp quyền Admin từ trình duyệt: Tài khoản ${cleanEmail} (UID: ${currentFbUser.uid}) chưa có document admins/${currentFbUser.uid} hoặc Admin Custom Claim trên Firebase. Vui lòng thiết lập admins/${currentFbUser.uid} trên Firebase Console hoặc chạy script Admin SDK rồi bấm "Đồng bộ hồ sơ" lại.`,
           };
         }
 
@@ -590,7 +770,7 @@ export async function syncUserProfileByUid(
         }
 
         const adminProfilePayload = stripUndefinedDeep({
-          uid,
+          uid: currentFbUser.uid,
           email: cleanEmail,
           name: confirmedName.slice(0, 150),
           role: 'admin' as const,
@@ -603,6 +783,7 @@ export async function syncUserProfileByUid(
           serverUpdatedAt: serverTimestamp(),
         });
 
+        currentOp = 'CREATE';
         await setDoc(userRef, adminProfilePayload);
       } else {
         const cleanName = options.name?.trim() || currentFbUser.displayName?.trim() || '';
@@ -613,6 +794,7 @@ export async function syncUserProfileByUid(
           };
         }
 
+        currentOp = 'CREATE';
         const created = await createOrSyncUserProfileDoc(currentFbUser, {
           name: cleanName,
           role: options.intendedRole === 'teacher' ? 'teacher' : 'student',
@@ -626,16 +808,17 @@ export async function syncUserProfileByUid(
     }
 
     // 4. Mandatory verification: read back directly from Firestore server
+    currentOp = 'GET';
     const verifySnap = await getDocFromServer(userRef);
     if (!verifySnap.exists()) {
       return {
         success: false,
-        errorMessage: 'Đã gửi lệnh ghi nhưng không đọc lại được document users/{uid} từ máy chủ Firestore.',
+        errorMessage: `Đã gửi lệnh ghi nhưng không đọc lại được document ${userPath} từ máy chủ Firestore.`,
       };
     }
 
     const verifiedRaw = verifySnap.data() as Record<string, unknown>;
-    const verifiedUser = parseUserDoc(uid, currentFbUser, verifiedRaw, hasTrustedAdminAuthority);
+    const verifiedUser = parseUserDoc(currentFbUser.uid, currentFbUser, verifiedRaw, hasTrustedAdminAuthority);
 
     if (options.intendedRole === 'admin' && (verifiedUser.role !== 'admin' || verifiedUser.status !== 'active')) {
       return {
@@ -653,14 +836,16 @@ export async function syncUserProfileByUid(
       warningMessage,
     };
   } catch (err) {
+    const diag = classifyFirestoreOperationError(err, currentOp, userPath, uid);
     try {
-      handleFirestoreError(err, OperationType.WRITE, `users/${fbUser.uid}`);
+      handleFirestoreError(err, OperationType.WRITE, userPath);
     } catch {
-      // handled cleanly below for UI display
+      // handled cleanly via diag below
     }
     return {
       success: false,
-      errorMessage: mapFirebaseAuthError(err),
+      errorMessage: diag.userMessage,
+      errorDiagnostic: diag,
     };
   }
 }
@@ -699,6 +884,13 @@ export async function loginWithEmailPassword(
 
     return { success: true, user: profile };
   } catch (err) {
+    if (err instanceof ProfileAccessError) {
+      return {
+        success: false,
+        errorMessage: err.diagnostic.userMessage,
+        errorDiagnostic: err.diagnostic,
+      };
+    }
     return { success: false, errorMessage: mapFirebaseAuthError(err) };
   }
 }

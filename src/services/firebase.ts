@@ -81,12 +81,27 @@ export { app, db, auth, firebaseInitError };
 export function getFirebaseProjectInfo(): {
   projectId: string;
   databaseId: string;
+  bundledProjectId: string;
+  bundledDatabaseId: string;
+  isEnvOverridden: boolean;
+  projectMismatchSuspected: boolean;
   initialized: boolean;
   initError: string | null;
 } {
+  const activeProjectId = resolvedConfig.projectId || '';
+  const activeDatabaseId = resolvedConfig.firestoreDatabaseId || '(default)';
+  const bundledProjectId = firebaseConfig.projectId || '';
+  const bundledDatabaseId = firebaseConfig.firestoreDatabaseId || '(default)';
+  const isEnvOverridden =
+    activeProjectId !== bundledProjectId || activeDatabaseId !== bundledDatabaseId;
+
   return {
-    projectId: resolvedConfig.projectId || '',
-    databaseId: resolvedConfig.firestoreDatabaseId || '(default)',
+    projectId: activeProjectId,
+    databaseId: activeDatabaseId,
+    bundledProjectId,
+    bundledDatabaseId,
+    isEnvOverridden,
+    projectMismatchSuspected: isEnvOverridden,
     initialized: !firebaseInitError,
     initError: firebaseInitError,
   };
