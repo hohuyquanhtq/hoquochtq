@@ -504,22 +504,15 @@ async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
   adminDocDiagnostic?: ProfileDiagnosticError;
   hasAdminClaim: boolean;
 }> {
-  let hasAdminClaim = false;
-  try {
-    const tokenRes = await fbUser.getIdTokenResult();
-    hasAdminClaim =
-      tokenRes.claims?.admin === true ||
-      tokenRes.claims?.role === 'admin';
-  } catch {
-    hasAdminClaim = false;
-  }
-
+  const hasAdminClaim = false;
   let adminDocExists = false;
   let adminDocActive = false;
   let adminDocError: string | undefined;
   let adminDocDiagnostic: ProfileDiagnosticError | undefined;
 
   const adminPath = `admins/${fbUser.uid}`;
+  const authEmail = (fbUser.email || '').trim().toLowerCase();
+
   try {
     const adminRef = doc(db, 'admins', fbUser.uid);
     const adminSnap = await getDocFromServer(adminRef).catch((serverErr) => {
@@ -532,9 +525,25 @@ async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
     adminDocExists = adminSnap.exists();
     if (adminSnap.exists()) {
       const data = adminSnap.data() as Record<string, unknown>;
-      const isRoleOk = !('role' in data) || data.role === 'admin';
-      const isActiveOk = !('active' in data) || data.active === true;
-      adminDocActive = isRoleOk && isActiveOk;
+      const docUid = typeof data.uid === 'string' ? data.uid.trim() : '';
+      const docEmail = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
+      const isUidOk = docUid === fbUser.uid;
+      const isEmailOk = Boolean(authEmail) && docEmail === authEmail;
+      const isRoleOk = data.role === 'admin';
+      const isActiveOk = data.active === true;
+      const isVerifiedOk = fbUser.emailVerified === true;
+
+      adminDocActive = isUidOk && isEmailOk && isRoleOk && isActiveOk && isVerifiedOk;
+
+      if (!adminDocActive) {
+        const mismatches: string[] = [];
+        if (!isVerifiedOk) mismatches.push('email Auth chưa xác minh');
+        if (!isUidOk) mismatches.push('uid không khớp');
+        if (!isEmailOk) mismatches.push('email không khớp Firebase Auth');
+        if (!isRoleOk) mismatches.push('role != "admin"');
+        if (!isActiveOk) mismatches.push('active != true');
+        adminDocError = `Document admins/${fbUser.uid} chưa hợp lệ (${mismatches.join(', ')}).`;
+      }
     }
   } catch (err) {
     adminDocDiagnostic = classifyFirestoreOperationError(err, 'GET', adminPath, fbUser.uid);
@@ -593,9 +602,7 @@ export async function inspectAccountSyncStatus(
   const existingStatus = typeof raw?.status === 'string' ? (raw.status as AccountStatus) : undefined;
   const existingName = typeof raw?.name === 'string' ? raw.name : undefined;
 
-  const hasTrustedAdminAuthority =
-    adminInfo.adminDocActive ||
-    adminInfo.hasAdminClaim;
+  const hasTrustedAdminAuthority = adminInfo.adminDocActive;
 
   return {
     uid: fbUser.uid,
@@ -644,7 +651,7 @@ export async function fetchUserProfileFromFirestore(
   }
 
   const raw = userSnap.data() as Record<string, unknown>;
-  const hasTrustedAdminAuthority = adminInfo.adminDocActive || adminInfo.hasAdminClaim;
+  const hasTrustedAdminAuthority = adminInfo.adminDocActive;
 
   // Require core identity/RBAC fields (supports Console Timestamp createdAt & optional name)
   const hasRequiredCore =
@@ -731,8 +738,7 @@ export async function syncUserProfileByUid(
     ]);
 
     const existingRaw = existingSnap.exists() ? (existingSnap.data() as Record<string, unknown>) : null;
-    const hasTrustedAdminAuthority =
-      adminInfo.adminDocActive || adminInfo.hasAdminClaim;
+    const hasTrustedAdminAuthority = adminInfo.adminDocActive;
 
     const nowIso = new Date().toISOString();
     let warningMessage: string | undefined;

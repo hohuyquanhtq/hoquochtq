@@ -174,16 +174,23 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object') return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
 /**
- * Recursively removes undefined keys so Firestore never rejects payloads.
+ * Recursively removes undefined keys from plain objects and arrays while
+ * preserving special instances such as Date and Firestore FieldValue (serverTimestamp).
  */
 export function stripUndefinedDeep<T>(value: T): T {
   if (Array.isArray(value)) {
     return value.map((item) => stripUndefinedDeep(item)) as unknown as T;
   }
-  if (value !== null && typeof value === 'object' && !(value instanceof Date)) {
+  if (isPlainObject(value)) {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    for (const [k, v] of Object.entries(value)) {
       if (v !== undefined) {
         out[k] = stripUndefinedDeep(v);
       }

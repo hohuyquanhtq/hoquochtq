@@ -488,12 +488,14 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
               </div>
               <div>
                 <span className="text-slate-500">Quyền Admin máy chủ:</span>{' '}
-                <strong className={hasAdminAuthority ? 'text-emerald-700' : 'text-slate-600'}>
+                <strong className={hasAdminAuthority ? 'text-emerald-700' : syncDiag?.adminDocError ? 'text-rose-700' : 'text-slate-600'}>
                   {syncDiag
                     ? hasAdminAuthority
-                      ? 'Hợp lệ (admins/{uid} / Claim)'
+                      ? 'Hợp lệ (admins/{uid})'
                       : syncDiag.adminDocDiagnostic
                       ? `Lỗi ${syncDiag.adminDocDiagnostic.code} tại ${syncDiag.adminDocDiagnostic.path}`
+                      : syncDiag.adminDocError
+                      ? syncDiag.adminDocError
                       : 'Chưa có admins/{uid}'
                     : 'Đang kiểm tra...'}
                 </strong>

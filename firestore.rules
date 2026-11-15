@@ -33,17 +33,19 @@ service cloud.firestore {
     }
 
     function hasActiveAdminMarker() {
-      return exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('active', true) == true
-        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.get('role', 'admin') == 'admin';
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.uid == request.auth.uid
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email is string
+        && request.auth.token.email is string
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email.lower() == request.auth.token.email.lower()
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin'
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.admin == true ||
-        request.auth.token.role == 'admin' ||
-        hasActiveAdminMarker()
-      );
+      return hasActiveAdminMarker();
     }
 
     function isActiveTeacher() {
@@ -428,14 +430,16 @@ service cloud.firestore {
       allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
       allow list: if isAdmin();
       allow create: if isSignedIn()
+        && request.auth.uid == userId
         && isValidId(userId)
         && isValidUserProfile(incoming())
         && incoming().uid == userId
+        && (!('email' in request.auth.token) || (request.auth.token.email is string && incoming().email.lower() == request.auth.token.email.lower()))
         && incoming().serverCreatedAt == request.time
         && incoming().serverUpdatedAt == request.time
         && (
-          (request.auth.uid == userId && incoming().role == 'student' && incoming().status == 'active') ||
-          (request.auth.uid == userId && incoming().role == 'teacher' && incoming().status == 'pending') ||
+          (incoming().role == 'student' && incoming().status == 'active') ||
+          (incoming().role == 'teacher' && incoming().status == 'pending') ||
           (isAdmin() && incoming().role == 'admin' && incoming().status == 'active')
         );
       allow update: if isSignedIn()
