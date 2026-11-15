@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   AlertCircle,
   BookOpen,
+  Lock,
 } from 'lucide-react';
 import { getUserGreeting, APP_CONFIG } from '../../constants/brand';
 import { StorageService } from '../../services/storage';
@@ -35,6 +36,7 @@ interface StudentHomeProps {
   assignedExams?: StudentAssignedExamItem[];
   onJoinClassByCode?: (code: string) => Promise<{ success: boolean; errorMessage?: string }>;
   onStartExam: (exam: Exam, studentName: string, studentClass: string, ownerId?: string) => void;
+  onOpenExamLanding?: (examCode: string) => void;
   onReviewSubmission: (sub: StudentSubmission) => void;
 }
 
@@ -46,6 +48,7 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
   assignedExams = [],
   onJoinClassByCode,
   onStartExam,
+  onOpenExamLanding,
   onReviewSubmission,
 }) => {
   const [examCode, setExamCode] = useState('');
@@ -115,6 +118,20 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
 
       if (result.status === 'expired') {
         setErrorMsg(result.message || 'Bài thi đã kết thúc thời hạn làm bài.');
+        return;
+      }
+
+      if (result.status === 'password_required') {
+        if (onOpenExamLanding) {
+          onOpenExamLanding(cleanCode);
+        } else {
+          setErrorMsg(result.message || 'Bài thi yêu cầu mật khẩu do giáo viên cung cấp.');
+        }
+        return;
+      }
+
+      if (result.status !== 'found') {
+        setErrorMsg(result.message || 'Không thể mở bài thi lúc này. Vui lòng thử lại.');
         return;
       }
 
@@ -353,13 +370,19 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
                     <span className="px-2.5 py-0.5 rounded-md bg-blue-100 text-blue-800 font-mono font-bold text-xs">
                       {exam.code}
                     </span>
+                    {exam.requiresPassword && (
+                      <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 text-[11px] font-bold inline-flex items-center gap-1">
+                        <Lock className="w-3 h-3" />
+                        <span>Có mật khẩu</span>
+                      </span>
+                    )}
                   </div>
 
                   <h3 className="font-bold text-slate-900 text-sm">{exam.title}</h3>
 
                   <div className="flex items-center gap-4 text-xs text-slate-500 mt-2">
                     <span>⏱ {exam.durationMinutes} phút</span>
-                    <span>📝 {exam.questions.length} câu</span>
+                    <span>📝 {exam.totalQuestions || exam.questions.length} câu</span>
                     <span>🎯 Thang {exam.totalScore || 10.0} điểm</span>
                   </div>
                 </div>
@@ -367,18 +390,22 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
                 <div className="flex items-center justify-between pt-3 border-t border-slate-100">
                   <span className="text-[11px] text-slate-500">Giáo viên: {exam.authorName}</span>
                   <button
-                    onClick={() =>
+                    onClick={() => {
+                      if ((exam.requiresPassword || exam.questions.length === 0) && onOpenExamLanding) {
+                        onOpenExamLanding(exam.code);
+                        return;
+                      }
                       onStartExam(
                         sanitizeExamForStudent(exam),
                         name.trim() || currentUser.name,
                         className.trim() || clsName,
                         ownerId
-                      )
-                    }
+                      );
+                    }}
                     className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs transition-colors flex items-center gap-1.5"
                   >
-                    <Play className="w-3.5 h-3.5" />
-                    <span>Làm bài được giao</span>
+                    {exam.requiresPassword ? <Lock className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+                    <span>{exam.requiresPassword ? 'Nhập mật khẩu & Làm bài' : 'Làm bài được giao'}</span>
                   </button>
                 </div>
               </div>

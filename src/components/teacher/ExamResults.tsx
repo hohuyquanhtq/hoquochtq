@@ -13,10 +13,12 @@ import {
   FileSpreadsheet,
   Clock,
   Search,
-  Filter
+  Filter,
+  Lock
 } from 'lucide-react';
 import { exportExamResultsToExcel } from '../../utils/excelExport';
 import { ChemRenderer } from '../../utils/chemRenderer';
+import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
 
 interface ExamResultsProps {
   exam: Exam;
@@ -62,6 +64,12 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
   // Unique classes for filter
   const classes = Array.from(new Set(submissions.map(s => s.studentClass))).filter(Boolean);
 
+  const policy = getEffectiveAnswerReviewConfig(exam);
+  const qualifiedCount = policy.allowAnswerReview
+    ? submissions.filter((s) => Math.round(s.totalScore * 100) >= Math.round(policy.answerReviewMinScore * 100)).length
+    : 0;
+  const belowFloorCount = totalStudents - qualifiedCount;
+
   const handleExport = () => {
     exportExamResultsToExcel(exam, submissions);
   };
@@ -79,12 +87,29 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
             <ArrowLeft className="w-5 h-5" />
           </button>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-mono text-xs font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800">
                 {exam.code}
               </span>
+              {exam.requiresPassword && (
+                <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 inline-flex items-center gap-1">
+                  <Lock className="w-3 h-3" />
+                  <span>Có mật khẩu</span>
+                </span>
+              )}
+              <span
+                className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${
+                  policy.allowAnswerReview
+                    ? 'bg-indigo-100 text-indigo-800'
+                    : 'bg-rose-50 text-rose-700'
+                }`}
+              >
+                {policy.allowAnswerReview
+                  ? `Điểm sàn xem đáp án: ≥ ${policy.answerReviewMinScore.toFixed(1)}đ`
+                  : 'Không mở đáp án'}
+              </span>
               <span className="text-xs font-semibold text-slate-500">
-                Báo cáo & Thống kê kết quả kiểm tra
+                Báo cáo &amp; Thống kê kết quả kiểm tra
               </span>
             </div>
             <h1 className="text-xl md:text-2xl font-extrabold text-slate-900 mt-1">
@@ -161,6 +186,28 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
           </div>
         </div>
       </div>
+
+      {policy.allowAnswerReview && (
+        <div className="bg-indigo-50/70 border border-indigo-200 rounded-2xl px-5 py-3.5 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-indigo-950 font-semibold">
+            <CheckCircle2 className="w-4 h-4 text-indigo-600 shrink-0" />
+            <span>
+              Điều kiện mở đáp án: Điểm tổng ≥ <b>{policy.answerReviewMinScore.toFixed(1)} điểm</b>
+              {policy.answerReviewEnabledAt
+                ? ` • Thời điểm mở: ${new Date(policy.answerReviewEnabledAt).toLocaleString('vi-VN')}`
+                : ''}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 font-bold">
+            <span className="px-2.5 py-1 rounded-lg bg-emerald-100 text-emerald-800">
+              Đạt điểm sàn: {qualifiedCount}
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-amber-100 text-amber-800">
+              Chưa đạt sàn: {belowFloorCount}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Score Distribution Chart */}
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">

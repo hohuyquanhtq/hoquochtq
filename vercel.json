@@ -6,7 +6,7 @@
   "installCommand": "npm install",
   "rewrites": [
     {
-      "source": "/((?!assets/|pdf\\.min\\.js|pdf\\.worker\\.min\\.js|favicon\\.ico).*)",
+      "source": "/((?!api/|assets/|pdf\\.min\\.js|pdf\\.worker\\.min\\.js|favicon\\.ico).*)",
       "destination": "/index.html"
     }
   ]

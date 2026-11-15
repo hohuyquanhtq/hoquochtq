@@ -15,6 +15,7 @@ import {
   Classroom,
   ClassEnrollment,
   UploadRecord,
+  ExamAnswerReviewCheck,
 } from './types';
 import { StorageService } from './services/storage';
 import { Header } from './components/common/Header';
@@ -28,11 +29,13 @@ import {
 import {
   syncExamToFirestore,
   deleteExamFromFirestore,
-  fetchAllowedAnswerKeysAfterSubmit,
-  rehydrateExamWithAnswerKeys,
   saveSubmissionToFirestore,
   sanitizeExamForStudent,
 } from './services/firebase';
+import {
+  submitAndGradeExamOnServer,
+  evaluateLocalAnswerReviewPolicy,
+} from './services/examSecurityApi';
 import {
   fetchTeacherWorkspaceFromFirestore,
   fetchStudentWorkspaceFromFirestore,
@@ -123,6 +126,9 @@ export default function App() {
   const [activeStudentClass, setActiveStudentClass] = useState<string>('');
   const [reviewSubmission, setReviewSubmission] = useState<StudentSubmission | null>(null);
   const [reviewExamOverride, setReviewExamOverride] = useState<Exam | undefined>(undefined);
+  const [reviewAnswerCheck, setReviewAnswerCheck] = useState<ExamAnswerReviewCheck | null>(null);
+  const [reviewIsTeacherPreview, setReviewIsTeacherPreview] = useState<boolean>(false);
+  const [pendingExamCodeAfterAuth, setPendingExamCodeAfterAuth] = useState<string | null>(null);
   const [selectedExamIdForResults, setSelectedExamIdForResults] = useState<string | null>(null);
 
   // Preload questions for ExamCreator
@@ -197,6 +203,7 @@ export default function App() {
   useEffect(() => {
     if (authState === 'authenticated' && userProfile) {
       void hydrateAuthenticatedWorkspace(userProfile);
+      if (pendingExamCodeAfterAuth) return;
       setActiveTab((prev) => {
         if (guestExamMode || prev === 'exam_landing' || prev === 'take_exam' || prev === 'review_submission') {
           return prev;
@@ -206,7 +213,7 @@ export default function App() {
     } else if (authState === 'unauthenticated' || authState === 'locked' || authState === 'rejected' || authState === 'pending_approval') {
       resetWorkspaceMemoryState();
     }
-  }, [authState, userProfile, hydrateAuthenticatedWorkspace, resetWorkspaceMemoryState, guestExamMode]);
+  }, [authState, userProfile, hydrateAuthenticatedWorkspace, resetWorkspaceMemoryState, guestExamMode, pendingExamCodeAfterAuth]);
 
   const reloadDataFromStorage = useCallback(() => {
     if (!activeUid) return;
@@ -219,6 +226,17 @@ export default function App() {
   const resolveDirectExamByCode = useCallback(async (rawCode: string) => {
     const clean = normalizeExamCode(rawCode);
     if (!clean) return;
+
+    if (typeof window !== 'undefined') {
+      try {
+        const expected = `/?examCode=${encodeURIComponent(clean)}`;
+        if (window.location.search !== `?examCode=${encodeURIComponent(clean)}`) {
+          window.history.replaceState({}, '', expected);
+        }
+      } catch {
+        // Ignore history restrictions
+      }
+    }
 
     setGuestExamMode(true);
     setDirectJoinCode(clean);
@@ -242,6 +260,14 @@ export default function App() {
       setDirectJoinOwnerId(undefined);
     }
   }, []);
+
+  useEffect(() => {
+    if (authState === 'authenticated' && userProfile && pendingExamCodeAfterAuth) {
+      const codeToResume = pendingExamCodeAfterAuth;
+      setPendingExamCodeAfterAuth(null);
+      void resolveDirectExamByCode(codeToResume);
+    }
+  }, [authState, userProfile, pendingExamCodeAfterAuth, resolveDirectExamByCode]);
 
   const resolveDirectExamFromUrl = useCallback(async () => {
     if (typeof window === 'undefined') return;
@@ -368,6 +394,16 @@ export default function App() {
       console.warn('[HQTest] Could not sync saved exam to Firestore:', err);
     });
     setActiveTab('exam_manager');
+  };
+
+  const handleExamUpdated = (updatedExam: Exam) => {
+    if (!activeUid) return;
+    const scopedExam: Exam = {
+      ...updatedExam,
+      ownerId: updatedExam.ownerId || activeUid,
+    };
+    StorageService.addExam(scopedExam, activeUid);
+    setExams(StorageService.getExams(activeUid));
   };
 
   const handleToggleExamPublish = (examId: string) => {
@@ -542,42 +578,86 @@ export default function App() {
       studentId: activeUid || rawSubmission.studentId || 'guest_student',
       ownerId: activeExamOwnerId || rawSubmission.ownerId,
     };
-    let examForReview: Exam | undefined = activeExamForTaking || undefined;
+    let examForReview: Exam | undefined = activeExamForTaking
+      ? sanitizeExamForStudent(activeExamForTaking)
+      : undefined;
+    let nextReviewCheck: ExamAnswerReviewCheck | null = null;
+    let nextIsTeacherPreview = false;
 
     if (activeExamForTaking) {
+      const teacherMaster =
+        userProfile?.role === 'teacher'
+          ? exams.find((e) => e.id === activeExamForTaking.id)
+          : undefined;
       const resolvedOwnerId = activeExamOwnerId || activeExamForTaking.ownerId;
-      if (resolvedOwnerId) {
-        if (activeExamForTaking.showAnswersAfterSubmit) {
-          const allowedKeys = await fetchAllowedAnswerKeysAfterSubmit(activeExamForTaking.code);
-          if (allowedKeys) {
-            const hydrated = rehydrateExamWithAnswerKeys(
-              activeExamForTaking,
-              allowedKeys.answerMap,
-              allowedKeys.showSolutionsAfterSubmit
-            );
-            const graded = gradeSubmission(
-              hydrated,
-              finalSubmission.studentId,
-              rawSubmission.studentName,
-              rawSubmission.studentClass,
-              rawSubmission.startedAt,
-              rawSubmission.answers,
-              rawSubmission.tabSwitchesCount || 0
-            );
-            finalSubmission = {
-              ...graded,
-              id: rawSubmission.id,
-              ownerId: resolvedOwnerId,
-              durationSeconds: rawSubmission.durationSeconds,
-              submittedAt: rawSubmission.submittedAt,
-              status: rawSubmission.status,
-            };
-            examForReview = hydrated;
+
+      if (teacherMaster) {
+        // Teacher previewing their own exam in-browser
+        nextIsTeacherPreview = true;
+        const graded = gradeSubmission(
+          teacherMaster,
+          finalSubmission.studentId,
+          rawSubmission.studentName,
+          rawSubmission.studentClass,
+          rawSubmission.startedAt,
+          rawSubmission.answers,
+          rawSubmission.tabSwitchesCount || 0
+        );
+        finalSubmission = {
+          ...graded,
+          id: rawSubmission.id,
+          ownerId: resolvedOwnerId || activeUid,
+          durationSeconds: rawSubmission.durationSeconds,
+          submittedAt: rawSubmission.submittedAt,
+          status: rawSubmission.status,
+        };
+        examForReview = teacherMaster;
+        nextReviewCheck = {
+          allowed: true,
+          reason: 'allowed',
+          score: finalSubmission.totalScore,
+          minScore: 0,
+        };
+      } else if (resolvedOwnerId) {
+        // Cloud exam: server-authoritative grading & floor-score verification
+        const serverRes = await submitAndGradeExamOnServer({
+          submissionId: rawSubmission.id,
+          examCode: activeExamForTaking.code,
+          examTitle: activeExamForTaking.title,
+          studentName: rawSubmission.studentName,
+          studentClass: rawSubmission.studentClass,
+          startedAt: rawSubmission.startedAt,
+          durationSeconds: rawSubmission.durationSeconds,
+          answers: rawSubmission.answers,
+          tabSwitchesCount: rawSubmission.tabSwitchesCount || 0,
+          status: rawSubmission.status === 'timed_out' ? 'timed_out' : 'completed',
+        });
+
+        if (serverRes.ok && serverRes.submission) {
+          finalSubmission = serverRes.submission;
+          nextReviewCheck = serverRes.answerReviewCheck || null;
+          examForReview = sanitizeExamForStudent(activeExamForTaking);
+        } else {
+          // Server unreachable fallback: never leak client keys for cloud exams
+          nextReviewCheck = {
+            allowed: false,
+            reason: 'server_unavailable',
+            score: finalSubmission.totalScore,
+            minScore: activeExamForTaking.answerReviewMinScore ?? 8.0,
+            message:
+              serverRes.error ||
+              'Không thể kết nối máy chủ chấm điểm để xác thực quyền xem đáp án. Vui lòng thử lại sau.',
+          };
+          if (!activeExamForTaking.requiresPassword) {
+            void saveSubmissionToFirestore(finalSubmission, resolvedOwnerId);
           }
         }
-        void saveSubmissionToFirestore(finalSubmission, resolvedOwnerId);
       } else {
-        const localMaster = StorageService.getExamByCode(activeExamForTaking.code, activeUid || undefined);
+        // Built-in local sample/demo exam (no remote owner)
+        const localMaster = StorageService.getExamByCode(
+          activeExamForTaking.code,
+          activeUid || undefined
+        );
         if (localMaster) {
           const graded = gradeSubmission(
             localMaster,
@@ -595,7 +675,12 @@ export default function App() {
             submittedAt: rawSubmission.submittedAt,
             status: rawSubmission.status,
           };
-          examForReview = localMaster.showAnswersAfterSubmit
+          const policyCheck = evaluateLocalAnswerReviewPolicy(
+            localMaster,
+            finalSubmission.totalScore
+          );
+          nextReviewCheck = policyCheck;
+          examForReview = policyCheck.allowed
             ? localMaster
             : sanitizeExamForStudent(localMaster);
         }
@@ -606,20 +691,39 @@ export default function App() {
       StorageService.addSubmission(finalSubmission, activeUid);
       setSubmissions(StorageService.getSubmissions(undefined, activeUid));
     }
+    setReviewIsTeacherPreview(nextIsTeacherPreview);
+    setReviewAnswerCheck(nextReviewCheck);
     setReviewExamOverride(examForReview);
     setReviewSubmission(finalSubmission);
     setActiveTab('review_submission');
   };
 
   const handleReviewSubmission = (sub: StudentSubmission) => {
-    const matchingAssigned = assignedExams.find((a) => a.exam.id === sub.examId)?.exam;
-    const localExam = exams.find((e) => e.id === sub.examId) || matchingAssigned;
+    const teacherOwnedExam =
+      userProfile?.role === 'teacher'
+        ? exams.find((e) => e.id === sub.examId)
+        : undefined;
+    const matchingAssigned = assignedExams.find(
+      (a) =>
+        a.exam.id === sub.examId ||
+        normalizeExamCode(a.exam.code) === normalizeExamCode(sub.examCode)
+    )?.exam;
+    const localBuiltIn = StorageService.getBuiltInPublicExams().find(
+      (e) =>
+        e.id === sub.examId ||
+        normalizeExamCode(e.code) === normalizeExamCode(sub.examCode)
+    );
+    const isTeacherOwn = Boolean(teacherOwnedExam);
+    const baseExam = teacherOwnedExam || matchingAssigned || localBuiltIn;
+
+    setReviewIsTeacherPreview(isTeacherOwn);
+    setReviewAnswerCheck(
+      !isTeacherOwn && localBuiltIn && !localBuiltIn.ownerId
+        ? evaluateLocalAnswerReviewPolicy(localBuiltIn, sub.totalScore)
+        : null
+    );
     setReviewExamOverride(
-      localExam
-        ? localExam.showAnswersAfterSubmit
-          ? localExam
-          : sanitizeExamForStudent(localExam)
-        : undefined
+      baseExam ? (isTeacherOwn ? baseExam : sanitizeExamForStudent(baseExam)) : undefined
     );
     setReviewSubmission(sub);
     setActiveTab('review_submission');
@@ -740,6 +844,19 @@ export default function App() {
               onStartExam={(ex, name, cls) => {
                 handleStartExam(ex, name, cls, directJoinOwnerId);
               }}
+              onPasswordVerified={(unlockedExam) => {
+                setDirectJoinExam(unlockedExam);
+                setDirectJoinStatus('found');
+                setDirectJoinMessage(undefined);
+              }}
+              onRequestLoginForProtectedExam={() => {
+                const code = directJoinCode || extractExamCodeFromLocation(window.location);
+                if (code) {
+                  setPendingExamCodeAfterAuth(normalizeExamCode(code));
+                }
+                setGuestExamMode(false);
+                setActiveTab('dashboard');
+              }}
               onRetryLookup={() => void resolveDirectExamByCode(directJoinCode)}
               onBackToHome={() => {
                 if (isAuthenticatedSession && userProfile) {
@@ -787,7 +904,10 @@ export default function App() {
             (reviewSubmission ? (
               <ExamResultView
                 submission={reviewSubmission}
-                exam={reviewExamOverride || exams.find((e) => e.id === reviewSubmission.examId)}
+                exam={reviewExamOverride}
+                answerReviewCheck={reviewAnswerCheck}
+                isTeacherPreview={reviewIsTeacherPreview}
+                onUnlockAnswers={(hydrated) => setReviewExamOverride(hydrated)}
                 onBackToHome={() => {
                   if (isAuthenticatedSession && userProfile) {
                     clearExamUrlParam();
@@ -885,6 +1005,7 @@ export default function App() {
                     onOpenResults={handleOpenExamResults}
                     onTakeExamAsPreview={(ex) => handleStartExam(ex, userProfile.name, 'Giáo viên xem thử', activeUid)}
                     onTogglePublish={handleToggleExamPublish}
+                    onExamUpdated={handleExamUpdated}
                     onDeleteExam={handleDeleteExam}
                   />
                 )}
@@ -951,6 +1072,7 @@ export default function App() {
                   assignedExams={assignedExams}
                   onJoinClassByCode={handleJoinClassByCode}
                   onStartExam={handleStartExam}
+                  onOpenExamLanding={(code) => void resolveDirectExamByCode(code)}
                   onReviewSubmission={handleReviewSubmission}
                 />
               </ProtectedRoute>

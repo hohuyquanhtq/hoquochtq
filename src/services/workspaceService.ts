@@ -363,6 +363,83 @@ export async function fetchStudentWorkspaceFromFirestore(uid: string): Promise<S
   await Promise.all(
     Array.from(examToClassMap.entries()).map(async ([examCode, meta]) => {
       try {
+        const statusSnap = await getDoc(doc(db, 'examStatus', examCode));
+        if (!statusSnap.exists()) return;
+        const st = statusSnap.data() as {
+          examCode?: string;
+          examId?: string;
+          title?: string;
+          grade?: Exam['grade'];
+          durationMinutes?: number;
+          totalQuestions?: number;
+          totalScore?: number;
+          isPublished?: boolean;
+          openAt?: string;
+          closeAt?: string;
+          requiresPassword?: boolean;
+          allowAnswerReview?: boolean;
+          answerReviewMinScore?: number;
+          answerReviewEnabledAt?: string | null;
+          showScoreAfterSubmit?: boolean;
+          showSolutionsAfterSubmit?: boolean;
+          maxAttempts?: number;
+          authorName?: string;
+          ownerId?: string;
+        };
+        if (!st.isPublished) return;
+
+        if (st.requiresPassword) {
+          const placeholderExam: Exam = {
+            id: st.examId || examCode,
+            code: normalizeExamCode(st.examCode || examCode),
+            title: st.title || `Bài thi ${examCode}`,
+            grade: st.grade || '12',
+            durationMinutes: st.durationMinutes || 45,
+            totalQuestions: st.totalQuestions || 0,
+            totalScore: st.totalScore || 10.0,
+            questions: [],
+            rules: {
+              part1ScorePerQuestion: 0.25,
+              part2GradingModel: 'standard_moet',
+              part3ScorePerQuestion: 0.25,
+              totalTargetScore: 10.0,
+            },
+            shuffleQuestions: false,
+            shuffleOptions: false,
+            isPublished: true,
+            openAt: st.openAt,
+            closeAt: st.closeAt,
+            maxAttempts: st.maxAttempts ?? 1,
+            showScoreAfterSubmit:
+              typeof st.showScoreAfterSubmit === 'boolean' ? st.showScoreAfterSubmit : true,
+            showAnswersAfterSubmit:
+              typeof st.allowAnswerReview === 'boolean' ? st.allowAnswerReview : false,
+            showSolutionsAfterSubmit: !!st.showSolutionsAfterSubmit,
+            allowReviewLater: false,
+            requiresPassword: true,
+            ...(typeof st.allowAnswerReview === 'boolean'
+              ? { allowAnswerReview: st.allowAnswerReview }
+              : {}),
+            ...(typeof st.answerReviewMinScore === 'number'
+              ? { answerReviewMinScore: st.answerReviewMinScore }
+              : {}),
+            ...(st.answerReviewEnabledAt !== undefined
+              ? { answerReviewEnabledAt: st.answerReviewEnabledAt }
+              : {}),
+            authorId: '',
+            authorName: st.authorName || 'Giáo viên',
+            createdAt: '',
+            updatedAt: '',
+          };
+          assignedExams.push({
+            exam: placeholderExam,
+            classCode: meta.classCode,
+            className: meta.className,
+            ownerId: st.ownerId || meta.ownerId,
+          });
+          return;
+        }
+
         const pubSnap = await getDoc(doc(db, 'publicExams', examCode));
         if (pubSnap.exists()) {
           const pubExam = pubSnap.data() as Exam & { ownerId?: string };
@@ -376,7 +453,7 @@ export async function fetchStudentWorkspaceFromFirestore(uid: string): Promise<S
           }
         }
       } catch {
-        // unpublished or removed exam -> safely ignored
+        // unpublished or inaccessible exam -> safely ignored
       }
     })
   );

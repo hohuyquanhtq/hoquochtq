@@ -1,5 +1,5 @@
-import React from 'react';
-import { StudentSubmission, Exam } from '../../types';
+import React, { useState, useEffect } from 'react';
+import { StudentSubmission, Exam, ExamAnswerReviewCheck } from '../../types';
 import { 
   Award, 
   CheckCircle2, 
@@ -11,24 +11,131 @@ import {
   AlertCircle,
   HelpCircle,
   ShieldCheck,
-  FlaskConical
+  FlaskConical,
+  Lock,
+  Eye,
+  RefreshCw,
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
+import {
+  evaluateLocalAnswerReviewPolicy,
+  requestAnswerReviewOnServer,
+} from '../../services/examSecurityApi';
+import { rehydrateExamWithAnswerKeys } from '../../services/firebase';
 
 interface ExamResultViewProps {
   submission: StudentSubmission;
   exam?: Exam;
+  answerReviewCheck?: ExamAnswerReviewCheck | null;
+  isTeacherPreview?: boolean;
+  onUnlockAnswers?: (hydratedExam: Exam) => void;
   onBackToHome: () => void;
+}
+
+function examHasHydratedAnswerKeys(exam?: Exam): boolean {
+  if (!exam || !Array.isArray(exam.questions) || exam.questions.length === 0) return false;
+  return exam.questions.some(
+    (q) =>
+      Boolean(q.correctOptionId) ||
+      Boolean(q.shortAnswerConfig?.acceptableAnswers?.length) ||
+      Boolean(q.explanation)
+  );
 }
 
 export const ExamResultView: React.FC<ExamResultViewProps> = ({
   submission,
   exam,
+  answerReviewCheck,
+  isTeacherPreview = false,
+  onUnlockAnswers,
   onBackToHome,
 }) => {
-  const showScore = exam ? !!exam.showScoreAfterSubmit : true;
-  const showAnswers = exam ? !!exam.showAnswersAfterSubmit : false;
-  const showSolutions = exam ? !!exam.showSolutionsAfterSubmit : false;
+  const [unlockedExam, setUnlockedExam] = useState<Exam | undefined>(undefined);
+  const [serverUnlocked, setServerUnlocked] = useState(false);
+  const [liveCheck, setLiveCheck] = useState<ExamAnswerReviewCheck | null>(answerReviewCheck || null);
+  const [isRequestingAnswers, setIsRequestingAnswers] = useState(false);
+  const [requestError, setRequestError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setUnlockedExam(undefined);
+    setServerUnlocked(false);
+    setLiveCheck(answerReviewCheck || null);
+    setRequestError(null);
+  }, [submission.id, answerReviewCheck]);
+
+  const activeExam = unlockedExam || exam;
+  const showScore = activeExam ? activeExam.showScoreAfterSubmit !== false : true;
+
+  // Determine whether answer review is authorized AND keys are ready
+  const effectivePolicyCheck: ExamAnswerReviewCheck = liveCheck
+    ? liveCheck
+    : evaluateLocalAnswerReviewPolicy(activeExam, submission.totalScore);
+
+  const hasLocalMasterKeys =
+    !submission.gradedByServer && !activeExam?.ownerId && examHasHydratedAnswerKeys(activeExam);
+
+  const canRenderAnswers =
+    isTeacherPreview ||
+    serverUnlocked ||
+    (hasLocalMasterKeys && effectivePolicyCheck.allowed);
+
+  const showSolutions =
+    canRenderAnswers && (activeExam ? !!activeExam.showSolutionsAfterSubmit : false);
+
+  const handleRequestAnswerReview = async () => {
+    if (isRequestingAnswers) return;
+    setRequestError(null);
+
+    if (hasLocalMasterKeys && effectivePolicyCheck.allowed) {
+      setServerUnlocked(true);
+      return;
+    }
+
+    setIsRequestingAnswers(true);
+    try {
+      const res = await requestAnswerReviewOnServer(submission.examCode);
+      setLiveCheck({
+        allowed: res.allowed,
+        reason: res.reason,
+        score: res.score,
+        minScore: res.minScore,
+        enabledAt: res.enabledAt ?? null,
+        message: res.message,
+      });
+
+      if (!res.allowed || !res.answerMap) {
+        setRequestError(
+          res.message ||
+            'Bạn chưa đủ điều kiện hoặc bài thi chưa mở chức năng xem đáp án.'
+        );
+        return;
+      }
+
+      const baseExamForHydrate =
+        activeExam && Array.isArray(activeExam.questions) && activeExam.questions.length > 0
+          ? activeExam
+          : res.exam;
+
+      if (baseExamForHydrate) {
+        const hydrated = rehydrateExamWithAnswerKeys(
+          baseExamForHydrate,
+          res.answerMap,
+          Boolean(res.showSolutionsAfterSubmit)
+        );
+        const hydratedWithPolicy: Exam = {
+          ...hydrated,
+          showSolutionsAfterSubmit: Boolean(res.showSolutionsAfterSubmit),
+        };
+        setUnlockedExam(hydratedWithPolicy);
+        setServerUnlocked(true);
+        onUnlockAnswers?.(hydratedWithPolicy);
+      } else {
+        setServerUnlocked(true);
+      }
+    } finally {
+      setIsRequestingAnswers(false);
+    }
+  };
 
   let scoreColor = 'text-blue-700 bg-blue-50 border-blue-200';
   let badgeTitle = 'Đạt Yêu Cầu';
@@ -68,7 +175,7 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
       <div className={`p-6 sm:p-8 rounded-3xl border-2 text-center shadow-lg ${scoreColor} space-y-4`}>
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 backdrop-blur-xs text-xs font-bold shadow-2xs">
           <Award className="w-4 h-4" />
-          <span>{showScore && showAnswers ? `Kết quả thi trực tuyến • ${badgeTitle}` : 'Đã ghi nhận bài làm trực tuyến'}</span>
+          <span>{showScore ? `Kết quả thi trực tuyến • ${badgeTitle}` : 'Đã ghi nhận bài làm trực tuyến'}</span>
         </div>
 
         <div>
@@ -81,7 +188,7 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
         </div>
 
         {/* Big Score Display */}
-        {showScore && showAnswers ? (
+        {showScore ? (
           <>
             <div className="py-2">
               <span className="text-5xl sm:text-6xl font-black tracking-tight text-slate-900">
@@ -117,18 +224,64 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
         )}
       </div>
 
-      {/* Answer withholding notice */}
-      {!showAnswers && (
-        <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-900 text-xs flex items-center gap-3">
-          <ShieldCheck className="w-5 h-5 text-amber-600 shrink-0" />
-          <span>
-            Đáp án đúng và lời giải chi tiết hiện được bảo mật theo thiết lập của giáo viên. Giáo viên sẽ chấm và công bố kết quả theo lịch.
-          </span>
+      {/* Floor-score Answer Review Gate */}
+      {!canRenderAnswers && (
+        <div className="space-y-3">
+          {effectivePolicyCheck.allowed ? (
+            <div className="p-5 bg-emerald-50 border border-emerald-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3 text-emerald-950 text-xs sm:text-sm">
+                <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-bold">Bạn đủ điều kiện xem đáp án chi tiết!</p>
+                  <p className="text-xs text-emerald-800">
+                    {effectivePolicyCheck.message ||
+                      `Điểm bài thi của bạn đạt yêu cầu điểm sàn (≥ ${(
+                        effectivePolicyCheck.minScore ?? 8.0
+                      ).toFixed(1)} điểm).`}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => void handleRequestAnswerReview()}
+                disabled={isRequestingAnswers}
+                className="px-5 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-extrabold shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2 shrink-0 transition-all"
+              >
+                {isRequestingAnswers ? (
+                  <RefreshCw className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Eye className="w-4 h-4" />
+                )}
+                <span>
+                  {isRequestingAnswers ? 'Đang xác thực...' : 'XEM ĐÁP ÁN & LỜI GIẢI'}
+                </span>
+              </button>
+            </div>
+          ) : (
+            <div className="p-5 bg-amber-50 border border-amber-200 rounded-2xl text-amber-950 text-xs sm:text-sm flex items-start gap-3">
+              <Lock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="space-y-1">
+                <p className="font-bold">Đáp án &amp; lời giải chi tiết hiện đang được khóa</p>
+                <p className="text-xs text-amber-900 leading-relaxed">
+                  {effectivePolicyCheck.message ||
+                    'Đáp án đúng và lời giải chi tiết hiện được bảo mật theo thiết lập của giáo viên.'}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {requestError && (
+            <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{requestError}</span>
+            </div>
+          )}
         </div>
       )}
 
       {/* Review Section */}
-      {showAnswers && exam?.questions && (
+      {canRenderAnswers && activeExam?.questions && activeExam.questions.length > 0 && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -136,12 +289,12 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
               Chi tiết câu trả lời &amp; Hướng dẫn giải
             </h2>
             <span className="text-xs text-slate-500">
-              Đúng {submission.correctQuestionsCount} / {exam.questions.length} câu
+              Đúng {submission.correctQuestionsCount} / {activeExam.questions.length} câu
             </span>
           </div>
 
           <div className="space-y-4">
-            {exam.questions.map((q, idx) => {
+            {activeExam.questions.map((q, idx) => {
               const studentAns = submission.answers[q.id];
               let isQuestionCorrect = false;
 

@@ -218,12 +218,36 @@ export interface Exam {
   showSolutionsAfterSubmit: boolean;
   allowReviewLater: boolean;
   assignedClassCodes?: string[];
+
+  // Bảo mật đề thi & mở đáp án theo điểm sàn
+  requiresPassword?: boolean;          // Chỉ boolean trạng thái; tuyệt đối không lưu mật khẩu rõ/hash ở đây
+  passwordUpdatedAt?: string | null;   // Mốc cập nhật mật khẩu gần nhất (hủy grant cũ khi đổi/bật mật khẩu)
+  allowAnswerReview?: boolean;         // Mặc định true cho đề mới; đề cũ fallback theo showAnswersAfterSubmit
+  answerReviewMinScore?: number;       // Điểm sàn từ 0.0 -> 10.0 (bước 0.1), mặc định 8.0 cho đề mới
+  answerReviewEnabledAt?: string | null; // Thời điểm mở xem đáp án (ISO datetime hoặc null = mở ngay khi đạt sàn)
   
   ownerId?: string;
   authorId: string;
   authorName: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface ExamAnswerReviewCheck {
+  allowed: boolean;
+  reason?:
+    | 'allowed'
+    | 'disabled'
+    | 'below_min_score'
+    | 'not_yet_enabled'
+    | 'unauthenticated'
+    | 'no_submission'
+    | 'access_denied'
+    | 'server_unavailable';
+  score?: number;
+  minScore?: number;
+  enabledAt?: string | null;
+  message?: string;
 }
 
 export interface StudentAnswer {
@@ -270,6 +294,9 @@ export interface StudentSubmission {
   
   tabSwitchesCount?: number;    // Giám sát rời màn hình thi
   status: 'completed' | 'in_progress' | 'timed_out';
+  gradedByServer?: boolean;
+  serverGradeDigest?: string;
+  serverGradedAt?: string;
 }
 
 export interface ExamStatistics {

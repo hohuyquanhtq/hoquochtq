@@ -14,14 +14,21 @@ import {
   Plus, 
   ListOrdered,
   HelpCircle,
-  Share2
+  Share2,
+  Lock,
+  Unlock,
+  Eye,
+  EyeOff,
+  Award,
+  ShieldCheck
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { APP_CONFIG } from '../../constants/brand';
 import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
 import { normalizeExamCode } from '../../utils/urlHelper';
-import { auth, syncExamToFirestore } from '../../services/firebase';
+import { auth, extractAnswerKeyMap, syncExamToFirestore } from '../../services/firebase';
+import { configureExamSecurityOnServer } from '../../services/examSecurityApi';
 
 interface ExamCreatorProps {
   initialTitle?: string;
@@ -64,8 +71,18 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   const [shuffleOptions, setShuffleOptions] = useState(true);
   const [maxAttempts, setMaxAttempts] = useState(1);
   const [showScoreAfterSubmit, setShowScoreAfterSubmit] = useState(true);
-  const [showAnswersAfterSubmit, setShowAnswersAfterSubmit] = useState(true);
   const [showSolutionsAfterSubmit, setShowSolutionsAfterSubmit] = useState(true);
+
+  // Bảo mật đề thi & Điều kiện xem đáp án
+  const [requiresPassword, setRequiresPassword] = useState(false);
+  const [examPassword, setExamPassword] = useState('');
+  const [confirmExamPassword, setConfirmExamPassword] = useState('');
+  const [showExamPassword, setShowExamPassword] = useState(false);
+
+  const [allowAnswerReview, setAllowAnswerReview] = useState(true);
+  const [answerReviewMinScore, setAnswerReviewMinScore] = useState<string>('8.0');
+  const [answerReviewEnabledAtLocal, setAnswerReviewEnabledAtLocal] = useState('');
+  const [isSavingExam, setIsSavingExam] = useState(false);
 
   // Question counts
   const p1Count = questions.filter(q => q.type === 'part1_single_choice').length;
@@ -127,7 +144,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     setQuestions(questions.filter(q => q.id !== id));
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setFormError(null);
     if (!title.trim()) {
       setFormError('Vui lòng nhập tiêu đề đề thi!');
@@ -136,6 +153,34 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     if (questions.length === 0) {
       setFormError('Đề thi cần có ít nhất 1 câu hỏi!');
       return;
+    }
+
+    if (requiresPassword) {
+      if (examPassword.length < 6) {
+        setFormError('Mật khẩu đề thi phải có ít nhất 6 ký tự!');
+        return;
+      }
+      if (examPassword !== confirmExamPassword) {
+        setFormError('Mật khẩu xác nhận không khớp. Vui lòng kiểm tra lại!');
+        return;
+      }
+    }
+
+    const parsedMinScore = Number(answerReviewMinScore.replace(',', '.'));
+    if (!Number.isFinite(parsedMinScore) || parsedMinScore < 0 || parsedMinScore > 10) {
+      setFormError('Điểm sàn xem đáp án phải nằm trong khoảng từ 0.0 đến 10.0 điểm!');
+      return;
+    }
+    const cleanMinScore = Math.round(parsedMinScore * 100) / 100;
+
+    let enabledAtIso: string | null = null;
+    if (answerReviewEnabledAtLocal.trim()) {
+      const ms = Date.parse(answerReviewEnabledAtLocal.trim());
+      if (!Number.isFinite(ms)) {
+        setFormError('Thời điểm bắt đầu mở đáp án không hợp lệ!');
+        return;
+      }
+      enabledAtIso = new Date(ms).toISOString();
     }
 
     let finalPart1Score = part1Score;
@@ -174,9 +219,11 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
     const ownerId = currentUserId || auth.currentUser?.uid || 'teacher_1';
     const resolvedAuthorName = currentUserName || auth.currentUser?.displayName || APP_CONFIG.APP_AUTHOR;
+    const examId = `exam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+    const nowIso = new Date().toISOString();
 
-    const newExam: Exam = {
-      id: `exam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+    const baseExam: Exam = {
+      id: examId,
       title: title.trim(),
       code: cleanCode,
       grade,
@@ -198,35 +245,98 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       isPublished: true,
       maxAttempts,
       showScoreAfterSubmit,
-      showAnswersAfterSubmit,
+      showAnswersAfterSubmit: allowAnswerReview,
       showSolutionsAfterSubmit,
       allowReviewLater: true,
+      requiresPassword,
+      passwordUpdatedAt: requiresPassword ? nowIso : null,
+      allowAnswerReview,
+      answerReviewMinScore: cleanMinScore,
+      answerReviewEnabledAt: enabledAtIso,
       ownerId,
       authorId: ownerId,
       authorName: resolvedAuthorName,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: nowIso,
+      updatedAt: nowIso,
     };
 
-    // 1. Guaranteed database persistence with verified readback
-    const savedSuccess = StorageService.addExam(newExam, ownerId);
-    if (!savedSuccess) {
-      setFormError('Không thể lưu đề thi vào bộ nhớ. Vui lòng kiểm tra dung lượng trình duyệt và thử lại!');
-      return;
+    setIsSavingExam(true);
+    try {
+      let passwordUpdatedAt: string | null = baseExam.passwordUpdatedAt ?? null;
+      if (auth.currentUser) {
+        const secRes = await configureExamSecurityOnServer({
+          examCode: cleanCode,
+          examId,
+          requiresPassword,
+          passwordAction: requiresPassword ? 'set' : 'clear',
+          ...(requiresPassword ? { password: examPassword } : {}),
+          allowAnswerReview,
+          answerReviewMinScore: cleanMinScore,
+          answerReviewEnabledAt: enabledAtIso,
+          showScoreAfterSubmit,
+          showSolutionsAfterSubmit,
+          isPublished: true,
+          maxAttempts,
+          rules: baseExam.rules,
+          questions: questions.map((q) => ({
+            id: q.id,
+            type: q.type,
+            ...(Array.isArray(q.statements) ? { statementIds: q.statements.map((s) => s.id) } : {}),
+          })),
+          answerMap: extractAnswerKeyMap(baseExam),
+          patchMetadataDocs: false,
+        });
+
+        if (!secRes.ok) {
+          if (requiresPassword) {
+            setFormError(
+              secRes.error ||
+                'Không thể lưu cấu hình mật khẩu đề thi lên máy chủ. Vui lòng kiểm tra kết nối và thử lại!'
+            );
+            return;
+          }
+          console.warn('Background server security setup warning:', secRes.error);
+        } else if (secRes.passwordUpdatedAt !== undefined) {
+          passwordUpdatedAt = secRes.passwordUpdatedAt;
+        }
+      } else if (requiresPassword) {
+        setFormError('Bạn cần đăng nhập tài khoản Giáo viên để bảo vệ đề thi bằng mật khẩu!');
+        return;
+      }
+
+      const newExam: Exam = {
+        ...baseExam,
+        passwordUpdatedAt: requiresPassword ? passwordUpdatedAt : null,
+      };
+
+      // 1. Guaranteed database persistence with verified readback (NEVER contains plaintext password)
+      const savedSuccess = StorageService.addExam(newExam, ownerId);
+      if (!savedSuccess) {
+        setFormError('Không thể lưu đề thi vào bộ nhớ. Vui lòng kiểm tra dung lượng trình duyệt và thử lại!');
+        return;
+      }
+
+      // Sync exam projections to Cloud Firestore
+      if (auth.currentUser) {
+        await syncExamToFirestore(newExam, ownerId);
+      }
+
+      // Clear plaintext password from component state immediately after hashing on server
+      setExamPassword('');
+      setConfirmExamPassword('');
+
+      // 2. Notify parent state
+      onSaveExam(newExam);
+
+      // 3. Immediately show the Share & QR Code modal
+      setCreatedExamForShare(newExam);
+    } catch (err) {
+      setFormError(
+        err instanceof Error ? err.message : 'Không thể đồng bộ đề thi lên Firestore. Vui lòng thử lại!'
+      );
+    } finally {
+      setIsSavingExam(false);
     }
-
-    // Best-effort cloud sync when signed in with Email/Password
-    if (auth.currentUser) {
-      void syncExamToFirestore(newExam, ownerId).catch((err) => {
-        console.warn('Background cloud exam sync failed:', err);
-      });
-    }
-
-    // 2. Notify parent state
-    onSaveExam(newExam);
-
-    // 3. Immediately show the Share & QR Code modal
-    setCreatedExamForShare(newExam);
   };
 
   return (
@@ -267,11 +377,12 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
             Hủy
           </button>
           <button
-            onClick={handleSave}
-            className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition-all flex items-center gap-2"
+            onClick={() => void handleSave()}
+            disabled={isSavingExam}
+            className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold text-xs shadow-md shadow-blue-500/20 transition-all flex items-center gap-2"
           >
             <CheckCircle2 className="w-4 h-4" />
-            <span>Lưu & Mở Phòng Thi Ngay</span>
+            <span>{isSavingExam ? 'Đang lưu & Mã hóa...' : 'Lưu & Mở Phòng Thi Ngay'}</span>
           </button>
         </div>
       </div>
@@ -456,6 +567,187 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
             </div>
           </div>
 
+          {/* BẢO MẬT ĐỀ THI */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3 text-xs">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+                {requiresPassword ? (
+                  <Lock className="w-4 h-4 text-amber-600" />
+                ) : (
+                  <Unlock className="w-4 h-4 text-emerald-600" />
+                )}
+                <span>Bảo mật đề thi</span>
+              </h2>
+              <span
+                className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                  requiresPassword ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'
+                }`}
+              >
+                {requiresPassword ? 'Có mật khẩu' : 'Không mật khẩu'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 gap-2">
+              <label className="flex items-center gap-2 cursor-pointer p-2 rounded-xl border border-slate-200 hover:bg-slate-50">
+                <input
+                  type="radio"
+                  name="examPasswordMode"
+                  checked={!requiresPassword}
+                  onChange={() => {
+                    setRequiresPassword(false);
+                    setExamPassword('');
+                    setConfirmExamPassword('');
+                  }}
+                  className="text-blue-600"
+                />
+                <span className="font-semibold text-slate-700">Không sử dụng mật khẩu</span>
+              </label>
+
+              <label className="flex items-center gap-2 cursor-pointer p-2 rounded-xl border border-slate-200 hover:bg-slate-50">
+                <input
+                  type="radio"
+                  name="examPasswordMode"
+                  checked={requiresPassword}
+                  onChange={() => setRequiresPassword(true)}
+                  className="text-amber-600"
+                />
+                <span className="font-semibold text-slate-700">Yêu cầu mật khẩu khi vào thi</span>
+              </label>
+            </div>
+
+            {requiresPassword && (
+              <div className="space-y-2.5 pt-1 border-t border-slate-100">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Mật khẩu đề thi (tối thiểu 6 ký tự)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showExamPassword ? 'text' : 'password'}
+                      value={examPassword}
+                      onChange={(e) => setExamPassword(e.target.value)}
+                      placeholder="Nhập mật khẩu..."
+                      className="w-full p-2.5 pr-9 rounded-xl border border-slate-300 bg-slate-50 text-xs font-semibold focus:ring-2 focus:ring-blue-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowExamPassword((v) => !v)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                      title={showExamPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                    >
+                      {showExamPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Xác nhận mật khẩu
+                  </label>
+                  <input
+                    type={showExamPassword ? 'text' : 'password'}
+                    value={confirmExamPassword}
+                    onChange={(e) => setConfirmExamPassword(e.target.value)}
+                    placeholder="Nhập lại mật khẩu..."
+                    className="w-full p-2.5 rounded-xl border border-slate-300 bg-slate-50 text-xs font-semibold focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Học sinh mở link/mã đề sẽ phải đăng nhập và nhập đúng mật khẩu này mới được tải câu hỏi.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* ĐIỀU KIỆN XEM ĐÁP ÁN */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3 text-xs">
+            <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
+              <Award className="w-4 h-4 text-indigo-600" />
+              <span>Điều kiện xem đáp án</span>
+            </h2>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showScoreAfterSubmit}
+                onChange={(e) => setShowScoreAfterSubmit(e.target.checked)}
+                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
+              />
+              <span className="font-medium text-slate-700">Hiển thị điểm ngay sau khi nộp bài</span>
+            </label>
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={allowAnswerReview}
+                onChange={(e) => setAllowAnswerReview(e.target.checked)}
+                className="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="font-semibold text-slate-800">
+                Cho phép học sinh xem đáp án sau khi nộp bài
+              </span>
+            </label>
+
+            {allowAnswerReview && (
+              <div className="space-y-2.5 p-3 rounded-xl bg-indigo-50/60 border border-indigo-100">
+                <div>
+                  <label className="block text-[11px] font-bold text-indigo-950 mb-1">
+                    Điểm sàn tối thiểu để xem đáp án (0.0 – 10.0)
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      step="0.1"
+                      min="0"
+                      max="10"
+                      value={answerReviewMinScore}
+                      onChange={(e) => setAnswerReviewMinScore(e.target.value)}
+                      className="w-24 p-2 rounded-lg border border-indigo-200 bg-white font-extrabold text-indigo-700 text-center"
+                    />
+                    <span className="text-[11px] text-indigo-900">
+                      điểm (≥ {Number(answerReviewMinScore.replace(',', '.') || 0).toFixed(1)}đ mới mở)
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="flex items-center justify-between text-[11px] font-semibold text-slate-700 mb-1">
+                    <span>Thời điểm bắt đầu cho phép xem đáp án (tùy chọn)</span>
+                    {answerReviewEnabledAtLocal && (
+                      <button
+                        type="button"
+                        onClick={() => setAnswerReviewEnabledAtLocal('')}
+                        className="text-[10px] text-blue-600 hover:underline font-bold"
+                      >
+                        Xóa
+                      </button>
+                    )}
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={answerReviewEnabledAtLocal}
+                    onChange={(e) => setAnswerReviewEnabledAtLocal(e.target.value)}
+                    className="w-full p-2 rounded-lg border border-slate-200 bg-white text-xs"
+                  />
+                </div>
+              </div>
+            )}
+
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showSolutionsAfterSubmit}
+                onChange={(e) => setShowSolutionsAfterSubmit(e.target.checked)}
+                disabled={!allowAnswerReview}
+                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+              />
+              <span className={`font-medium ${allowAnswerReview ? 'text-slate-700' : 'text-slate-400'}`}>
+                Hiển thị hướng dẫn giải chi tiết (khi đạt điểm sàn)
+              </span>
+            </label>
+          </div>
+
           {/* Test Permissions & Anti-cheat Options */}
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-3 text-xs">
             <h2 className="text-xs font-bold uppercase tracking-wider text-slate-700 flex items-center gap-2">
@@ -481,36 +773,6 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                 className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
               />
               <span className="font-medium text-slate-700">Đảo thứ tự phương án A, B, C, D</span>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showScoreAfterSubmit}
-                onChange={(e) => setShowScoreAfterSubmit(e.target.checked)}
-                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
-              />
-              <span className="font-medium text-slate-700">Hiển thị điểm ngay sau khi nộp bài</span>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showAnswersAfterSubmit}
-                onChange={(e) => setShowAnswersAfterSubmit(e.target.checked)}
-                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
-              />
-              <span className="font-medium text-slate-700">Cho phép xem lại các câu làm đúng/sai</span>
-            </label>
-
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={showSolutionsAfterSubmit}
-                onChange={(e) => setShowSolutionsAfterSubmit(e.target.checked)}
-                className="w-4 h-4 rounded text-blue-600 focus:ring-blue-500"
-              />
-              <span className="font-medium text-slate-700">Hiển thị hướng dẫn giải chi tiết</span>
             </label>
           </div>
         </div>

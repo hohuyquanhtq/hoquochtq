@@ -17,13 +17,19 @@ import {
   CalendarClock,
   WifiOff,
   AlertTriangle,
+  Eye,
+  EyeOff,
+  KeyRound,
+  LogIn,
 } from 'lucide-react';
 import { Exam, User } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
+import { verifyExamPasswordOnServer } from '../../services/examSecurityApi';
 
 export type ExamLandingStatus =
   | 'loading'
   | 'found'
+  | 'password_required'
   | 'not_found'
   | 'not_published'
   | 'not_started'
@@ -40,6 +46,8 @@ interface ExamJoinLandingProps {
   statusMessage?: string;
   currentUser?: User | null;
   onStartExam: (exam: Exam, studentName: string, studentClass: string) => void;
+  onPasswordVerified?: (unlockedExam: Exam) => void;
+  onRequestLoginForProtectedExam?: () => void;
   onRetryLookup?: () => void;
   onBackToHome: () => void;
 }
@@ -51,12 +59,20 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   statusMessage,
   currentUser,
   onStartExam,
+  onPasswordVerified,
+  onRequestLoginForProtectedExam,
   onRetryLookup,
   onBackToHome,
 }) => {
   const [studentName, setStudentName] = useState(currentUser?.name || '');
   const [studentClass, setStudentClass] = useState(currentUser?.className || '12 Hóa 1');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Password gate state
+  const [examPassword, setExamPassword] = useState('');
+  const [showExamPassword, setShowExamPassword] = useState(false);
+  const [isVerifyingPassword, setIsVerifyingPassword] = useState(false);
+  const [passwordError, setPasswordError] = useState<string | null>(null);
 
   if (status === 'loading') {
     return (
@@ -71,6 +87,158 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
           <p className="text-xs text-slate-500">
             Hệ thống đang kiểm tra mã đề, trạng thái phòng thi và chuẩn bị dữ liệu cho bạn.
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (status === 'password_required' && exam) {
+    const handleUnlockSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (isVerifyingPassword) return;
+      setPasswordError(null);
+      if (!examPassword.trim()) {
+        setPasswordError('Vui lòng nhập mật khẩu đề thi do giáo viên cung cấp.');
+        return;
+      }
+      setIsVerifyingPassword(true);
+      try {
+        const res = await verifyExamPasswordOnServer(exam.code || examCode || '', examPassword);
+        if (!res.ok || !res.exam) {
+          setPasswordError(res.error || 'Mật khẩu đề thi không chính xác. Vui lòng kiểm tra lại.');
+          return;
+        }
+        setExamPassword('');
+        onPasswordVerified?.(res.exam);
+      } finally {
+        setIsVerifyingPassword(false);
+      }
+    };
+
+    return (
+      <div className="max-w-2xl mx-auto py-8 px-4 space-y-5">
+        <button
+          type="button"
+          onClick={onBackToHome}
+          className="inline-flex items-center gap-1.5 text-xs font-bold text-slate-500 hover:text-blue-600 transition-colors"
+        >
+          <ArrowLeft className="w-4 h-4" />
+          <span>Quay về trang chủ {APP_CONFIG.APP_NAME}</span>
+        </button>
+
+        <div className="bg-white border border-slate-200 rounded-3xl shadow-xl overflow-hidden">
+          <div className="bg-gradient-to-r from-amber-600 via-orange-600 to-amber-700 p-6 sm:p-7 text-white flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-white/15 flex items-center justify-center shrink-0">
+                <Lock className="w-6 h-6 text-white" />
+              </div>
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-100 block">
+                  {APP_CONFIG.APP_NAME} • PHÒNG THI CÓ MẬT KHẨU
+                </span>
+                <h1 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
+                  {exam.title || `Bài thi ${exam.code || examCode || ''}`}
+                </h1>
+                <p className="text-xs text-amber-100 mt-0.5">
+                  Giáo viên: <strong className="text-white">{exam.authorName || 'Giáo viên'}</strong>
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-white/15 border border-white/25 px-3.5 py-2 rounded-xl text-center shrink-0">
+              <span className="text-[10px] font-bold text-amber-100 block">MÃ ĐỀ</span>
+              <span className="font-mono font-black text-base text-white">{exam.code || examCode}</span>
+            </div>
+          </div>
+
+          <div className="p-6 sm:p-8 space-y-5">
+            <div className="grid grid-cols-3 gap-3 text-center text-xs">
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className="text-slate-500 block text-[11px]">Thời gian</span>
+                <span className="font-extrabold text-slate-900">{exam.durationMinutes || 45} phút</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className="text-slate-500 block text-[11px]">Số câu hỏi</span>
+                <span className="font-extrabold text-slate-900">{exam.totalQuestions || 0} câu</span>
+              </div>
+              <div className="p-3 rounded-2xl bg-slate-50 border border-slate-200">
+                <span className="text-slate-500 block text-[11px]">Thang điểm</span>
+                <span className="font-extrabold text-slate-900">{exam.totalScore || 10.0} điểm</span>
+              </div>
+            </div>
+
+            {!currentUser ? (
+              <div className="p-5 rounded-2xl bg-amber-50 border border-amber-200 space-y-4">
+                <div className="flex items-start gap-3 text-xs sm:text-sm text-amber-950">
+                  <ShieldAlert className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-bold">Bài thi này được bảo vệ bằng mật khẩu</p>
+                    <p className="text-xs text-amber-900 leading-relaxed">
+                      Vui lòng đăng nhập bằng tài khoản học sinh ({APP_CONFIG.APP_NAME} Email &amp; Mật khẩu) trước khi nhập mật khẩu vào phòng thi. Sau khi đăng nhập, hệ thống sẽ tự động đưa bạn quay lại đúng đề thi này.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => onRequestLoginForProtectedExam?.()}
+                    className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 flex items-center gap-2 transition-colors"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Đăng nhập tài khoản học sinh</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <form onSubmit={handleUnlockSubmit} className="space-y-4">
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
+                    <KeyRound className="w-4 h-4 text-amber-600" />
+                    <span>Nhập mật khẩu đề thi để mở khóa nội dung câu hỏi</span>
+                  </div>
+
+                  {passwordError && (
+                    <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-start gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                      <span>{passwordError}</span>
+                    </div>
+                  )}
+
+                  <div className="relative">
+                    <input
+                      type={showExamPassword ? 'text' : 'password'}
+                      value={examPassword}
+                      onChange={(e) => setExamPassword(e.target.value)}
+                      placeholder="Nhập mật khẩu đề thi..."
+                      autoFocus
+                      className="w-full p-3 pr-10 rounded-xl border border-slate-300 bg-white text-sm font-semibold focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowExamPassword((v) => !v)}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                      title={showExamPassword ? 'Ẩn mật khẩu' : 'Hiện mật khẩu'}
+                    >
+                      {showExamPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                    </button>
+                  </div>
+
+                  <p className="text-[11px] text-slate-500">
+                    Tài khoản đang đăng nhập: <b>{currentUser.name}</b> ({currentUser.email}). Nội dung câu hỏi chỉ được tải về sau khi máy chủ xác nhận đúng mật khẩu.
+                  </p>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isVerifyingPassword}
+                  className="w-full py-3.5 rounded-2xl bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-700 hover:to-orange-700 disabled:opacity-60 text-white font-extrabold text-sm shadow-lg shadow-amber-500/20 flex items-center justify-center gap-2 transition-all"
+                >
+                  <Lock className="w-4 h-4" />
+                  <span>{isVerifyingPassword ? 'Đang xác thực mật khẩu...' : 'XÁC NHẬN MẬT KHẨU & VÀO PHÒNG THI'}</span>
+                </button>
+              </form>
+            )}
+          </div>
         </div>
       </div>
     );

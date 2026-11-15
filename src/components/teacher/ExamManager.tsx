@@ -15,9 +15,15 @@ import {
   ToggleLeft,
   ToggleRight,
   Sparkles,
-  QrCode
+  QrCode,
+  Lock,
+  Unlock,
+  ShieldCheck,
+  Award
 } from 'lucide-react';
 import { ExamShareModal } from '../common/ExamShareModal';
+import { ExamSecurityModal } from './ExamSecurityModal';
+import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
 
 interface ExamManagerProps {
   exams: Exam[];
@@ -27,6 +33,7 @@ interface ExamManagerProps {
   onTakeExamAsPreview: (exam: Exam) => void;
   onTogglePublish: (examId: string) => void;
   onDeleteExam: (examId: string) => void;
+  onExamUpdated?: (updatedExam: Exam) => void;
   onShareExam?: (exam: Exam) => void;
 }
 
@@ -38,10 +45,12 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   onTakeExamAsPreview,
   onTogglePublish,
   onDeleteExam,
+  onExamUpdated,
   onShareExam,
 }) => {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
+  const [activeSecurityExam, setActiveSecurityExam] = useState<Exam | null>(null);
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard?.writeText(code);
@@ -63,7 +72,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
             Phòng Thi Trực Tuyến & Danh Sách Đề Thi ({exams.length})
           </h1>
           <p className="text-xs md:text-sm text-slate-500 mt-1">
-            Quản lý mã tham gia, trạng thái mở/đóng thi, theo dõi kết quả nộp bài của học sinh.
+            Quản lý mã tham gia, mật khẩu phòng thi, điều kiện điểm sàn xem đáp án và kết quả nộp bài của học sinh.
           </p>
         </div>
 
@@ -80,12 +89,17 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
       <div className="space-y-4">
         {exams.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500 text-xs">
-            Chưa có đề thi nào. Nhấn "Tạo đề thi mới" hoặc "Tải đề thi từ File" để bắt đầu!
+            Chưa có đề thi nào. Nhấn &ldquo;Tạo đề thi mới&rdquo; hoặc &ldquo;Tải đề thi từ File&rdquo; để bắt đầu!
           </div>
         ) : (
           exams.map((exam) => {
             const examSubs = submissions.filter(s => s.examId === exam.id);
             const isCopied = copiedCode === exam.code;
+            const policy = getEffectiveAnswerReviewConfig(exam);
+            const qualifiedCount = policy.allowAnswerReview
+              ? examSubs.filter((s) => Math.round(s.totalScore * 100) >= Math.round(policy.answerReviewMinScore * 100)).length
+              : 0;
+            const belowFloorCount = examSubs.length - qualifiedCount;
 
             return (
               <div
@@ -109,6 +123,44 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                       <span className={`w-2 h-2 rounded-full ${exam.isPublished ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
                       {exam.isPublished ? 'Đang mở thi' : 'Đã đóng phòng thi'}
                     </button>
+
+                    {/* Password protection badge */}
+                    <span
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg inline-flex items-center gap-1 ${
+                        exam.requiresPassword
+                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {exam.requiresPassword ? (
+                        <>
+                          <Lock className="w-3 h-3" />
+                          <span>Có mật khẩu</span>
+                        </>
+                      ) : (
+                        <>
+                          <Unlock className="w-3 h-3" />
+                          <span>Không mật khẩu</span>
+                        </>
+                      )}
+                    </span>
+
+                    {/* Answer floor score badge */}
+                    <span
+                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg inline-flex items-center gap-1 ${
+                        policy.allowAnswerReview
+                          ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
+                          : 'bg-rose-50 text-rose-700 border border-rose-200'
+                      }`}
+                    >
+                      <Award className="w-3 h-3" />
+                      <span>
+                        {policy.allowAnswerReview
+                          ? `Mở đáp án ≥ ${policy.answerReviewMinScore.toFixed(1)}đ`
+                          : 'Không mở đáp án'}
+                      </span>
+                    </span>
+
                     <span className="text-xs text-slate-500 font-medium">
                       Khối {exam.grade === 'chuyen_hsg' ? 'Chuyên & HSG' : `Lớp ${exam.grade}`}
                     </span>
@@ -126,6 +178,16 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                     <span>📝 {exam.questions.length} câu hỏi</span>
                     <span>🎯 Thang {exam.totalScore || 10.0} điểm</span>
                     <span>👥 {examSubs.length} lượt nộp bài</span>
+                    {policy.allowAnswerReview && examSubs.length > 0 && (
+                      <span className="text-indigo-700 font-semibold">
+                        Đạt sàn: {qualifiedCount} • Chưa đạt: {belowFloorCount}
+                      </span>
+                    )}
+                    {policy.answerReviewEnabledAt && (
+                      <span className="text-slate-600">
+                        🕒 Mở đáp án từ: {new Date(policy.answerReviewEnabledAt).toLocaleString('vi-VN')}
+                      </span>
+                    )}
                     {exam.shuffleQuestions && <span className="text-purple-600">🔀 Đảo câu</span>}
                     {exam.shuffleOptions && <span className="text-indigo-600">🔀 Đảo đáp án</span>}
                   </div>
@@ -140,6 +202,16 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                   >
                     {isCopied ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
                     <span>{isCopied ? 'Đã chép mã!' : `Mã: ${exam.code}`}</span>
+                  </button>
+
+                  {/* Configure Security & Floor Score */}
+                  <button
+                    onClick={() => setActiveSecurityExam(exam)}
+                    className="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition-colors flex items-center gap-1.5"
+                    title="Cấu hình mật khẩu đề thi và điều kiện điểm sàn xem đáp án"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-amber-700" />
+                    <span>Cấu hình bảo mật &amp; Đáp án</span>
                   </button>
 
                   {/* Share Link & QR Button (Sections V & VI) */}
@@ -199,6 +271,16 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
         exam={activeShareExam ? (exams.find(e => e.id === activeShareExam.id) || activeShareExam) : null}
         onClose={() => setActiveShareExam(null)}
         onTogglePublish={onTogglePublish}
+      />
+
+      {/* Security & Floor-Score Config Modal */}
+      <ExamSecurityModal
+        isOpen={!!activeSecurityExam}
+        exam={activeSecurityExam ? (exams.find(e => e.id === activeSecurityExam.id) || activeSecurityExam) : null}
+        onClose={() => setActiveSecurityExam(null)}
+        onExamUpdated={(updatedExam) => {
+          onExamUpdated?.(updatedExam);
+        }}
       />
 
     </div>

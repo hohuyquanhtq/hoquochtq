@@ -169,6 +169,11 @@
         "showSolutionsAfterSubmit": { "type": "boolean" },
         "allowReviewLater": { "type": "boolean" },
         "assignedClassCodes": { "type": "array" },
+        "requiresPassword": { "type": "boolean" },
+        "passwordUpdatedAt": { "type": ["string", "null"], "maxLength": 64 },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "authorId": { "type": "string", "maxLength": 128 },
         "authorName": { "type": "string", "maxLength": 150 },
@@ -196,6 +201,13 @@
         "isPublished": { "type": "boolean" },
         "openAt": { "type": "string", "maxLength": 64 },
         "closeAt": { "type": "string", "maxLength": 64 },
+        "requiresPassword": { "type": "boolean" },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
+        "showScoreAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "maxAttempts": { "type": "number" },
         "authorName": { "type": "string", "maxLength": 150 },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -231,6 +243,11 @@
         "showAnswersAfterSubmit": { "type": "boolean" },
         "showSolutionsAfterSubmit": { "type": "boolean" },
         "allowReviewLater": { "type": "boolean" },
+        "requiresPassword": { "type": "boolean" },
+        "passwordUpdatedAt": { "type": ["string", "null"], "maxLength": 64 },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
         "authorName": { "type": "string", "maxLength": 150 },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "createdAt": { "type": "string", "maxLength": 64 },
@@ -245,7 +262,7 @@
     },
     "ExamAnswerKey": {
       "title": "ExamAnswerKey",
-      "description": "Separated answer keys and optional explanations released only when teacher settings permit post-submission review.",
+      "description": "Teacher/Admin-only answer keys and explanations. Never readable directly by students.",
       "type": "object",
       "properties": {
         "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
@@ -254,6 +271,9 @@
         "isPublished": { "type": "boolean" },
         "showAnswersAfterSubmit": { "type": "boolean" },
         "showSolutionsAfterSubmit": { "type": "boolean" },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
         "answerMap": { "type": "object" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -287,6 +307,9 @@
         "correctQuestionsCount": { "type": "number" },
         "tabSwitchesCount": { "type": "number" },
         "status": { "type": "string", "enum": ["completed", "in_progress", "timed_out"] },
+        "gradedByServer": { "type": "boolean" },
+        "serverGradeDigest": { "type": "string" },
+        "serverGradedAt": { "type": "string" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": [
@@ -351,7 +374,7 @@
     },
     "/examKeys/{examCode}": {
       "schema": { "$ref": "#/entities/ExamAnswerKey" },
-      "description": "Separated answer keys readable only by owner teacher or post-submission when allowed."
+      "description": "Teacher/Admin-only answer keys. Students must request floor-score-gated review via backend API."
     },
     "/submissions/{submissionId}": {
       "schema": { "$ref": "#/entities/StudentSubmission" },
@@ -360,6 +383,18 @@
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminMarker" },
       "description": "Admin role assignment documents."
+    },
+    "/examSecrets/{examCode}": {
+      "description": "Server-private vault containing scrypt password hash, server grading rules, and answer keys (client read: false)."
+    },
+    "/examPasswordAttempts/{attemptId}": {
+      "description": "Server-only brute-force attempt counters and lockout windows (client read/write: false)."
+    },
+    "/examAccessGrants/{grantId}": {
+      "description": "Server-issued per-student-per-exam unlock grants keyed by {examCode}_{uid} (client write: false)."
+    },
+    "/answerReviewAccess/{accessId}": {
+      "description": "Server-verified floor-score qualification audit grants keyed by {examCode}_{uid} (client write: false)."
     }
   }
 }

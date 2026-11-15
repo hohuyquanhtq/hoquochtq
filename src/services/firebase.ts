@@ -288,9 +288,23 @@ export function sanitizeExamForStudent(exam: Exam): Exam {
     ...(exam?.closeAt ? { closeAt: exam.closeAt } : {}),
     maxAttempts: exam?.maxAttempts ?? 1,
     showScoreAfterSubmit: !!exam?.showScoreAfterSubmit,
-    showAnswersAfterSubmit: !!exam?.showAnswersAfterSubmit,
+    showAnswersAfterSubmit:
+      typeof exam?.allowAnswerReview === 'boolean'
+        ? exam.allowAnswerReview
+        : !!exam?.showAnswersAfterSubmit,
     showSolutionsAfterSubmit: !!exam?.showSolutionsAfterSubmit,
     allowReviewLater: !!exam?.allowReviewLater,
+    requiresPassword: !!exam?.requiresPassword,
+    ...(exam?.passwordUpdatedAt !== undefined ? { passwordUpdatedAt: exam.passwordUpdatedAt } : {}),
+    ...(typeof exam?.allowAnswerReview === 'boolean'
+      ? { allowAnswerReview: exam.allowAnswerReview }
+      : {}),
+    ...(typeof exam?.answerReviewMinScore === 'number'
+      ? { answerReviewMinScore: exam.answerReviewMinScore }
+      : {}),
+    ...(exam?.answerReviewEnabledAt !== undefined
+      ? { answerReviewEnabledAt: exam.answerReviewEnabledAt }
+      : {}),
     ...(Array.isArray(exam?.assignedClassCodes) && exam.assignedClassCodes.length > 0
       ? { assignedClassCodes: exam.assignedClassCodes.slice(0, 100) }
       : {}),
@@ -424,6 +438,23 @@ export async function syncExamToFirestore(
   const nowIso = new Date().toISOString();
   const safeId = exam.id.replace(/[^a-zA-Z0-9_-]/g, '_');
 
+  const hasExplicitAnswerPolicy = typeof exam.allowAnswerReview === 'boolean';
+  const resolvedAllowAnswerReview = hasExplicitAnswerPolicy
+    ? (exam.allowAnswerReview as boolean)
+    : !!exam.showAnswersAfterSubmit;
+  const resolvedMinScore =
+    typeof exam.answerReviewMinScore === 'number' && Number.isFinite(exam.answerReviewMinScore)
+      ? Math.max(0, Math.min(10, Math.round(exam.answerReviewMinScore * 100) / 100))
+      : !hasExplicitAnswerPolicy && exam.showAnswersAfterSubmit === true
+      ? 0
+      : 8.0;
+  const resolvedEnabledAt =
+    typeof exam.answerReviewEnabledAt === 'string' && exam.answerReviewEnabledAt.trim()
+      ? exam.answerReviewEnabledAt.trim()
+      : null;
+  const resolvedRequiresPassword = !!exam.requiresPassword;
+  const resolvedPasswordUpdatedAt = exam.passwordUpdatedAt ?? null;
+
   const batch = writeBatch(db);
 
   // 1. Private master exam
@@ -446,9 +477,14 @@ export async function syncExamToFirestore(
     ...(exam.closeAt ? { closeAt: exam.closeAt } : {}),
     maxAttempts: exam.maxAttempts ?? 1,
     showScoreAfterSubmit: !!exam.showScoreAfterSubmit,
-    showAnswersAfterSubmit: !!exam.showAnswersAfterSubmit,
+    showAnswersAfterSubmit: resolvedAllowAnswerReview,
     showSolutionsAfterSubmit: !!exam.showSolutionsAfterSubmit,
     allowReviewLater: !!exam.allowReviewLater,
+    requiresPassword: resolvedRequiresPassword,
+    passwordUpdatedAt: resolvedPasswordUpdatedAt,
+    allowAnswerReview: resolvedAllowAnswerReview,
+    answerReviewMinScore: resolvedMinScore,
+    answerReviewEnabledAt: resolvedEnabledAt,
     ...(Array.isArray(exam.assignedClassCodes) && exam.assignedClassCodes.length > 0
       ? { assignedClassCodes: exam.assignedClassCodes.slice(0, 100) }
       : {}),
@@ -468,7 +504,7 @@ export async function syncExamToFirestore(
     serverUpdatedAt: serverTimestamp(),
   });
 
-  // 2. Public exam availability metadata (no questions, no answers)
+  // 2. Public exam availability metadata (no questions, no answers, no password hashes)
   const statusPayload = stripUndefinedDeep({
     examCode: normalizedCode,
     examId: safeId,
@@ -480,6 +516,13 @@ export async function syncExamToFirestore(
     isPublished: masterPayload.isPublished,
     ...(exam.openAt ? { openAt: exam.openAt } : {}),
     ...(exam.closeAt ? { closeAt: exam.closeAt } : {}),
+    requiresPassword: resolvedRequiresPassword,
+    allowAnswerReview: resolvedAllowAnswerReview,
+    answerReviewMinScore: resolvedMinScore,
+    answerReviewEnabledAt: resolvedEnabledAt,
+    showScoreAfterSubmit: !!exam.showScoreAfterSubmit,
+    showSolutionsAfterSubmit: !!exam.showSolutionsAfterSubmit,
+    maxAttempts: exam.maxAttempts ?? 1,
     authorName: masterPayload.authorName,
     ownerId: targetOwnerId,
     updatedAt: nowIso,
@@ -488,7 +531,17 @@ export async function syncExamToFirestore(
   batch.set(doc(db, 'examStatus', normalizedCode), statusPayload);
 
   // 3. Sanitized public exam (when unpublished, write empty questions list so questions are wiped)
-  const sanitized = sanitizeExamForStudent({ ...exam, id: safeId, code: normalizedCode });
+  const sanitized = sanitizeExamForStudent({
+    ...exam,
+    id: safeId,
+    code: normalizedCode,
+    requiresPassword: resolvedRequiresPassword,
+    passwordUpdatedAt: resolvedPasswordUpdatedAt,
+    allowAnswerReview: resolvedAllowAnswerReview,
+    answerReviewMinScore: resolvedMinScore,
+    answerReviewEnabledAt: resolvedEnabledAt,
+    showAnswersAfterSubmit: resolvedAllowAnswerReview,
+  });
   const publicPayload = stripUndefinedDeep({
     ...sanitized,
     questions: masterPayload.isPublished ? sanitized.questions : [],
@@ -496,18 +549,21 @@ export async function syncExamToFirestore(
     updatedAt: nowIso,
     serverUpdatedAt: serverTimestamp(),
   });
-  // Ensure authorId is omitted or clean on public projection if not in schema
+  // Ensure authorId is omitted on public projection
   delete (publicPayload as Record<string, unknown>).authorId;
   batch.set(doc(db, 'publicExams', normalizedCode), publicPayload);
 
-  // 4. Separated answer keys (never contains keys for students when showAnswersAfterSubmit is false via Firestore rules)
+  // 4. Separated answer keys (never readable directly by students via Firestore rules)
   const keyPayload = stripUndefinedDeep({
     examCode: normalizedCode,
     examId: safeId,
     ownerId: targetOwnerId,
     isPublished: masterPayload.isPublished,
-    showAnswersAfterSubmit: masterPayload.showAnswersAfterSubmit,
+    showAnswersAfterSubmit: resolvedAllowAnswerReview,
     showSolutionsAfterSubmit: masterPayload.showSolutionsAfterSubmit,
+    allowAnswerReview: resolvedAllowAnswerReview,
+    answerReviewMinScore: resolvedMinScore,
+    answerReviewEnabledAt: resolvedEnabledAt,
     answerMap: extractAnswerKeyMap({ ...exam, id: safeId, code: normalizedCode }),
     updatedAt: nowIso,
     serverUpdatedAt: serverTimestamp(),
@@ -538,6 +594,10 @@ export async function deleteExamFromFirestore(exam: Exam): Promise<void> {
   }
   try {
     await batch.commit();
+    if (normalizedCode) {
+      const { deleteDoc } = await import('firebase/firestore');
+      await deleteDoc(doc(db, 'examSecrets', normalizedCode)).catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `exams/${safeId}`);
   }
@@ -571,6 +631,7 @@ export async function fetchTeacherSubmissionsFromFirestore(uid: string): Promise
 // --- Public Student Lookup & Submission ---
 export type CloudExamLookupStatus =
   | 'found'
+  | 'password_required'
   | 'not_found'
   | 'not_published'
   | 'not_started'
@@ -653,6 +714,13 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
         isPublished?: boolean;
         openAt?: string;
         closeAt?: string;
+        requiresPassword?: boolean;
+        allowAnswerReview?: boolean;
+        answerReviewMinScore?: number;
+        answerReviewEnabledAt?: string | null;
+        showScoreAfterSubmit?: boolean;
+        showSolutionsAfterSubmit?: boolean;
+        maxAttempts?: number;
         authorName?: string;
         ownerId?: string;
       };
@@ -682,11 +750,23 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
         isPublished: !!statusData.isPublished,
         openAt: statusData.openAt,
         closeAt: statusData.closeAt,
-        maxAttempts: 1,
-        showScoreAfterSubmit: true,
-        showAnswersAfterSubmit: false,
-        showSolutionsAfterSubmit: false,
+        maxAttempts: statusData.maxAttempts ?? 1,
+        showScoreAfterSubmit:
+          typeof statusData.showScoreAfterSubmit === 'boolean' ? statusData.showScoreAfterSubmit : true,
+        showAnswersAfterSubmit:
+          typeof statusData.allowAnswerReview === 'boolean' ? statusData.allowAnswerReview : false,
+        showSolutionsAfterSubmit: !!statusData.showSolutionsAfterSubmit,
         allowReviewLater: false,
+        requiresPassword: !!statusData.requiresPassword,
+        ...(typeof statusData.allowAnswerReview === 'boolean'
+          ? { allowAnswerReview: statusData.allowAnswerReview }
+          : {}),
+        ...(typeof statusData.answerReviewMinScore === 'number'
+          ? { answerReviewMinScore: statusData.answerReviewMinScore }
+          : {}),
+        ...(statusData.answerReviewEnabledAt !== undefined
+          ? { answerReviewEnabledAt: statusData.answerReviewEnabledAt }
+          : {}),
         authorId: '',
         authorName: statusData.authorName || 'Giáo viên',
         createdAt: '',
@@ -725,6 +805,35 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
             message: `Bài thi đã hết thời hạn tham gia lúc: ${closeTime.toLocaleString('vi-VN')}`,
           };
         }
+      }
+
+      // If exam is password-protected, NEVER fetch publicExams/{code} directly before unlock!
+      if (statusData.requiresPassword === true) {
+        if (auth?.currentUser) {
+          const { accessExamQuestionsOnServer } = await import('./examSecurityApi');
+          const accessRes = await accessExamQuestionsOnServer(recordExamCode);
+          if (accessRes.authorized && accessRes.exam) {
+            return {
+              status: 'found',
+              exam: sanitizeExamForStudent(accessRes.exam),
+              ownerId: accessRes.exam.ownerId || statusData.ownerId,
+            };
+          }
+          if (accessRes.status === 'not_published' || accessRes.status === 'not_started' || accessRes.status === 'expired') {
+            return {
+              status: accessRes.status,
+              exam: placeholderExam,
+              ownerId: statusData.ownerId,
+              message: accessRes.error,
+            };
+          }
+        }
+        return {
+          status: 'password_required',
+          exam: placeholderExam,
+          ownerId: statusData.ownerId,
+          message: `Bài thi "${placeholderExam.title}" được bảo vệ bằng mật khẩu. Vui lòng nhập mật khẩu đề thi do giáo viên cung cấp.`,
+        };
       }
 
       const publicSnap = await getDoc(doc(db, 'publicExams', code));

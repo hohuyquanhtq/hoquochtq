@@ -700,9 +700,16 @@ export const StorageService = {
   saveExams(exams: Exam[], uid?: string): void {
     const targetUid = uid ?? activeWorkspaceUid;
     if (!targetUid) return;
-    safeSetStorageItem(wsKey(targetUid, 'exams'), JSON.stringify(exams));
+    const cleaned = exams.map((e) => {
+      const copy = { ...e } as Exam & Record<string, unknown>;
+      delete copy.password;
+      delete copy.passwordHash;
+      delete copy.passwordSalt;
+      return copy as Exam;
+    });
+    safeSetStorageItem(wsKey(targetUid, 'exams'), JSON.stringify(cleaned));
     if (typeof window !== 'undefined') {
-      window.dispatchEvent(new CustomEvent('hqtest_exams_updated', { detail: { count: exams.length } }));
+      window.dispatchEvent(new CustomEvent('hqtest_exams_updated', { detail: { count: cleaned.length } }));
     }
   },
 
@@ -710,12 +717,17 @@ export const StorageService = {
     const targetUid = uid ?? activeWorkspaceUid ?? newExam.ownerId ?? null;
     if (!targetUid) return false;
     try {
+      const cleanExam = { ...newExam } as Exam & Record<string, unknown>;
+      delete cleanExam.password;
+      delete cleanExam.passwordHash;
+      delete cleanExam.passwordSalt;
+
       const exams = this.getExams(targetUid);
-      const newCodeUpper = normalizeExamCode(newExam.code || '');
+      const newCodeUpper = normalizeExamCode((cleanExam as Exam).code || '');
       const filtered = exams.filter(
-        (e) => e.id !== newExam.id && normalizeExamCode(e.code || '') !== newCodeUpper
+        (e) => e.id !== (cleanExam as Exam).id && normalizeExamCode(e.code || '') !== newCodeUpper
       );
-      const updated = [newExam, ...filtered];
+      const updated = [cleanExam as Exam, ...filtered];
       const key = wsKey(targetUid, 'exams');
       const savedOk = safeSetStorageItem(key, JSON.stringify(updated));
       if (typeof window !== 'undefined') {
@@ -723,7 +735,7 @@ export const StorageService = {
       }
       if (!savedOk) return true;
       const check = safeGetStorageItem(key);
-      if (!check || !check.includes(newExam.code)) {
+      if (!check || !check.includes((cleanExam as Exam).code)) {
         throw new Error('Không thể xác nhận dữ liệu đã được lưu vào bộ nhớ trình duyệt.');
       }
       return true;
@@ -831,6 +843,7 @@ export const StorageService = {
 
       if (
         cloudResult.status === 'found' ||
+        cloudResult.status === 'password_required' ||
         cloudResult.status === 'not_published' ||
         cloudResult.status === 'not_started' ||
         cloudResult.status === 'expired' ||

@@ -259,6 +259,8 @@ service cloud.firestore {
           'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
           'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
           'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
+          'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
+          'answerReviewMinScore', 'answerReviewEnabledAt',
           'ownerId', 'authorId', 'authorName', 'createdAt', 'updatedAt',
           'serverCreatedAt', 'serverUpdatedAt'
         ])
@@ -285,6 +287,11 @@ service cloud.firestore {
         && (!('showSolutionsAfterSubmit' in data) || data.showSolutionsAfterSubmit is bool)
         && (!('allowReviewLater' in data) || data.allowReviewLater is bool)
         && (!('assignedClassCodes' in data) || (data.assignedClassCodes is list && data.assignedClassCodes.size() <= 100))
+        && (!('requiresPassword' in data) || data.requiresPassword is bool)
+        && (!('passwordUpdatedAt' in data) || data.passwordUpdatedAt == null || (data.passwordUpdatedAt is string && data.passwordUpdatedAt.size() <= 64))
+        && (!('allowAnswerReview' in data) || data.allowAnswerReview is bool)
+        && (!('answerReviewMinScore' in data) || (data.answerReviewMinScore is number && data.answerReviewMinScore >= 0 && data.answerReviewMinScore <= 10))
+        && (!('answerReviewEnabledAt' in data) || data.answerReviewEnabledAt == null || (data.answerReviewEnabledAt is string && data.answerReviewEnabledAt.size() <= 64))
         && isValidId(data.ownerId)
         && (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128))
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
@@ -303,7 +310,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'examCode', 'examId', 'title', 'grade', 'durationMinutes',
           'totalQuestions', 'totalScore', 'isPublished', 'openAt', 'closeAt',
-          'authorName', 'ownerId', 'updatedAt', 'serverUpdatedAt'
+          'requiresPassword', 'allowAnswerReview', 'answerReviewMinScore',
+          'answerReviewEnabledAt', 'showScoreAfterSubmit', 'showSolutionsAfterSubmit',
+          'maxAttempts', 'authorName', 'ownerId', 'updatedAt', 'serverUpdatedAt'
         ])
         && isValidExamCode(data.examCode)
         && isValidId(data.examId)
@@ -315,6 +324,13 @@ service cloud.firestore {
         && data.isPublished is bool
         && (!('openAt' in data) || (data.openAt is string && data.openAt.size() <= 64))
         && (!('closeAt' in data) || (data.closeAt is string && data.closeAt.size() <= 64))
+        && (!('requiresPassword' in data) || data.requiresPassword is bool)
+        && (!('allowAnswerReview' in data) || data.allowAnswerReview is bool)
+        && (!('answerReviewMinScore' in data) || (data.answerReviewMinScore is number && data.answerReviewMinScore >= 0 && data.answerReviewMinScore <= 10))
+        && (!('answerReviewEnabledAt' in data) || data.answerReviewEnabledAt == null || (data.answerReviewEnabledAt is string && data.answerReviewEnabledAt.size() <= 64))
+        && (!('showScoreAfterSubmit' in data) || data.showScoreAfterSubmit is bool)
+        && (!('showSolutionsAfterSubmit' in data) || data.showSolutionsAfterSubmit is bool)
+        && (!('maxAttempts' in data) || (data.maxAttempts is number && data.maxAttempts >= 0 && data.maxAttempts <= 1000))
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
         && isValidId(data.ownerId)
         && data.updatedAt is string && data.updatedAt.size() <= 64
@@ -333,8 +349,9 @@ service cloud.firestore {
           'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
           'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
           'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
-          'assignedClassCodes', 'authorName', 'ownerId', 'createdAt', 'updatedAt',
-          'serverUpdatedAt'
+          'assignedClassCodes', 'requiresPassword', 'passwordUpdatedAt',
+          'allowAnswerReview', 'answerReviewMinScore', 'answerReviewEnabledAt',
+          'authorName', 'ownerId', 'createdAt', 'updatedAt', 'serverUpdatedAt'
         ])
         && isValidId(data.id)
         && isValidExamCode(data.code)
@@ -358,6 +375,11 @@ service cloud.firestore {
         && data.showSolutionsAfterSubmit is bool
         && (!('allowReviewLater' in data) || data.allowReviewLater is bool)
         && (!('assignedClassCodes' in data) || (data.assignedClassCodes is list && data.assignedClassCodes.size() <= 100))
+        && (!('requiresPassword' in data) || data.requiresPassword is bool)
+        && (!('passwordUpdatedAt' in data) || data.passwordUpdatedAt == null || (data.passwordUpdatedAt is string && data.passwordUpdatedAt.size() <= 64))
+        && (!('allowAnswerReview' in data) || data.allowAnswerReview is bool)
+        && (!('answerReviewMinScore' in data) || (data.answerReviewMinScore is number && data.answerReviewMinScore >= 0 && data.answerReviewMinScore <= 10))
+        && (!('answerReviewEnabledAt' in data) || data.answerReviewEnabledAt == null || (data.answerReviewEnabledAt is string && data.answerReviewEnabledAt.size() <= 64))
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
         && isValidId(data.ownerId)
         && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64))
@@ -373,8 +395,9 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'examCode', 'examId', 'ownerId', 'isPublished',
-          'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'answerMap',
-          'updatedAt', 'serverUpdatedAt'
+          'showAnswersAfterSubmit', 'showSolutionsAfterSubmit',
+          'allowAnswerReview', 'answerReviewMinScore', 'answerReviewEnabledAt',
+          'answerMap', 'updatedAt', 'serverUpdatedAt'
         ])
         && isValidExamCode(data.examCode)
         && isValidId(data.examId)
@@ -382,9 +405,48 @@ service cloud.firestore {
         && data.isPublished is bool
         && data.showAnswersAfterSubmit is bool
         && data.showSolutionsAfterSubmit is bool
+        && (!('allowAnswerReview' in data) || data.allowAnswerReview is bool)
+        && (!('answerReviewMinScore' in data) || (data.answerReviewMinScore is number && data.answerReviewMinScore >= 0 && data.answerReviewMinScore <= 10))
+        && (!('answerReviewEnabledAt' in data) || data.answerReviewEnabledAt == null || (data.answerReviewEnabledAt is string && data.answerReviewEnabledAt.size() <= 64))
         && data.answerMap is map
         && data.updatedAt is string && data.updatedAt.size() <= 64
         && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidExamSecret(data) {
+      return data.keys().hasAll([
+          'examCode', 'examId', 'ownerId', 'requiresPassword',
+          'allowAnswerReview', 'answerReviewMinScore', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'examCode', 'examId', 'ownerId', 'requiresPassword', 'passwordHash',
+          'passwordUpdatedAt', 'allowAnswerReview', 'answerReviewMinScore',
+          'answerReviewEnabledAt', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
+          'showSolutionsAfterSubmit', 'isPublished', 'openAt', 'closeAt',
+          'maxAttempts', 'rules', 'questions', 'answerMap',
+          'updatedAt', 'serverUpdatedAt'
+        ])
+        && isValidExamCode(data.examCode)
+        && isValidId(data.examId)
+        && isValidId(data.ownerId)
+        && data.requiresPassword is bool
+        && (!('passwordHash' in data) || data.passwordHash == null || (data.passwordHash is string && data.passwordHash.size() <= 512))
+        && (!('passwordUpdatedAt' in data) || data.passwordUpdatedAt == null || (data.passwordUpdatedAt is string && data.passwordUpdatedAt.size() <= 64))
+        && data.allowAnswerReview is bool
+        && data.answerReviewMinScore is number && data.answerReviewMinScore >= 0 && data.answerReviewMinScore <= 10
+        && (!('answerReviewEnabledAt' in data) || data.answerReviewEnabledAt == null || (data.answerReviewEnabledAt is string && data.answerReviewEnabledAt.size() <= 64))
+        && (!('showScoreAfterSubmit' in data) || data.showScoreAfterSubmit is bool)
+        && (!('showAnswersAfterSubmit' in data) || data.showAnswersAfterSubmit is bool)
+        && (!('showSolutionsAfterSubmit' in data) || data.showSolutionsAfterSubmit is bool)
+        && (!('isPublished' in data) || data.isPublished is bool)
+        && (!('openAt' in data) || data.openAt == null || (data.openAt is string && data.openAt.size() <= 64))
+        && (!('closeAt' in data) || data.closeAt == null || (data.closeAt is string && data.closeAt.size() <= 64))
+        && (!('maxAttempts' in data) || (data.maxAttempts is number && data.maxAttempts >= 0 && data.maxAttempts <= 1000))
+        && (!('rules' in data) || data.rules is map)
+        && (!('questions' in data) || data.questions is list)
+        && (!('answerMap' in data) || data.answerMap is map)
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && (data.serverUpdatedAt is timestamp || data.serverUpdatedAt is string);
     }
 
     function isValidSubmission(data) {
@@ -399,7 +461,8 @@ service cloud.firestore {
           'studentId', 'studentName', 'studentClass', 'startedAt', 'submittedAt',
           'durationSeconds', 'answers', 'part1Score', 'part2Score', 'part3Score',
           'totalScore', 'maxPossibleScore', 'correctQuestionsCount',
-          'tabSwitchesCount', 'status', 'createdAt'
+          'tabSwitchesCount', 'status', 'gradedByServer', 'serverGradeDigest',
+          'serverGradedAt', 'createdAt'
         ])
         && isValidId(data.id)
         && isValidId(data.examId)
@@ -422,7 +485,10 @@ service cloud.firestore {
         && data.correctQuestionsCount is number && data.correctQuestionsCount >= 0 && data.correctQuestionsCount <= 200
         && (!('tabSwitchesCount' in data) || (data.tabSwitchesCount is number && data.tabSwitchesCount >= 0 && data.tabSwitchesCount <= 10000))
         && data.status in ['completed', 'in_progress', 'timed_out']
-        && data.createdAt is timestamp;
+        && (!('gradedByServer' in data) || data.gradedByServer is bool)
+        && (!('serverGradeDigest' in data) || (data.serverGradeDigest is string && data.serverGradeDigest.size() <= 128))
+        && (!('serverGradedAt' in data) || (data.serverGradedAt is string && data.serverGradedAt.size() <= 64))
+        && (data.createdAt is timestamp || data.createdAt is string);
     }
 
     // 4. Collection Rules
@@ -711,6 +777,8 @@ service cloud.firestore {
               'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
               'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
               'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
+              'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
+              'answerReviewMinScore', 'answerReviewEnabledAt',
               'authorName', 'updatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -719,6 +787,8 @@ service cloud.firestore {
             'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
             'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
             'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
+            'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
+            'answerReviewMinScore', 'answerReviewEnabledAt',
             'authorName', 'updatedAt', 'serverUpdatedAt'
           ]))
         );
@@ -745,13 +815,17 @@ service cloud.firestore {
             && incoming().ownerId == existing().ownerId
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'examId', 'title', 'grade', 'durationMinutes', 'totalQuestions',
-              'totalScore', 'isPublished', 'openAt', 'closeAt', 'authorName',
-              'updatedAt', 'serverUpdatedAt'
+              'totalScore', 'isPublished', 'openAt', 'closeAt',
+              'requiresPassword', 'allowAnswerReview', 'answerReviewMinScore',
+              'answerReviewEnabledAt', 'showScoreAfterSubmit', 'showSolutionsAfterSubmit',
+              'maxAttempts', 'authorName', 'updatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
             'ownerId', 'examId', 'title', 'grade', 'durationMinutes', 'totalQuestions',
-            'totalScore', 'isPublished', 'openAt', 'closeAt', 'authorName',
-            'updatedAt', 'serverUpdatedAt'
+            'totalScore', 'isPublished', 'openAt', 'closeAt',
+            'requiresPassword', 'allowAnswerReview', 'answerReviewMinScore',
+            'answerReviewEnabledAt', 'showScoreAfterSubmit', 'showSolutionsAfterSubmit',
+            'maxAttempts', 'authorName', 'updatedAt', 'serverUpdatedAt'
           ]))
         );
       allow delete: if isValidId(examCode) && (
@@ -760,7 +834,15 @@ service cloud.firestore {
     }
 
     match /publicExams/{examCode} {
-      allow get: if isValidId(examCode) && isValidExamCode(examCode) && existing().isPublished == true;
+      allow get: if isValidId(examCode) && isValidExamCode(examCode) && (
+        (isActiveTeacher() && isOwner(existing().ownerId)) ||
+        isAdmin() ||
+        (existing().isPublished == true && (
+          !('requiresPassword' in existing()) ||
+          existing().requiresPassword == false ||
+          (isSignedIn() && exists(/databases/$(database)/documents/examAccessGrants/$(examCode + '_' + request.auth.uid)))
+        ))
+      );
       allow list: if false;
       allow create: if isValidId(examCode)
         && isValidPublicExam(incoming())
@@ -780,14 +862,18 @@ service cloud.firestore {
               'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
               'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
               'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
-              'assignedClassCodes', 'authorName', 'updatedAt', 'serverUpdatedAt'
+              'assignedClassCodes', 'requiresPassword', 'passwordUpdatedAt',
+              'allowAnswerReview', 'answerReviewMinScore', 'answerReviewEnabledAt',
+              'authorName', 'updatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
             'ownerId', 'id', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
             'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
             'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
             'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
-            'assignedClassCodes', 'authorName', 'updatedAt', 'serverUpdatedAt'
+            'assignedClassCodes', 'requiresPassword', 'passwordUpdatedAt',
+            'allowAnswerReview', 'answerReviewMinScore', 'answerReviewEnabledAt',
+            'authorName', 'updatedAt', 'serverUpdatedAt'
           ]))
         );
       allow delete: if isValidId(examCode) && (
@@ -796,8 +882,9 @@ service cloud.firestore {
     }
 
     match /examKeys/{examCode} {
+      // Strictly teacher owner & admin only. Students NEVER read examKeys directly;
+      // they must pass server-side floor-score verification (/api/exams/request-answer-review).
       allow get: if isValidId(examCode) && isValidExamCode(examCode) && (
-        (existing().isPublished == true && existing().showAnswersAfterSubmit == true) ||
         (isActiveTeacher() && isOwner(existing().ownerId)) ||
         isAdmin()
       );
@@ -817,16 +904,48 @@ service cloud.firestore {
             && incoming().ownerId == existing().ownerId
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'examId', 'isPublished', 'showAnswersAfterSubmit',
-              'showSolutionsAfterSubmit', 'answerMap', 'updatedAt', 'serverUpdatedAt'
+              'showSolutionsAfterSubmit', 'allowAnswerReview', 'answerReviewMinScore',
+              'answerReviewEnabledAt', 'answerMap', 'updatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
             'ownerId', 'examId', 'isPublished', 'showAnswersAfterSubmit',
-            'showSolutionsAfterSubmit', 'answerMap', 'updatedAt', 'serverUpdatedAt'
+            'showSolutionsAfterSubmit', 'allowAnswerReview', 'answerReviewMinScore',
+            'answerReviewEnabledAt', 'answerMap', 'updatedAt', 'serverUpdatedAt'
           ]))
         );
       allow delete: if isValidId(examCode) && (
         (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
       );
+    }
+
+    match /examSecrets/{examCode} {
+      // Zero client read/list access. Password hashes & server grading keys live here.
+      allow get, list: if false;
+      allow create: if isValidId(examCode)
+        && isValidExamSecret(incoming())
+        && incoming().examCode == examCode
+        && ((isActiveTeacher() && incoming().ownerId == request.auth.uid) || isAdmin());
+      allow update: if isValidId(examCode)
+        && isValidExamSecret(incoming())
+        && incoming().examCode == existing().examCode
+        && ((isActiveTeacher() && isOwner(existing().ownerId) && incoming().ownerId == existing().ownerId) || isAdmin());
+      allow delete: if isValidId(examCode) && (
+        (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
+      );
+    }
+
+    match /examPasswordAttempts/{attemptId} {
+      allow read, write: if false;
+    }
+
+    match /examAccessGrants/{grantId} {
+      allow get: if isValidId(grantId) && isSignedIn() && existing().uid == request.auth.uid;
+      allow list, create, update, delete: if false;
+    }
+
+    match /answerReviewAccess/{accessId} {
+      allow get: if isValidId(accessId) && isSignedIn() && existing().uid == request.auth.uid;
+      allow list, create, update, delete: if false;
     }
 
     match /submissions/{submissionId} {
@@ -844,10 +963,18 @@ service cloud.firestore {
         && isValidSubmission(incoming())
         && incoming().id == submissionId
         && incoming().createdAt == request.time
+        && (!('gradedByServer' in incoming()) || incoming().gradedByServer == false)
+        && !('serverGradeDigest' in incoming())
+        && !('serverGradedAt' in incoming())
         && (!isSignedIn() || incoming().studentId == request.auth.uid || isActiveTeacher() || isAdmin())
         && exists(/databases/$(database)/documents/publicExams/$(incoming().examCode))
         && get(/databases/$(database)/documents/publicExams/$(incoming().examCode)).data.isPublished == true
-        && incoming().ownerId == get(/databases/$(database)/documents/publicExams/$(incoming().examCode)).data.ownerId;
+        && incoming().ownerId == get(/databases/$(database)/documents/publicExams/$(incoming().examCode)).data.ownerId
+        && (
+          !('requiresPassword' in get(/databases/$(database)/documents/publicExams/$(incoming().examCode)).data) ||
+          get(/databases/$(database)/documents/publicExams/$(incoming().examCode)).data.requiresPassword == false ||
+          (isSignedIn() && exists(/databases/$(database)/documents/examAccessGrants/$(incoming().examCode + '_' + request.auth.uid)))
+        );
       allow update: if isValidId(submissionId)
         && isValidSubmission(incoming())
         && (isAdmin() || (isActiveTeacher() && isOwner(existing().ownerId) && existing().status != 'completed'))
