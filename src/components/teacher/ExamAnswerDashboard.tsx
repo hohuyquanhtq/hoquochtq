@@ -3,7 +3,6 @@ import {
   CheckCircle2, 
   AlertTriangle, 
   XCircle, 
-  Sparkles, 
   RotateCcw, 
   CheckCheck, 
   Eye, 
@@ -80,20 +79,16 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
       <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2">
-              <span className="px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800 flex items-center gap-1.5 shadow-xs">
-                <Sparkles className="w-4 h-4 text-emerald-600" />
-                Bộ Nhận Dạng Đáp Án HQTest 2.0 (GDPT 2018)
-              </span>
-              <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-blue-100 text-blue-800">
-                Độ chính xác: {successPercent}%
-              </span>
+            <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] font-semibold">
+              <span className="text-teal-700">Đối soát đáp án tự động · GDPT 2018</span>
+              <span aria-hidden="true" className="text-slate-300">·</span>
+              <span className="text-emerald-700 tabular-nums">Tỷ lệ nhận diện: {successPercent}%</span>
             </div>
-            <h2 className="text-xl font-black text-slate-900 mt-1">
-              Bảng Đối Chiếu & Nhận Dạng Đáp Án Tự Động
-            </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Phân tách độc lập 3 phần đề thi, kiểm định logic ma trận hoán vị và đối soát lời giải chi tiết
+            <h3 className="text-xl font-bold text-slate-900 mt-1">
+              Bảng Đối Chiếu &amp; Nhận Dạng Đáp Án
+            </h3>
+            <p className="text-sm text-slate-600 mt-0.5">
+              Phân tách độc lập 3 phần đề thi, kiểm định logic ma trận hoán vị và đối soát lời giải chi tiết.
             </p>
           </div>
 
@@ -102,10 +97,10 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
             <button
               type="button"
               onClick={onReRecognize}
-              className="px-3.5 py-2 min-h-[40px] rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 hover:bg-slate-50"
+              className="px-3.5 py-2 min-h-[42px] rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-sm font-semibold transition-colors flex items-center gap-1.5 hover:bg-slate-50 whitespace-nowrap"
               title="Chạy lại bộ máy bóc tách thuật toán"
             >
-              <RotateCcw className="w-4 h-4 text-slate-600" />
+              <RotateCcw className="w-4 h-4 text-slate-600 shrink-0" />
               <span>Quét lại đáp án</span>
             </button>
 
@@ -113,101 +108,102 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
               type="button"
               onClick={onDeepScan}
               disabled={isDeepScanning}
-              className="px-3.5 py-2 min-h-[40px] rounded-xl border border-indigo-200 hover:border-indigo-300 bg-indigo-50 text-indigo-800 text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 hover:bg-indigo-100 disabled:opacity-50"
+              className="px-3.5 py-2 min-h-[42px] rounded-xl border border-indigo-200 hover:border-indigo-300 bg-indigo-50 text-indigo-800 text-sm font-semibold transition-colors flex items-center gap-1.5 hover:bg-indigo-100 disabled:opacity-50 whitespace-nowrap"
               title="Quét sâu bằng AI cho các dạng bảng phức tạp"
             >
-              <Bot className={`w-4 h-4 text-indigo-600 ${isDeepScanning ? 'animate-spin' : ''}`} />
+              <Bot className={`w-4 h-4 text-indigo-600 shrink-0 ${isDeepScanning ? 'animate-spin' : ''}`} />
               <span>{isDeepScanning ? 'Đang quét sâu...' : 'Quét sâu AI'}</span>
             </button>
 
             <button
               type="button"
               onClick={onViewSnippet}
-              className="px-3.5 py-2 min-h-[40px] rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 hover:bg-slate-50"
+              className="px-3.5 py-2 min-h-[42px] rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-sm font-semibold transition-colors flex items-center gap-1.5 hover:bg-slate-50 whitespace-nowrap"
               title="Xem văn bản đáp án trích xuất từ tài liệu gốc"
             >
-              <Eye className="w-4 h-4 text-slate-600" />
+              <Eye className="w-4 h-4 text-slate-600 shrink-0" />
               <span>Xem trích đoạn nguồn</span>
             </button>
 
             <button
               type="button"
               onClick={onVerifyAll}
-              className="px-4 py-2 min-h-[40px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 shadow-xs"
+              className="px-4 py-2 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold transition-colors flex items-center gap-1.5 shadow-xs whitespace-nowrap"
             >
-              <CheckCheck className="w-4 h-4 text-teal-100" />
+              <CheckCheck className="w-4 h-4 text-teal-100 shrink-0" />
               <span>Xác nhận toàn bộ ({totalCount})</span>
             </button>
           </div>
         </div>
 
         {/* 4 Metrics Cards */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 pt-2 tabular-nums">
           {/* Card 1: Verified */}
-          <div className="p-3.5 rounded-2xl bg-emerald-50/70 border border-emerald-200/80 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-emerald-50/70 border border-emerald-200/80 flex items-center justify-between gap-3">
             <div>
-              <p className="text-[11px] font-bold text-emerald-800 uppercase tracking-wide">Đã nhận dạng đúng</p>
-              <p className="text-2xl font-black text-emerald-700 mt-0.5">
-                {verifiedCount} <span className="text-xs font-semibold text-emerald-600">/ {totalCount} mục</span>
+              <p className="text-[13px] font-semibold text-emerald-800">Đã nhận dạng đúng</p>
+              <p className="text-2xl font-bold text-emerald-700 mt-0.5">
+                {verifiedCount} <span className="text-sm font-medium text-emerald-700">/ {totalCount} mục</span>
               </p>
             </div>
-            <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
+            <div className="p-2.5 rounded-xl bg-emerald-100 text-emerald-700 shrink-0">
               <CheckCircle2 className="w-5 h-5" />
             </div>
           </div>
 
           {/* Card 2: Needs Review */}
-          <div className="p-3.5 rounded-2xl bg-amber-50/70 border border-amber-200/80 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-amber-50/70 border border-amber-200/80 flex items-center justify-between gap-3">
             <div>
-              <p className="text-[11px] font-bold text-amber-800 uppercase tracking-wide">Cần kiểm tra lại</p>
-              <p className="text-2xl font-black text-amber-700 mt-0.5">
+              <p className="text-[13px] font-semibold text-amber-800">Cần kiểm tra lại</p>
+              <p className="text-2xl font-bold text-amber-700 mt-0.5">
                 {needsReviewCount}
               </p>
             </div>
-            <div className="p-2 rounded-xl bg-amber-100 text-amber-700">
+            <div className="p-2.5 rounded-xl bg-amber-100 text-amber-700 shrink-0">
               <AlertTriangle className="w-5 h-5" />
             </div>
           </div>
 
           {/* Card 3: Not Found */}
-          <div className="p-3.5 rounded-2xl bg-rose-50/70 border border-rose-200/80 flex items-center justify-between">
+          <div className="p-4 rounded-xl bg-rose-50/70 border border-rose-200/80 flex items-center justify-between gap-3">
             <div>
-              <p className="text-[11px] font-bold text-rose-800 uppercase tracking-wide">Chưa tìm thấy</p>
-              <p className="text-2xl font-black text-rose-700 mt-0.5">
+              <p className="text-[13px] font-semibold text-rose-800">Chưa tìm thấy</p>
+              <p className="text-2xl font-bold text-rose-700 mt-0.5">
                 {notFoundCount}
               </p>
             </div>
-            <div className="p-2 rounded-xl bg-rose-100 text-rose-700">
+            <div className="p-2.5 rounded-xl bg-rose-100 text-rose-700 shrink-0">
               <XCircle className="w-5 h-5" />
             </div>
           </div>
 
           {/* Card 4: Structure Summary */}
-          <div className="p-3.5 rounded-2xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
-            <p className="text-[11px] font-bold text-slate-700 uppercase tracking-wide">Cấu trúc 3 Phần GDPT 2018</p>
-            <div className="grid grid-cols-3 gap-1 mt-1 text-center">
-              <div className="bg-white rounded-lg p-1 border border-blue-100 shadow-2xs">
-                <span className="text-[10px] text-blue-600 font-bold block">P.I (4 L/C)</span>
-                <span className="text-xs font-black text-slate-800">{part1Items.length}</span>
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-col justify-between">
+            <p className="text-[13px] font-semibold text-slate-700">Cấu trúc 3 Phần</p>
+            <div className="grid grid-cols-3 gap-1.5 mt-1.5 text-center">
+              <div className="bg-white rounded-lg p-1.5 border border-slate-200">
+                <span className="text-xs text-teal-700 font-semibold block">Phần I</span>
+                <span className="text-sm font-bold text-slate-900">{part1Items.length}</span>
               </div>
-              <div className="bg-white rounded-lg p-1 border border-indigo-100 shadow-2xs">
-                <span className="text-[10px] text-indigo-600 font-bold block">P.II (Đ/S)</span>
-                <span className="text-xs font-black text-slate-800">{part2Items.length}</span>
+              <div className="bg-white rounded-lg p-1.5 border border-slate-200">
+                <span className="text-xs text-indigo-700 font-semibold block">Phần II</span>
+                <span className="text-sm font-bold text-slate-900">{part2Items.length}</span>
               </div>
-              <div className="bg-white rounded-lg p-1 border border-purple-100 shadow-2xs">
-                <span className="text-[10px] text-purple-600 font-bold block">P.III (Ngắn)</span>
-                <span className="text-xs font-black text-slate-800">{part3Items.length}</span>
+              <div className="bg-white rounded-lg p-1.5 border border-slate-200">
+                <span className="text-xs text-emerald-700 font-semibold block">Phần III</span>
+                <span className="text-sm font-bold text-slate-900">{part3Items.length}</span>
               </div>
             </div>
           </div>
         </div>
 
         {/* Section View Tabs */}
-        <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100 text-xs">
-          <span className="text-slate-500 font-semibold mr-1">Xem bảng:</span>
+        <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100 text-sm">
+          <span className="text-slate-600 font-semibold mr-1">Xem bảng:</span>
           <button
+            type="button"
             onClick={() => setSelectedSectionTab('all')}
-            className={`px-3 py-1.5 rounded-xl font-bold transition-all ${
+            className={`px-3.5 min-h-[40px] rounded-xl font-semibold transition-colors whitespace-nowrap ${
               selectedSectionTab === 'all'
                 ? 'bg-slate-900 text-white shadow-xs'
                 : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
@@ -216,45 +212,49 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
             Đồng thời 3 Bảng ({totalCount} mục)
           </button>
           <button
+            type="button"
             onClick={() => setSelectedSectionTab('part1')}
-            className={`px-3 py-1.5 rounded-xl font-bold transition-all ${
+            className={`px-3.5 min-h-[40px] rounded-xl font-semibold transition-colors whitespace-nowrap ${
               selectedSectionTab === 'part1'
-                ? 'bg-blue-600 text-white shadow-xs'
-                : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'bg-teal-50 text-teal-800 hover:bg-teal-100'
             }`}
           >
-            Bảng 1: Trắc nghiệm 4 lựa chọn ({part1Items.length} câu)
+            Bảng 1: 4 lựa chọn ({part1Items.length} câu)
           </button>
           <button
+            type="button"
             onClick={() => setSelectedSectionTab('part2')}
-            className={`px-3 py-1.5 rounded-xl font-bold transition-all ${
+            className={`px-3.5 min-h-[40px] rounded-xl font-semibold transition-colors whitespace-nowrap ${
               selectedSectionTab === 'part2'
                 ? 'bg-indigo-600 text-white shadow-xs'
-                : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100'
+                : 'bg-indigo-50 text-indigo-800 hover:bg-indigo-100'
             }`}
           >
-            Bảng 2: Trắc nghiệm Đúng / Sai ({part2Items.length} ý)
+            Bảng 2: Đúng / Sai ({part2Items.length} ý)
           </button>
           <button
+            type="button"
             onClick={() => setSelectedSectionTab('part3')}
-            className={`px-3 py-1.5 rounded-xl font-bold transition-all ${
+            className={`px-3.5 min-h-[40px] rounded-xl font-semibold transition-colors whitespace-nowrap ${
               selectedSectionTab === 'part3'
-                ? 'bg-purple-600 text-white shadow-xs'
-                : 'bg-purple-50 text-purple-700 hover:bg-purple-100'
+                ? 'bg-slate-900 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-800 hover:bg-slate-200'
             }`}
           >
-            Bảng 3: Trắc nghiệm Trả lời ngắn ({part3Items.length} câu)
+            Bảng 3: Trả lời ngắn ({part3Items.length} câu)
           </button>
           {attentionItems.length > 0 && (
             <button
+              type="button"
               onClick={() => setSelectedSectionTab('issues')}
-              className={`px-3 py-1.5 rounded-xl font-bold transition-all flex items-center gap-1 ${
+              className={`px-3.5 min-h-[40px] rounded-xl font-semibold transition-colors flex items-center gap-1.5 whitespace-nowrap ${
                 selectedSectionTab === 'issues'
                   ? 'bg-amber-600 text-white shadow-xs'
                   : 'bg-amber-50 text-amber-800 hover:bg-amber-100'
               }`}
             >
-              <AlertTriangle className="w-3.5 h-3.5" />
+              <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>Cần rà soát ({attentionItems.length})</span>
             </button>
           )}

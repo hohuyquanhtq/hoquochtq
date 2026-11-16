@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { User, Question, Exam, StudentSubmission, ClassEnrollment } from '../../types';
 import {
   FileUp,
@@ -9,11 +9,11 @@ import {
   CheckCircle2,
   Clock,
   FolderTree,
-  Sparkles,
   ArrowRight,
   QrCode,
   FileCheck,
-  TrendingUp,
+  Activity,
+  Lock,
 } from 'lucide-react';
 import { getUserGreeting } from '../../constants/brand';
 import { ExamShareModal } from '../common/ExamShareModal';
@@ -30,6 +30,19 @@ interface TeacherDashboardProps {
   onOpenExamResults: (examId: string) => void;
   onTogglePublish?: (examId: string) => void;
   onSeedStarterSamples?: () => Promise<void> | void;
+}
+
+function formatViDateTime(iso?: string): string | null {
+  if (!iso) return null;
+  const ts = Date.parse(iso);
+  if (!Number.isFinite(ts)) return null;
+  return new Intl.DateTimeFormat('vi-VN', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(ts));
 }
 
 export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
@@ -82,22 +95,31 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
     (q) => q.type === 'part3_short_answer'
   ).length;
 
+  const recentExams = useMemo(() => {
+    return [...exams]
+      .sort((a, b) => {
+        const tsA = Date.parse(a.updatedAt || a.createdAt || '') || 0;
+        const tsB = Date.parse(b.updatedAt || b.createdAt || '') || 0;
+        return tsB - tsA;
+      })
+      .slice(0, 6);
+  }, [exams]);
+
   const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
 
   return (
     <div className="space-y-6">
-      {/* Clean Welcome Header */}
+      {/* Clean Welcome Banner */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 md:p-7 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-6">
         <div className="space-y-2 min-w-0">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 text-xs font-bold">
-            <Sparkles className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-            <span>{getUserGreeting(currentUser)}</span>
-          </div>
-          <h1 className="text-2xl md:text-3xl font-bold text-slate-900 tracking-tight">
-            Chào mừng đến với QUIZ PRO
+          <p className="text-sm font-semibold text-teal-700">
+            {getUserGreeting(currentUser)}
+          </p>
+          <h1 className="text-[26px] sm:text-[30px] font-bold text-slate-900 tracking-tight leading-tight">
+            Bảng điều khiển QUIZ PRO
           </h1>
-          <p className="text-sm md:text-base text-slate-600 max-w-2xl leading-relaxed">
-            Nền tảng bóc tách đề thi thông minh từ Word/PDF, tổ chức thi trực tuyến chuẩn GDPT 2018 và thống kê kết quả theo thời gian thực.
+          <p className="text-[15px] sm:text-base text-slate-600 max-w-2xl leading-relaxed">
+            Bóc tách đề thi Word/PDF chuẩn GDPT 2018, tổ chức phòng thi trực tuyến bảo mật và theo dõi kết quả theo thời gian thực.
           </p>
         </div>
 
@@ -105,15 +127,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           <button
             type="button"
             onClick={() => onNavigate('upload_exam')}
-            className="px-4 min-h-[44px] rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-xs transition-colors flex items-center gap-2"
+            className="px-4 min-h-[44px] rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-[15px] font-semibold shadow-xs transition-colors flex items-center gap-2 whitespace-nowrap"
           >
             <FileUp className="w-4 h-4 shrink-0" />
-            <span>Tải đề từ Word/PDF</span>
+            <span>Bóc tách Word/PDF</span>
           </button>
           <button
             type="button"
             onClick={() => onNavigate('create_exam')}
-            className="px-4 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold shadow-xs transition-colors flex items-center gap-2"
+            className="px-4 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-[15px] font-semibold shadow-xs transition-colors flex items-center gap-2 whitespace-nowrap"
           >
             <PlusCircle className="w-4 h-4 shrink-0" />
             <span>Tạo đề thi mới</span>
@@ -125,19 +147,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
       {totalQuestions === 0 && exams.length === 0 && (
         <div className="bg-white border-2 border-dashed border-teal-300 rounded-2xl p-6 flex flex-col md:flex-row md:items-center justify-between gap-4 shadow-xs">
           <div className="space-y-1.5 min-w-0">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
-              <Sparkles className="w-5 h-5 text-teal-600 shrink-0" />
-              <span>Không gian làm việc riêng của bạn đã sẵn sàng</span>
+            <h2 className="text-lg font-bold text-slate-900">
+              Không gian làm việc riêng của bạn đã sẵn sàng
             </h2>
-            <p className="text-sm text-slate-600 leading-relaxed max-w-2xl">
+            <p className="text-[15px] text-slate-600 leading-relaxed max-w-2xl">
               Dữ liệu câu hỏi, thư mục, lớp học và đề thi của mỗi giáo viên được tách biệt hoàn toàn. Hãy tải lên file đề Word/PDF của riêng bạn hoặc nạp nhanh bộ dữ liệu mẫu để trải nghiệm.
             </p>
           </div>
-          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <div className="flex flex-wrap items-center gap-3 shrink-0">
             <button
               type="button"
               onClick={() => onNavigate('upload_exam')}
-              className="px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold shadow-xs"
+              className="px-4 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-[15px] font-semibold shadow-xs whitespace-nowrap"
             >
               Tải đề Word / PDF ngay
             </button>
@@ -146,7 +167,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                 type="button"
                 disabled={isSeedingSamples}
                 onClick={() => void onSeedStarterSamples()}
-                className="px-4 min-h-[42px] rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-60 text-indigo-800 text-sm font-semibold"
+                className="px-4 min-h-[44px] rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 disabled:opacity-60 text-indigo-800 text-[15px] font-semibold whitespace-nowrap"
               >
                 {isSeedingSamples ? 'Đang nạp bộ mẫu...' : 'Nạp bộ câu hỏi mẫu'}
               </button>
@@ -155,192 +176,170 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         </div>
       )}
 
-      {/* 4 Core Real-Data Stat Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
+      {/* 4 Core Real-Data Statistics Cards */}
+      <section aria-label="Thống kê tổng quan" className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center gap-4 min-w-0">
           <div className="w-12 h-12 rounded-xl bg-teal-50 border border-teal-200 flex items-center justify-center text-teal-700 shrink-0">
             <FileCheck className="w-6 h-6" />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-500 truncate">Tổng số đề thi</p>
-            <p className="text-2xl md:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
+            <p className="text-sm font-medium text-slate-600 truncate">Tổng số đề thi đã tạo</p>
+            <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
               {totalExamsCount}
             </p>
-            <p className="text-xs text-teal-700 font-semibold mt-0.5 tabular-nums">
-              {activeExamsCount} đề đang mở thi
-            </p>
-          </div>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center gap-4 min-w-0">
-          <div className="w-12 h-12 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
-            <TrendingUp className="w-6 h-6" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-500 truncate">Tổng số lượt tham gia</p>
-            <p className="text-2xl md:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
-              {totalParticipationsCount}
-            </p>
-            <p className="text-xs text-indigo-700 font-semibold mt-0.5 tabular-nums">
-              Điểm TB: {avgScore} / 10
-            </p>
-          </div>
-        </div>
-
-        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center gap-4 min-w-0">
-          <div className="w-12 h-12 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 shrink-0">
-            <Users className="w-6 h-6" />
-          </div>
-          <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-500 truncate">Tổng số học sinh</p>
-            <p className="text-2xl md:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
-              {totalStudentsCount}
-            </p>
-            <p className="text-xs text-slate-600 font-medium mt-0.5 tabular-nums">
-              {enrolledStudentIds.size > 0
-                ? `Trong ${classesCount} lớp học`
-                : 'Thí sinh đã tham gia'}
+            <p className="text-[13px] text-slate-500 mt-0.5 tabular-nums truncate">
+              {totalQuestions} câu hỏi trong ngân hàng
             </p>
           </div>
         </div>
 
         <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center gap-4 min-w-0">
           <div className="w-12 h-12 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center justify-center text-emerald-700 shrink-0">
-            <CheckCircle2 className="w-6 h-6" />
+            <Activity className="w-6 h-6" />
           </div>
           <div className="min-w-0">
-            <p className="text-sm font-medium text-slate-500 truncate">Bài thi đã hoàn thành</p>
-            <p className="text-2xl md:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
-              {completedSubmissionsCount}
+            <p className="text-sm font-medium text-slate-600 truncate">Đề thi đang hoạt động</p>
+            <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
+              {activeExamsCount}
             </p>
-            <p className="text-xs text-emerald-700 font-semibold mt-0.5 tabular-nums">
-              {totalQuestions} câu hỏi trong kho
+            <p className="text-[13px] text-emerald-700 font-medium mt-0.5 tabular-nums truncate">
+              {totalExamsCount - activeExamsCount} đề ở trạng thái nháp
             </p>
           </div>
         </div>
-      </div>
 
-      {/* Prominent Action Cards */}
+        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center gap-4 min-w-0">
+          <div className="w-12 h-12 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center text-indigo-700 shrink-0">
+            <Users className="w-6 h-6" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-600 truncate">Tổng lượt học sinh tham gia</p>
+            <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
+              {totalParticipationsCount}
+            </p>
+            <p className="text-[13px] text-indigo-700 font-medium mt-0.5 tabular-nums truncate">
+              {totalStudentsCount} thí sinh · {classesCount} lớp học
+            </p>
+          </div>
+        </div>
+
+        <div className="p-5 rounded-2xl bg-white border border-slate-200 shadow-xs flex items-center gap-4 min-w-0">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-700 shrink-0">
+            <CheckCircle2 className="w-6 h-6" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-sm font-medium text-slate-600 truncate">Bài thi đã hoàn thành</p>
+            <p className="text-2xl sm:text-3xl font-bold text-slate-900 mt-0.5 tabular-nums">
+              {completedSubmissionsCount}
+            </p>
+            <p className="text-[13px] text-slate-600 font-medium mt-0.5 tabular-nums truncate">
+              Điểm trung bình: {avgScore} / 10
+            </p>
+          </div>
+        </div>
+      </section>
+
+      {/* 4 Balanced Quick Actions */}
       <section className="space-y-3">
-        <h2 className="text-lg md:text-xl font-bold text-slate-900">
+        <h2 className="text-xl sm:text-2xl font-bold text-slate-900">
           Thao tác nhanh
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between gap-4 hover:border-teal-300 transition-colors">
-            <div className="space-y-2">
-              <div className="w-11 h-11 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center">
+            <div className="space-y-2.5">
+              <div className="w-11 h-11 rounded-xl bg-teal-50 border border-teal-200 text-teal-700 flex items-center justify-center">
                 <PlusCircle className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-900">Tạo đề thi mới</h3>
-              <p className="text-sm text-slate-600 leading-snug">
-                Soạn đề, cấu hình thang điểm 3 phần và mật khẩu thi.
+              <h3 className="text-lg font-bold text-slate-900">Tạo đề thi mới</h3>
+              <p className="text-[15px] text-slate-600 leading-snug">
+                Soạn đề trực tiếp, cân bằng thang điểm 10 và cấu hình mật khẩu thi.
               </p>
             </div>
             <button
               type="button"
               onClick={() => onNavigate('create_exam')}
-              className="w-full min-h-[44px] px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
+              className="w-full min-h-[44px] px-4 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-[15px] font-semibold transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
             >
               <span>Tạo đề ngay</span>
-              <ArrowRight className="w-4 h-4" />
+              <ArrowRight className="w-4 h-4 shrink-0" />
             </button>
           </div>
 
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between gap-4 hover:border-indigo-300 transition-colors">
-            <div className="space-y-2">
-              <div className="w-11 h-11 rounded-xl bg-indigo-50 text-indigo-700 flex items-center justify-center">
+            <div className="space-y-2.5">
+              <div className="w-11 h-11 rounded-xl bg-indigo-50 border border-indigo-200 text-indigo-700 flex items-center justify-center">
                 <FileUp className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-900">Tải đề Word/PDF</h3>
-              <p className="text-sm text-slate-600 leading-snug">
-                Tự động tách 3 phần, bảng đáp án và công thức hóa học.
+              <h3 className="text-lg font-bold text-slate-900">Bóc tách đề từ file Word</h3>
+              <p className="text-[15px] text-slate-600 leading-snug">
+                Đọc tự động file DOCX/PDF, phân loại 3 phần và đối chiếu bảng đáp án.
               </p>
             </div>
             <button
               type="button"
               onClick={() => onNavigate('upload_exam')}
-              className="w-full min-h-[44px] px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
+              className="w-full min-h-[44px] px-4 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-[15px] font-semibold transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
             >
-              <span>Bóc tách đề</span>
-              <ArrowRight className="w-4 h-4" />
+              <span>Tải &amp; Bóc tách</span>
+              <ArrowRight className="w-4 h-4 shrink-0" />
             </button>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between gap-4 hover:border-teal-300 transition-colors">
-            <div className="space-y-2">
-              <div className="w-11 h-11 rounded-xl bg-slate-100 text-slate-800 flex items-center justify-center">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between gap-4 hover:border-slate-300 transition-colors">
+            <div className="space-y-2.5">
+              <div className="w-11 h-11 rounded-xl bg-slate-100 border border-slate-200 text-slate-800 flex items-center justify-center">
                 <BookOpen className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-900">Xem kho đề thi</h3>
-              <p className="text-sm text-slate-600 leading-snug">
-                Quản lý danh sách đề, ngân hàng câu hỏi và thư mục.
+              <h3 className="text-lg font-bold text-slate-900">Quản lý đề thi</h3>
+              <p className="text-[15px] text-slate-600 leading-snug">
+                Mở/đóng phòng thi, chia sẻ mã QR, ngân hàng câu hỏi và thư mục.
               </p>
             </div>
             <button
               type="button"
               onClick={() => onNavigate('exam_manager')}
-              className="w-full min-h-[44px] px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
+              className="w-full min-h-[44px] px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-[15px] font-semibold transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
             >
-              <span>Mở kho đề</span>
-              <ArrowRight className="w-4 h-4" />
+              <span>Mở kho đề thi</span>
+              <ArrowRight className="w-4 h-4 shrink-0" />
             </button>
           </div>
 
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between gap-4 hover:border-emerald-300 transition-colors">
-            <div className="space-y-2">
-              <div className="w-11 h-11 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <h3 className="text-base font-bold text-slate-900">Quản lý kết quả</h3>
-              <p className="text-sm text-slate-600 leading-snug">
-                Theo dõi điểm số từng thí sinh và xuất file Excel.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onNavigate('exam_results')}
-              className="w-full min-h-[44px] px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
-            >
-              <span>Xem kết quả</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
-          </div>
-
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between gap-4 hover:border-teal-300 transition-colors">
-            <div className="space-y-2">
-              <div className="w-11 h-11 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center">
+            <div className="space-y-2.5">
+              <div className="w-11 h-11 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-700 flex items-center justify-center">
                 <BarChart3 className="w-6 h-6" />
               </div>
-              <h3 className="text-base font-bold text-slate-900">Thống kê kết quả</h3>
-              <p className="text-sm text-slate-600 leading-snug">
-                Phân tích phổ điểm, tỉ lệ đúng theo từng câu hỏi.
+              <h3 className="text-lg font-bold text-slate-900">Xem kết quả thi</h3>
+              <p className="text-[15px] text-slate-600 leading-snug">
+                Phân tích phổ điểm học sinh, thống kê từng câu và xuất file Excel.
               </p>
             </div>
             <button
               type="button"
               onClick={() => onNavigate('exam_results')}
-              className="w-full min-h-[44px] px-4 rounded-xl border border-teal-300 bg-teal-50 hover:bg-teal-100 text-teal-800 text-sm font-semibold transition-colors flex items-center justify-center gap-1.5"
+              className="w-full min-h-[44px] px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-[15px] font-semibold transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
             >
-              <span>Xem thống kê</span>
-              <ArrowRight className="w-4 h-4" />
+              <span>Xem kết quả</span>
+              <ArrowRight className="w-4 h-4 shrink-0" />
             </button>
           </div>
         </div>
       </section>
 
-      {/* Active Exams & Question Bank Breakdown */}
+      {/* Recent Activity & Question Bank Breakdown */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Active Exams (2 Cols) */}
+        {/* Left Column: Recent Activity / Newly Created Exams */}
         <div className="lg:col-span-2 space-y-4 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
               <Clock className="w-5 h-5 text-teal-600 shrink-0" />
-              <span>Đề thi &amp; Phòng thi trực tuyến</span>
+              <span>Hoạt động gần đây</span>
             </h2>
             <button
               type="button"
               onClick={() => onNavigate('online_exams')}
-              className="text-sm font-semibold text-teal-700 hover:text-teal-800 flex items-center gap-1 shrink-0"
+              className="text-sm font-semibold text-teal-700 hover:text-teal-800 flex items-center gap-1 shrink-0 whitespace-nowrap"
             >
               <span>Xem tất cả ({exams.length})</span>
               <ArrowRight className="w-4 h-4" />
@@ -348,48 +347,78 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
           </div>
 
           <div className="space-y-3">
-            {exams.length === 0 ? (
-              <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center text-sm text-slate-500">
-                Bạn chưa tạo đề thi nào trong không gian làm việc này.
+            {recentExams.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-3">
+                <p className="text-[15px] text-slate-600">
+                  Bạn chưa tạo đề thi nào trong không gian làm việc này.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('upload_exam')}
+                  className="px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold"
+                >
+                  Bắt đầu bóc tách đề đầu tiên
+                </button>
               </div>
             ) : (
-              exams.slice(0, 6).map((exam) => {
+              recentExams.map((exam) => {
                 const examSubs = submissions.filter((s) => s.examId === exam.id);
+                const formattedCreated = formatViDateTime(exam.createdAt);
                 return (
                   <div
                     key={exam.id}
-                    className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs hover:border-teal-300 transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+                    className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs hover:border-teal-300 transition-colors flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
                   >
                     <div className="space-y-1.5 min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="px-2.5 py-0.5 text-xs font-mono font-bold bg-teal-50 text-teal-800 border border-teal-200 rounded-md">
-                          {exam.code}
+                      {/* Unboxed typographic metadata */}
+                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] font-medium text-slate-600 tabular-nums">
+                        <span className="font-mono font-bold text-teal-800">
+                          Mã {exam.code}
                         </span>
+                        <span aria-hidden="true">·</span>
                         <span
-                          className={`px-2.5 py-0.5 text-xs font-semibold rounded-md ${
-                            exam.isPublished
-                              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                              : 'bg-slate-100 text-slate-600'
+                          className={`inline-flex items-center gap-1 font-semibold ${
+                            exam.isPublished ? 'text-emerald-700' : 'text-slate-600'
                           }`}
                         >
-                          {exam.isPublished ? 'Đang mở' : 'Bản nháp'}
+                          {exam.isPublished ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                          ) : (
+                            <Clock className="w-3.5 h-3.5 shrink-0" />
+                          )}
+                          <span>{exam.isPublished ? 'Đang hoạt động' : 'Bản nháp'}</span>
                         </span>
-                        <span className="text-xs font-medium text-slate-500">
-                          {exam.grade === 'chuyen_hsg'
-                            ? 'Chuyên / HSG'
-                            : `Khối ${exam.grade}`}
+                        {exam.requiresPassword && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="inline-flex items-center gap-1 text-amber-700 font-semibold">
+                              <Lock className="w-3.5 h-3.5 shrink-0" />
+                              <span>Có mật khẩu</span>
+                            </span>
+                          </>
+                        )}
+                        <span aria-hidden="true">·</span>
+                        <span>
+                          {exam.grade === 'chuyen_hsg' ? 'Chuyên / HSG' : `Khối ${exam.grade}`}
                         </span>
                       </div>
 
-                      <h3 className="font-bold text-slate-900 text-base truncate">
+                      <h3 className="font-bold text-slate-900 text-base sm:text-lg truncate">
                         {exam.title}
                       </h3>
 
-                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600 tabular-nums">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-slate-600 tabular-nums">
                         <span>{exam.durationMinutes} phút</span>
-                        <span>• {exam.questions.length} câu hỏi</span>
-                        <span>• Thang {exam.totalScore || 10.0}đ</span>
-                        <span>• {examSubs.length} lượt nộp</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{exam.questions.length} câu hỏi</span>
+                        <span aria-hidden="true">·</span>
+                        <span>{examSubs.length} lượt nộp</span>
+                        {formattedCreated && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="text-slate-500">Tạo lúc {formattedCreated}</span>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -397,18 +426,18 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       <button
                         type="button"
                         onClick={() => onOpenExamResults(exam.id)}
-                        className="px-3.5 min-h-[40px] rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 hover:text-slate-900 text-sm font-semibold flex items-center gap-1.5 transition-colors"
+                        className="px-3.5 min-h-[42px] rounded-xl border border-slate-300 hover:bg-slate-50 bg-white text-slate-800 text-sm font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap"
                       >
-                        <BarChart3 className="w-4 h-4 text-teal-600" />
+                        <BarChart3 className="w-4 h-4 text-teal-600 shrink-0" />
                         <span>Xem điểm</span>
                       </button>
                       <button
                         type="button"
                         onClick={() => setActiveShareExam(exam)}
                         title="Lấy link trực tiếp và tạo mã QR"
-                        className="px-3.5 min-h-[40px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
+                        className="px-3.5 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold flex items-center gap-1.5 transition-colors shadow-2xs whitespace-nowrap"
                       >
-                        <QrCode className="w-4 h-4" />
+                        <QrCode className="w-4 h-4 shrink-0" />
                         <span>Chia sẻ &amp; QR</span>
                       </button>
                     </div>
@@ -422,14 +451,14 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
         {/* Right Column: Question Bank Summary & Distribution */}
         <div className="space-y-4 min-w-0">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-lg font-bold text-slate-900 flex items-center gap-2">
+            <h2 className="text-xl font-bold text-slate-900 flex items-center gap-2">
               <BookOpen className="w-5 h-5 text-indigo-600 shrink-0" />
-              <span>Cơ cấu Ngân hàng câu hỏi</span>
+              <span>Ngân hàng câu hỏi</span>
             </h2>
             <button
               type="button"
               onClick={() => onNavigate('question_bank')}
-              className="text-sm font-semibold text-teal-700 hover:text-teal-800 shrink-0"
+              className="text-sm font-semibold text-teal-700 hover:text-teal-800 shrink-0 whitespace-nowrap"
             >
               Quản lý
             </button>
@@ -437,11 +466,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
           <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-5">
             <div>
-              <p className="text-sm font-semibold text-slate-700 mb-3">
-                Phân loại theo 3 dạng cấu trúc chuẩn:
+              <p className="text-[15px] font-semibold text-slate-800 mb-3">
+                Phân loại theo 3 dạng chuẩn:
               </p>
 
-              <div className="space-y-3">
+              <div className="space-y-3.5">
                 <div>
                   <div className="flex justify-between text-sm mb-1.5 tabular-nums">
                     <span className="font-medium text-slate-700">Phần I (4 lựa chọn):</span>
@@ -491,7 +520,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
 
             <div className="pt-4 border-t border-slate-100">
               <p className="text-sm font-semibold text-slate-700 mb-2.5">
-                Truy cập nhanh thư mục:
+                Truy cập nhanh:
               </p>
               <div className="grid grid-cols-2 gap-2.5">
                 <button
@@ -500,15 +529,15 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                   className="p-2.5 min-h-[42px] rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-800 text-sm font-medium text-left flex items-center gap-2 transition-colors border border-slate-200"
                 >
                   <FolderTree className="w-4 h-4 text-teal-600 shrink-0" />
-                  <span className="truncate">Chuyên đề lớp</span>
+                  <span className="truncate">Thư mục</span>
                 </button>
                 <button
                   type="button"
-                  onClick={() => onNavigate('folder_manager')}
+                  onClick={() => onNavigate('class_manager')}
                   className="p-2.5 min-h-[42px] rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-800 text-sm font-medium text-left flex items-center gap-2 transition-colors border border-slate-200"
                 >
-                  <FolderTree className="w-4 h-4 text-indigo-600 shrink-0" />
-                  <span className="truncate">Ôn tập HSG</span>
+                  <Users className="w-4 h-4 text-indigo-600 shrink-0" />
+                  <span className="truncate">Lớp học</span>
                 </button>
               </div>
             </div>
@@ -516,10 +545,10 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
             <button
               type="button"
               onClick={() => onNavigate('upload_exam')}
-              className="w-full min-h-[44px] px-4 bg-slate-900 hover:bg-slate-800 text-white text-sm font-semibold rounded-xl transition-colors flex items-center justify-center gap-2"
+              className="w-full min-h-[44px] px-4 bg-slate-900 hover:bg-slate-800 text-white text-[15px] font-semibold rounded-xl transition-colors flex items-center justify-center gap-2 whitespace-nowrap"
             >
-              <FileUp className="w-4 h-4" />
-              <span>Nạp đề từ Word / PDF</span>
+              <FileUp className="w-4 h-4 shrink-0" />
+              <span>Bóc tách đề Word / PDF</span>
             </button>
           </div>
         </div>

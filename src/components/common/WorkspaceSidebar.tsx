@@ -2,14 +2,17 @@ import React from 'react';
 import {
   LayoutDashboard,
   FilePlus2,
+  FileUp,
   FolderKanban,
   Globe,
   BarChart3,
   Users,
+  BookOpenCheck,
   Settings,
   FlaskConical,
   X,
-  Code,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react';
 import { APP_CONFIG } from '../../constants/brand';
 import { UserRole } from '../../types';
@@ -17,6 +20,8 @@ import { UserRole } from '../../types';
 export interface WorkspaceSidebarProps {
   activeTab: string;
   userRole: UserRole;
+  isCollapsed?: boolean;
+  onToggleCollapse?: () => void;
   onSelectTab: (tab: string) => void;
   onOpenSystemDocs: () => void;
   isMobileOpen: boolean;
@@ -30,56 +35,90 @@ interface SidebarNavItem {
   icon: React.ComponentType<{ className?: string }>;
 }
 
+interface SidebarNavGroup {
+  title: string;
+  items: SidebarNavItem[];
+}
+
 export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   activeTab,
   userRole,
+  isCollapsed = false,
+  onToggleCollapse,
   onSelectTab,
   onOpenSystemDocs,
   isMobileOpen,
   onCloseMobile,
 }) => {
-  const navItems: SidebarNavItem[] = [
+  const navGroups: SidebarNavGroup[] = [
     {
-      id: userRole === 'admin' ? 'admin_dashboard' : 'dashboard',
-      label: 'Tổng quan Dashboard',
-      matchTabs: userRole === 'admin' ? ['admin_dashboard', 'dashboard'] : ['dashboard'],
-      icon: LayoutDashboard,
+      title: 'Tổng quan & Soạn đề',
+      items: [
+        {
+          id: userRole === 'admin' ? 'admin_dashboard' : 'dashboard',
+          label: 'Tổng quan',
+          matchTabs: userRole === 'admin' ? ['admin_dashboard', 'dashboard'] : ['dashboard'],
+          icon: LayoutDashboard,
+        },
+        {
+          id: 'create_exam',
+          label: 'Tạo đề thi',
+          matchTabs: ['create_exam'],
+          icon: FilePlus2,
+        },
+        {
+          id: 'upload_exam',
+          label: 'Bóc tách Word/PDF',
+          matchTabs: ['upload_exam'],
+          icon: FileUp,
+        },
+      ],
     },
     {
-      id: 'upload_exam',
-      label: 'Tạo đề thi',
-      matchTabs: ['upload_exam', 'create_exam'],
-      icon: FilePlus2,
+      title: 'Quản lý & Tổ chức thi',
+      items: [
+        {
+          id: 'exam_manager',
+          label: 'Quản lý đề thi',
+          matchTabs: ['exam_manager', 'question_bank', 'folder_manager'],
+          icon: FolderKanban,
+        },
+        {
+          id: 'online_exams',
+          label: 'Bài thi trực tuyến',
+          matchTabs: ['online_exams'],
+          icon: Globe,
+        },
+        {
+          id: 'exam_results',
+          label: 'Kết quả & Thống kê',
+          matchTabs: ['exam_results'],
+          icon: BarChart3,
+        },
+        {
+          id: userRole === 'admin' ? 'admin_users' : 'class_manager',
+          label: userRole === 'admin' ? 'Quản lý tài khoản' : 'Lớp học & Học sinh',
+          matchTabs: userRole === 'admin' ? ['admin_users'] : ['class_manager'],
+          icon: Users,
+        },
+      ],
     },
     {
-      id: 'exam_manager',
-      label: 'Kho đề thi',
-      matchTabs: ['exam_manager', 'question_bank', 'folder_manager'],
-      icon: FolderKanban,
-    },
-    {
-      id: 'online_exams',
-      label: 'Bài thi trực tuyến',
-      matchTabs: ['online_exams'],
-      icon: Globe,
-    },
-    {
-      id: 'exam_results',
-      label: 'Kết quả và thống kê',
-      matchTabs: ['exam_results'],
-      icon: BarChart3,
-    },
-    {
-      id: userRole === 'admin' ? 'admin_users' : 'class_manager',
-      label: 'Quản lý học sinh',
-      matchTabs: userRole === 'admin' ? ['admin_users'] : ['class_manager'],
-      icon: Users,
-    },
-    {
-      id: 'system_settings',
-      label: 'Thiết lập hệ thống',
-      matchTabs: ['system_settings'],
-      icon: Settings,
+      title: 'Hỗ trợ & Hệ thống',
+      items: [
+        {
+          id: 'user_guide',
+          label: 'Hướng dẫn sử dụng',
+          matchTabs: ['user_guide'],
+          icon: BookOpenCheck,
+        },
+        {
+          id: 'system_settings',
+          label: 'Cài đặt hệ thống',
+          matchTabs: ['system_settings'],
+          icon: Settings,
+        },
+      ],
     },
   ];
 
@@ -88,107 +127,170 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
     onCloseMobile();
   };
 
-  const renderSidebarContent = () => (
-    <div className="h-full flex flex-col bg-white border-r border-slate-200 select-none">
+  const renderSidebarContent = (collapsedMode: boolean) => (
+    <div className="h-full flex flex-col bg-slate-900 text-slate-100 border-r border-slate-800 select-none">
       {/* Brand Header */}
-      <div className="h-[68px] shrink-0 px-5 border-b border-slate-200 flex items-center justify-between gap-2">
+      <div
+        className={`h-[70px] shrink-0 border-b border-slate-800 flex items-center ${
+          collapsedMode ? 'justify-center px-2' : 'justify-between px-4'
+        } gap-2`}
+      >
         <button
           type="button"
           onClick={() => handleNavClick(userRole === 'admin' ? 'admin_dashboard' : 'dashboard')}
-          className="flex items-center gap-3 text-left min-w-0 group focus:outline-none"
+          title="QUIZ PRO - Trang tổng quan"
+          className={`flex items-center gap-3 text-left min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 rounded-xl ${
+            collapsedMode ? 'justify-center p-1' : 'flex-1'
+          }`}
         >
-          <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-xs group-hover:bg-teal-700 transition-colors">
+          <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:bg-teal-500 transition-colors">
             <FlaskConical className="w-5 h-5" />
           </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-1.5">
-              <span className="text-xl font-extrabold tracking-tight text-slate-900">
-                QUIZ <span className="text-teal-700">PRO</span>
-              </span>
+          {!collapsedMode && (
+            <div className="min-w-0">
+              <div className="flex items-center gap-1.5">
+                <span className="text-xl font-extrabold tracking-tight text-white whitespace-nowrap">
+                  QUIZ <span className="text-teal-400">PRO</span>
+                </span>
+              </div>
+              <p className="text-[13px] font-medium text-slate-400 truncate">
+                {APP_CONFIG.APP_NAME} · GDPT 2018
+              </p>
             </div>
-            <p className="text-xs font-medium text-slate-500 truncate">
-              {APP_CONFIG.APP_NAME} • GDPT 2018
-            </p>
-          </div>
+          )}
         </button>
 
+        {/* Mobile Drawer Close */}
         <button
           type="button"
           onClick={onCloseMobile}
           aria-label="Đóng menu điều hướng"
-          className="lg:hidden p-2 rounded-lg text-slate-500 hover:bg-slate-100 hover:text-slate-900"
+          className="lg:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
         >
           <X className="w-5 h-5" />
         </button>
+
+        {/* Desktop Collapse Toggle */}
+        {!collapsedMode && onToggleCollapse && (
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-label="Thu gọn thanh điều hướng"
+            title="Thu gọn sidebar"
+            className="hidden lg:flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors shrink-0"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
-      {/* Navigation Items (7 Core Menu Items) */}
-      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1.5" aria-label="Điều hướng chính">
-        <p className="px-3 pb-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
-          Không gian làm việc
-        </p>
-        {navItems.map((item) => {
-          const Icon = item.icon;
-          const isActive = item.matchTabs.includes(activeTab);
-          return (
-            <button
-              key={item.id}
-              type="button"
-              onClick={() => handleNavClick(item.id)}
-              className={`w-full flex items-center gap-3 px-3.5 py-2.5 min-h-[44px] rounded-xl text-sm transition-all text-left min-w-0 ${
-                isActive
-                  ? 'bg-teal-50 text-teal-800 font-bold border border-teal-200/90 shadow-2xs'
-                  : 'text-slate-700 font-medium hover:bg-slate-100 hover:text-slate-900 border border-transparent'
-              }`}
-            >
-              <Icon
-                className={`w-5 h-5 shrink-0 ${
-                  isActive ? 'text-teal-700' : 'text-slate-500'
-                }`}
-              />
-              <span className="truncate min-w-0">{item.label}</span>
-            </button>
-          );
-        })}
+      {/* Expand button when collapsed */}
+      {collapsedMode && onToggleCollapse && (
+        <div className="hidden lg:flex justify-center pt-3 px-2">
+          <button
+            type="button"
+            onClick={onToggleCollapse}
+            aria-label="Mở rộng thanh điều hướng"
+            title="Mở rộng sidebar"
+            className="w-full min-h-[40px] flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-800 hover:text-white transition-colors"
+          >
+            <PanelLeftOpen className="w-5 h-5" />
+          </button>
+        </div>
+      )}
+
+      {/* Navigation Groups */}
+      <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5" aria-label="Điều hướng chính">
+        {navGroups.map((group) => (
+          <div key={group.title} className="space-y-1.5">
+            {!collapsedMode && (
+              <p className="px-3 pb-1 text-[13px] font-semibold text-slate-400 truncate">
+                {group.title}
+              </p>
+            )}
+            <div className="space-y-1">
+              {group.items.map((item) => {
+                const Icon = item.icon;
+                const isActive = item.matchTabs.includes(activeTab);
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => handleNavClick(item.id)}
+                    title={collapsedMode ? item.label : undefined}
+                    aria-current={isActive ? 'page' : undefined}
+                    className={`w-full flex items-center ${
+                      collapsedMode ? 'justify-center px-2' : 'gap-3 px-3.5'
+                    } min-h-[44px] py-2.5 rounded-xl text-[15px] transition-colors text-left min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${
+                      isActive
+                        ? 'bg-teal-600 text-white font-semibold shadow-sm'
+                        : 'text-slate-300 font-medium hover:bg-slate-800 hover:text-white'
+                    }`}
+                  >
+                    <Icon
+                      className={`w-5 h-5 shrink-0 ${
+                        isActive ? 'text-white' : 'text-slate-400'
+                      }`}
+                    />
+                    {!collapsedMode && (
+                      <span className="truncate min-w-0 whitespace-nowrap">{item.label}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </nav>
 
       {/* Sidebar Footer */}
-      <div className="p-3 border-t border-slate-200 space-y-2 shrink-0 bg-slate-50/70">
+      <div className="p-3 border-t border-slate-800 space-y-2.5 shrink-0 bg-slate-900">
         <button
           type="button"
           onClick={() => {
             onOpenSystemDocs();
             onCloseMobile();
           }}
-          className="w-full flex items-center gap-2.5 px-3 py-2.5 min-h-[40px] rounded-xl border border-slate-200 bg-white hover:border-teal-300 hover:bg-teal-50/40 text-slate-700 hover:text-teal-800 text-xs font-semibold transition-colors"
+          title={collapsedMode ? 'Kiến trúc kỹ thuật hệ thống' : undefined}
+          className={`w-full flex items-center ${
+            collapsedMode ? 'justify-center px-2' : 'gap-2.5 px-3.5'
+          } min-h-[42px] rounded-xl border border-slate-700 bg-slate-800/80 hover:bg-slate-800 hover:border-teal-500/60 text-slate-200 hover:text-white text-sm font-medium transition-colors`}
         >
-          <Code className="w-4 h-4 text-teal-600 shrink-0" />
-          <span className="truncate">Kiến trúc &amp; Hướng dẫn</span>
+          <FlaskConical className="w-4 h-4 text-teal-400 shrink-0" />
+          {!collapsedMode && <span className="truncate whitespace-nowrap">Kiến trúc kỹ thuật</span>}
         </button>
-        <div className="px-2 flex items-center justify-between text-[11px] text-slate-500 font-medium">
-          <span>{APP_CONFIG.APP_NAME} v{APP_CONFIG.APP_VERSION}</span>
-          <span>Bộ GD&amp;ĐT</span>
-        </div>
+
+        {!collapsedMode && (
+          <div className="px-2 flex items-center justify-between text-[13px] text-slate-400">
+            <span>{APP_CONFIG.APP_NAME}</span>
+            <span className="tabular-nums">v{APP_CONFIG.APP_VERSION}</span>
+          </div>
+        )}
       </div>
     </div>
   );
 
   return (
     <>
-      {/* Desktop Fixed Sidebar */}
-      <aside className="hidden lg:block w-64 shrink-0 h-full">
-        {renderSidebarContent()}
+      {/* Desktop Fixed Sidebar (264px expanded / 76px collapsed) */}
+      <aside
+        className={`hidden lg:block shrink-0 h-full transition-[width] duration-200 ease-out ${
+          isCollapsed ? 'w-[76px]' : 'w-[264px]'
+        }`}
+      >
+        {renderSidebarContent(isCollapsed)}
       </aside>
 
       {/* Mobile / Tablet Slide-over Drawer */}
       {isMobileOpen && (
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div
-            className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs"
+            className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs"
             onClick={onCloseMobile}
+            aria-hidden="true"
           />
-          <div className="relative z-10 w-72 max-w-[85vw] h-full shadow-2xl">
-            {renderSidebarContent()}
+          <div className="relative z-10 w-[272px] max-w-[85vw] h-full shadow-2xl">
+            {renderSidebarContent(false)}
           </div>
         </div>
       )}

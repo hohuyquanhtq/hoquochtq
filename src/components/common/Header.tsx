@@ -36,17 +36,18 @@ interface HeaderProps {
 
 const TAB_TITLES: Record<string, string> = {
   dashboard: 'Tổng quan Dashboard',
-  upload_exam: 'Tạo đề thi từ Word / PDF',
-  create_exam: 'Soạn đề thi & Ma trận',
-  exam_manager: 'Kho đề thi & Phòng thi',
+  upload_exam: 'Bóc tách đề thi từ Word / PDF',
+  create_exam: 'Tạo đề thi & Ma trận điểm',
+  exam_manager: 'Quản lý đề thi',
   question_bank: 'Ngân hàng câu hỏi',
   folder_manager: 'Thư mục chuyên đề',
-  online_exams: 'Bài thi trực tuyến',
+  online_exams: 'Danh sách bài thi trực tuyến',
   exam_results: 'Kết quả và thống kê',
-  class_manager: 'Quản lý học sinh & Lớp học',
-  system_settings: 'Thiết lập hệ thống',
-  admin_dashboard: 'Quản trị hệ thống',
-  admin_users: 'Quản lý học sinh & Tài khoản',
+  class_manager: 'Lớp học & Học sinh',
+  user_guide: 'Hướng dẫn sử dụng',
+  system_settings: 'Cài đặt hệ thống',
+  admin_dashboard: 'Tổng quan Quản trị hệ thống',
+  admin_users: 'Quản lý tài khoản & Học sinh',
 };
 
 export const Header: React.FC<HeaderProps> = ({
@@ -164,8 +165,14 @@ export const Header: React.FC<HeaderProps> = ({
   const resolvedTitle = pageTitle || TAB_TITLES[activeTab] || 'QUIZ PRO';
 
   return (
-    <header className="shrink-0 min-h-[68px] z-30 bg-white border-b border-slate-200">
-      <div className={workspaceMode ? 'h-[68px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4' : 'max-w-7xl mx-auto h-[68px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4'}>
+    <header className="shrink-0 z-30 bg-white border-b border-slate-200">
+      <div
+        className={
+          workspaceMode
+            ? 'min-h-[70px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 sm:gap-6'
+            : 'max-w-7xl mx-auto min-h-[70px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 sm:gap-6'
+        }
+      >
         {/* Left: Workspace Page Title + Mobile Menu Trigger OR Guest/Student Brand */}
         {workspaceMode ? (
           <div className="flex items-center gap-3 min-w-0">
@@ -174,50 +181,40 @@ export const Header: React.FC<HeaderProps> = ({
                 type="button"
                 onClick={onOpenMobileMenu}
                 aria-label="Mở menu điều hướng"
-                className="lg:hidden p-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 shrink-0"
+                className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 shrink-0 transition-colors"
               >
                 <Menu className="w-5 h-5" />
               </button>
             )}
             <div className="min-w-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <h2 className="text-base sm:text-lg font-bold text-slate-900 truncate">
-                  {resolvedTitle}
-                </h2>
-                {currentUser && (
-                  <span className="hidden sm:inline-flex px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-xs font-semibold shrink-0">
-                    {currentUser.role === 'admin' ? 'Quản trị viên' : 'Giáo viên'}
-                  </span>
-                )}
-              </div>
-              {currentUser?.name && (
-                <p className="text-xs text-slate-500 truncate hidden md:block">
-                  Tài khoản: <span className="font-semibold text-slate-700">{currentUser.name}</span>
+              <h2 className="text-lg sm:text-[22px] font-bold text-slate-900 tracking-tight truncate">
+                {resolvedTitle}
+              </h2>
+              {currentUser && (
+                <p className="text-[13px] text-slate-500 truncate hidden sm:flex items-center gap-1.5">
+                  <span>{currentUser.role === 'admin' ? 'Quản trị viên' : 'Giáo viên'}</span>
+                  <span aria-hidden="true">·</span>
+                  <span className="font-medium text-slate-700 truncate">{currentUser.name}</span>
                 </p>
               )}
             </div>
           </div>
         ) : (
-          <div className="flex items-center gap-3 min-w-0">
+          <div className="flex items-center gap-4 min-w-0">
             <button
               type="button"
               onClick={() => setActiveTab(homeTab)}
-              className="flex items-center gap-2.5 text-left group focus:outline-none shrink-0"
+              className="flex items-center gap-3 text-left group focus:outline-none shrink-0"
             >
               <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-xs group-hover:bg-teal-700 transition-colors">
                 <FlaskConical className="w-5 h-5" />
               </div>
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="font-extrabold text-xl tracking-tight text-slate-900">
-                    QUIZ <span className="text-teal-700">PRO</span>
-                  </span>
-                  <span className="px-2 py-0.5 text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200 rounded-md hidden sm:inline-block">
-                    {APP_CONFIG.APP_NAME}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 font-medium hidden sm:block">
-                  {APP_CONFIG.APP_DESCRIPTION}
+              <div className="min-w-0">
+                <span className="font-extrabold text-xl tracking-tight text-slate-900 whitespace-nowrap block">
+                  QUIZ <span className="text-teal-700">PRO</span>
+                </span>
+                <p className="text-[13px] text-slate-500 font-medium hidden sm:block truncate">
+                  {APP_CONFIG.APP_NAME} · {APP_CONFIG.APP_DESCRIPTION}
                 </p>
               </div>
             </button>
@@ -226,28 +223,28 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('student_home')}
-                className={`hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-semibold transition-colors ${
+                className={`hidden md:inline-flex items-center gap-2 px-4 min-h-[42px] rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === 'student_home'
                     ? 'bg-teal-50 text-teal-800 border border-teal-200'
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                <GraduationCap className="w-4 h-4" />
+                <GraduationCap className="w-4 h-4 shrink-0" />
                 <span>Phòng thi &amp; Lớp học</span>
               </button>
             )}
           </div>
         )}
 
-        {/* Right: Prominent Author & School Unit Badge + Account Controls */}
-        <div className="flex items-center gap-3 shrink-0">
-          {/* Author Identity & Unit Badge (Always visible at top-right, never hidden in dropdown) */}
-          <div className="hidden md:flex flex-col items-end text-right leading-tight">
-            <span className="text-[18px] font-bold text-slate-900 tracking-tight whitespace-nowrap">
+        {/* Right: Prominent Author Identity + Account Controls */}
+        <div className="flex items-center gap-3 sm:gap-4 shrink-0">
+          {/* Author Identity & Unit (Large, crisp typography on >= md) */}
+          <div className="hidden md:flex flex-col items-end text-right leading-snug pr-3 border-r border-slate-200">
+            <span className="text-[19px] font-bold text-slate-900 tracking-tight whitespace-nowrap">
               {APP_CONFIG.APP_AUTHOR}
             </span>
-            <span className="mt-0.5 inline-flex items-center px-2.5 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 text-[11px] font-bold tracking-wide whitespace-nowrap">
-              TRƯỜNG THPT CHUYÊN NGUYỄN BỈNH KHIÊM | TỔ HÓA HỌC
+            <span className="text-[13px] font-semibold text-teal-700 whitespace-nowrap">
+              THPT chuyên Nguyễn Bỉnh Khiêm · Tổ Hóa học
             </span>
           </div>
 
@@ -256,9 +253,9 @@ export const Header: React.FC<HeaderProps> = ({
               type="button"
               onClick={onOpenSystemDocs}
               title="Hồ sơ kiến trúc hệ thống"
-              className="hidden sm:inline-flex items-center gap-1.5 px-3 min-h-[40px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-semibold transition-colors"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 min-h-[42px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-semibold transition-colors whitespace-nowrap shrink-0"
             >
-              <Code className="w-4 h-4 text-teal-600" />
+              <Code className="w-4 h-4 text-teal-600 shrink-0" />
               <span className="hidden lg:inline">Kiến trúc</span>
             </button>
           )}
@@ -267,9 +264,9 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={onRequestAuth}
-              className="px-4 min-h-[40px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold shadow-xs flex items-center gap-2 transition-colors"
+              className="px-4 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-[15px] font-semibold shadow-xs flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
             >
-              <LogIn className="w-4 h-4" />
+              <LogIn className="w-4 h-4 shrink-0" />
               <span>Đăng nhập</span>
             </button>
           ) : (
@@ -278,7 +275,7 @@ export const Header: React.FC<HeaderProps> = ({
                 type="button"
                 onClick={handleOpenProfile}
                 title="Hồ sơ cá nhân & Đổi mật khẩu"
-                className="flex items-center gap-2 px-2.5 min-h-[40px] rounded-xl border border-slate-200 hover:border-teal-300 hover:bg-teal-50/40 transition-all text-left group"
+                className="flex items-center gap-2 px-3 min-h-[44px] rounded-xl border border-slate-200 hover:border-teal-300 hover:bg-teal-50/40 transition-colors text-left group shrink-0"
               >
                 <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
                   {currentUser.role === 'admin' ? (
@@ -289,7 +286,7 @@ export const Header: React.FC<HeaderProps> = ({
                     <UserCircle2 className="w-4 h-4" />
                   )}
                 </div>
-                <span className="hidden sm:inline text-sm font-semibold text-slate-800 max-w-[120px] truncate">
+                <span className="hidden sm:inline text-sm font-semibold text-slate-800 max-w-[130px] truncate whitespace-nowrap">
                   {currentUser.name || currentUser.email}
                 </span>
                 <Edit2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-teal-700 shrink-0" />
@@ -300,7 +297,8 @@ export const Header: React.FC<HeaderProps> = ({
                   type="button"
                   onClick={() => void onLogout()}
                   title="Đăng xuất khỏi tài khoản"
-                  className="px-3 min-h-[40px] rounded-xl border border-slate-200 hover:border-rose-200 hover:bg-rose-50 text-slate-700 hover:text-rose-700 text-sm font-semibold flex items-center gap-1.5 transition-colors"
+                  aria-label="Đăng xuất"
+                  className="px-3.5 min-h-[44px] rounded-xl border border-slate-200 hover:border-rose-200 hover:bg-rose-50 text-slate-700 hover:text-rose-700 text-sm font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                 >
                   <LogOut className="w-4 h-4 shrink-0" />
                   <span className="hidden sm:inline">Đăng xuất</span>
@@ -311,56 +309,58 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Compact Author Strip on Mobile (< md) */}
-      <div className="md:hidden bg-teal-50/80 border-b border-teal-200/80 px-4 py-1 flex items-center justify-between gap-2 text-xs">
-        <span className="font-bold text-slate-900 truncate">{APP_CONFIG.APP_AUTHOR}</span>
-        <span className="font-bold text-teal-800 truncate">THPT CHUYÊN NBK | TỔ HÓA HỌC</span>
+      {/* Mobile Author Strip (< md) */}
+      <div className="md:hidden bg-slate-50 border-t border-slate-200 px-4 py-1.5 flex items-center justify-between gap-3">
+        <span className="text-[14px] font-bold text-slate-900 truncate">{APP_CONFIG.APP_AUTHOR}</span>
+        <span className="text-[13px] font-semibold text-teal-700 truncate">THPT chuyên NBK · Tổ Hóa học</span>
       </div>
 
       {/* Profile & Change Password Modal */}
       {isProfileModalOpen && currentUser && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden animate-in fade-in zoom-in-95">
-            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <UserCircle2 className="w-5 h-5 text-blue-400" />
-                <div>
-                  <h3 className="font-bold text-sm">Tài khoản &amp; Bảo mật</h3>
-                  <p className="text-[11px] text-slate-400 font-mono">{currentUser.email}</p>
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <UserCircle2 className="w-5 h-5 text-teal-400 shrink-0" />
+                <div className="min-w-0">
+                  <h3 className="font-bold text-base truncate">Tài khoản &amp; Bảo mật</h3>
+                  <p className="text-[13px] text-slate-300 font-mono truncate">{currentUser.email}</p>
                 </div>
               </div>
               <button
+                type="button"
                 onClick={() => setIsProfileModalOpen(false)}
-                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                aria-label="Đóng cửa sổ tài khoản"
+                className="p-2 rounded-lg hover:bg-slate-800 text-slate-300 hover:text-white transition-colors shrink-0"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             {/* Modal Tabs */}
-            <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50 text-xs font-bold">
+            <div className="grid grid-cols-2 border-b border-slate-200 bg-slate-50 text-sm font-semibold">
               <button
                 type="button"
                 onClick={() => setModalTab('profile')}
-                className={`py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+                className={`py-3 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
                   modalTab === 'profile'
-                    ? 'border-blue-600 text-blue-700 bg-white'
+                    ? 'border-teal-600 text-teal-700 bg-white'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <Edit2 className="w-3.5 h-3.5" />
+                <Edit2 className="w-4 h-4" />
                 <span>Hồ sơ cá nhân</span>
               </button>
               <button
                 type="button"
                 onClick={() => setModalTab('password')}
-                className={`py-2.5 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
+                className={`py-3 flex items-center justify-center gap-1.5 border-b-2 transition-colors ${
                   modalTab === 'password'
-                    ? 'border-blue-600 text-blue-700 bg-white'
+                    ? 'border-teal-600 text-teal-700 bg-white'
                     : 'border-transparent text-slate-500 hover:text-slate-800'
                 }`}
               >
-                <KeyRound className="w-3.5 h-3.5" />
+                <KeyRound className="w-4 h-4" />
                 <span>Đổi mật khẩu</span>
               </button>
             </div>
@@ -369,7 +369,7 @@ export const Header: React.FC<HeaderProps> = ({
               <form onSubmit={handleSaveProfile} className="p-5 space-y-4">
                 {profileFeedback && (
                   <div
-                    className={`p-2.5 rounded-xl border text-xs font-semibold flex items-start gap-2 ${
+                    className={`p-3 rounded-xl border text-sm font-medium flex items-start gap-2 ${
                       profileFeedback.type === 'success'
                         ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                         : 'bg-rose-50 border-rose-200 text-rose-800'
@@ -385,7 +385,7 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">
                     Họ và tên
                   </label>
                   <input
@@ -393,13 +393,13 @@ export const Header: React.FC<HeaderProps> = ({
                     required
                     value={editName}
                     onChange={(e) => setEditName(e.target.value)}
-                    className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3.5 py-2.5 text-sm font-medium rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
                   />
                 </div>
 
                 {currentUser.role === 'student' ? (
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                    <label className="block text-sm font-semibold text-slate-700 mb-1">
                       Lớp học
                     </label>
                     <input
@@ -407,24 +407,24 @@ export const Header: React.FC<HeaderProps> = ({
                       value={editClass}
                       onChange={(e) => setEditClass(e.target.value)}
                       placeholder="Ví dụ: 12 Hóa 1"
-                      className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3.5 py-2.5 text-sm font-medium rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
                     />
                   </div>
                 ) : (
                   <>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      <label className="block text-sm font-semibold text-slate-700 mb-1">
                         Trường / Đơn vị công tác
                       </label>
                       <input
                         type="text"
                         value={editSchool}
                         onChange={(e) => setEditSchool(e.target.value)}
-                        className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full px-3.5 py-2.5 text-sm font-medium rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
                       />
                     </div>
                     <div>
-                      <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                      <label className="block text-sm font-semibold text-slate-700 mb-1">
                         Số điện thoại
                       </label>
                       <input
@@ -432,17 +432,17 @@ export const Header: React.FC<HeaderProps> = ({
                         value={editPhone}
                         onChange={(e) => setEditPhone(e.target.value)}
                         placeholder="09xx xxx xxx"
-                        className="w-full px-3 py-2 text-xs font-semibold rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        className="w-full px-3.5 py-2.5 text-sm font-medium rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
                       />
                     </div>
                   </>
                 )}
 
-                <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl space-y-1">
-                  <span className="text-[10px] font-bold text-blue-600 uppercase tracking-wider block">
+                <div className="p-3 bg-teal-50/70 border border-teal-200 rounded-xl space-y-1">
+                  <span className="text-[13px] font-semibold text-teal-700 block">
                     Lời chào hiển thị:
                   </span>
-                  <p className="text-sm font-extrabold text-blue-900">
+                  <p className="text-sm font-bold text-slate-900">
                     "{getUserGreeting(currentUser, editName)}"
                   </p>
                 </div>
@@ -455,9 +455,9 @@ export const Header: React.FC<HeaderProps> = ({
                         setIsProfileModalOpen(false);
                         void onLogout();
                       }}
-                      className="px-3 py-2 rounded-xl border border-rose-200 text-rose-700 hover:bg-rose-50 text-xs font-bold flex items-center gap-1"
+                      className="px-3.5 min-h-[42px] rounded-xl border border-rose-200 text-rose-700 hover:bg-rose-50 text-sm font-semibold flex items-center gap-1.5"
                     >
-                      <LogOut className="w-3.5 h-3.5" />
+                      <LogOut className="w-4 h-4" />
                       <span>Đăng xuất</span>
                     </button>
                   ) : (
@@ -468,14 +468,14 @@ export const Header: React.FC<HeaderProps> = ({
                     <button
                       type="button"
                       onClick={() => setIsProfileModalOpen(false)}
-                      className="px-3 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50"
+                      className="px-4 min-h-[42px] rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50"
                     >
                       Đóng
                     </button>
                     <button
                       type="submit"
                       disabled={isSavingProfile}
-                      className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold shadow-md shadow-blue-500/20"
+                      className="px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white text-sm font-semibold shadow-xs"
                     >
                       {isSavingProfile ? 'Đang lưu...' : 'Lưu thay đổi'}
                     </button>
@@ -486,7 +486,7 @@ export const Header: React.FC<HeaderProps> = ({
               <form onSubmit={handleChangePassword} className="p-5 space-y-4">
                 {passwordFeedback && (
                   <div
-                    className={`p-2.5 rounded-xl border text-xs font-semibold flex items-start gap-2 ${
+                    className={`p-3 rounded-xl border text-sm font-medium flex items-start gap-2 ${
                       passwordFeedback.type === 'success'
                         ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
                         : 'bg-rose-50 border-rose-200 text-rose-800'
@@ -502,7 +502,7 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">
                     Mật khẩu hiện tại
                   </label>
                   <div className="relative">
@@ -512,12 +512,12 @@ export const Header: React.FC<HeaderProps> = ({
                       value={currentPassword}
                       onChange={(e) => setCurrentPassword(e.target.value)}
                       placeholder="Nhập mật khẩu đang dùng"
-                      className="w-full px-3 py-2 pr-9 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3.5 py-2.5 pr-10 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
                     />
                     <button
                       type="button"
                       onClick={() => setShowCurrentPw((v) => !v)}
-                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
                     >
                       {showCurrentPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -525,7 +525,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">
                     Mật khẩu mới (tối thiểu 8 ký tự)
                   </label>
                   <div className="relative">
@@ -536,12 +536,12 @@ export const Header: React.FC<HeaderProps> = ({
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
                       placeholder="Nhập mật khẩu mới"
-                      className="w-full px-3 py-2 pr-9 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      className="w-full px-3.5 py-2.5 pr-10 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
                     />
                     <button
                       type="button"
                       onClick={() => setShowNewPw((v) => !v)}
-                      className="absolute right-2.5 top-2 text-slate-400 hover:text-slate-700"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
                     >
                       {showNewPw ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -549,7 +549,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                  <label className="block text-sm font-semibold text-slate-700 mb-1">
                     Xác nhận mật khẩu mới
                   </label>
                   <input
@@ -559,7 +559,7 @@ export const Header: React.FC<HeaderProps> = ({
                     value={confirmNewPassword}
                     onChange={(e) => setConfirmNewPassword(e.target.value)}
                     placeholder="Nhập lại mật khẩu mới"
-                    className="w-full px-3 py-2 text-xs rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-teal-600"
                   />
                 </div>
 
@@ -567,14 +567,14 @@ export const Header: React.FC<HeaderProps> = ({
                   <button
                     type="button"
                     onClick={() => setIsProfileModalOpen(false)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 text-slate-600 text-xs font-semibold hover:bg-slate-50"
+                    className="px-4 min-h-[42px] rounded-xl border border-slate-200 text-slate-700 text-sm font-semibold hover:bg-slate-50"
                   >
                     Đóng
                   </button>
                   <button
                     type="submit"
                     disabled={isChangingPassword}
-                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold shadow-md shadow-blue-500/20"
+                    className="px-4 min-h-[42px] rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white text-sm font-semibold shadow-xs"
                   >
                     {isChangingPassword ? 'Đang cập nhật...' : 'Cập nhật mật khẩu'}
                   </button>

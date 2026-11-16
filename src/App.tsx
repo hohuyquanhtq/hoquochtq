@@ -22,6 +22,7 @@ import { Header } from './components/common/Header';
 import { WorkspaceSidebar } from './components/common/WorkspaceSidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SystemDesignModal } from './components/docs/SystemDesignModal';
+import { UserGuideView } from './components/docs/UserGuideView';
 import { APP_CONFIG } from './constants/brand';
 import {
   extractExamCodeFromLocation,
@@ -109,6 +110,7 @@ export default function App() {
     initialDirectCode ? 'exam_landing' : 'dashboard'
   );
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSystemDocsOpen, setIsSystemDocsOpen] = useState(false);
 
   // Scoped Workspace State (Strict UID isolation)
@@ -1118,6 +1120,13 @@ export default function App() {
               />
             )}
 
+            {activeTab === 'user_guide' && (
+              <UserGuideView
+                onNavigate={(tab) => setActiveTab(tab)}
+                onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
+              />
+            )}
+
             {activeTab === 'system_settings' && (
               <SystemSettingsView
                 currentUser={userProfile}
@@ -1141,6 +1150,7 @@ export default function App() {
               'online_exams',
               'class_manager',
               'exam_results',
+              'user_guide',
               'system_settings',
             ].includes(activeTab) && (
               userProfile.role === 'admin' ? (
@@ -1230,6 +1240,8 @@ export default function App() {
         <WorkspaceSidebar
           activeTab={activeTab}
           userRole={userProfile.role}
+          isCollapsed={isSidebarCollapsed}
+          onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
           onSelectTab={(tab) => {
             setGuestExamMode(false);
             setActiveTab(tab);
@@ -1255,7 +1267,7 @@ export default function App() {
             onLogout={handleLogout}
           />
 
-          <main className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6">
+          <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 lg:px-8 py-6">
             <div className="max-w-7xl mx-auto">
               {renderMainViewportContent()}
             </div>
