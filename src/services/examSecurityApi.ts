@@ -81,12 +81,49 @@ export interface ConfigureExamSecurityParams {
   patchMetadataDocs?: boolean;
 }
 
+async function parseApiResponsePayload(res: Response): Promise<{
+  data: Record<string, unknown>;
+  isHtml: boolean;
+  rawText: string;
+}> {
+  const rawText = await res.text().catch(() => '');
+  const trimmed = rawText.trim();
+  const isHtml =
+    trimmed.startsWith('<!doctype') ||
+    trimmed.startsWith('<!DOCTYPE') ||
+    trimmed.startsWith('<html') ||
+    trimmed.startsWith('<HTML');
+  if (!trimmed || isHtml) {
+    return { data: {}, isHtml, rawText: trimmed };
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return { data: parsed as Record<string, unknown>, isHtml: false, rawText: trimmed };
+    }
+  } catch {
+    // non-JSON text
+  }
+  return { data: {}, isHtml: false, rawText: trimmed };
+}
+
 export async function configureExamSecurityOnServer(
   params: ConfigureExamSecurityParams
-): Promise<{ ok: boolean; error?: string; code?: string; passwordUpdatedAt?: string | null }> {
+): Promise<{
+  ok: boolean;
+  error?: string;
+  code?: string;
+  errorStage?: string;
+  passwordUpdatedAt?: string | null;
+}> {
   const headers = await getIdTokenHeader();
   if (!headers.Authorization) {
-    return { ok: false, error: 'Bạn cần đăng nhập tài khoản giáo viên để lưu cấu hình bảo mật.' };
+    return {
+      ok: false,
+      code: 'AUTH_ERROR',
+      errorStage: 'auth_verify_id_token',
+      error: '[AUTH_ERROR] Bạn cần đăng nhập tài khoản giáo viên để lưu cấu hình bảo mật.',
+    };
   }
 
   try {
@@ -98,41 +135,55 @@ export async function configureExamSecurityOnServer(
       },
       body: JSON.stringify(params),
     });
-    const rawText = await res.text().catch(() => '');
-    let data: {
-      ok?: boolean;
-      error?: string;
-      code?: string;
-      stage?: string;
-      passwordUpdatedAt?: string | null;
-    } = {};
-    if (rawText) {
-      try {
-        data = JSON.parse(rawText) as typeof data;
-      } catch {
-        data = {};
-      }
-    }
+
+    const { data, isHtml } = await parseApiResponsePayload(res);
+    const serverCode = typeof data.code === 'string' && data.code ? data.code : undefined;
+    const serverStage =
+      typeof data.errorStage === 'string' && data.errorStage
+        ? data.errorStage
+        : typeof data.stage === 'string' && data.stage
+        ? data.stage
+        : undefined;
+    const serverError = typeof data.error === 'string' && data.error ? data.error : undefined;
+
     if (!res.ok || !data.ok) {
+      if (res.status === 404 || res.status === 405 || isHtml) {
+        return {
+          ok: false,
+          code: 'API_ROUTE_ERROR',
+          errorStage: 'api_route_dispatch',
+          error: `[API_ROUTE_ERROR] Không gọi được API /api/exams/security/configure (HTTP ${res.status}). Vui lòng kiểm tra cấu hình Vercel Serverless Functions và redeploy.`,
+        };
+      }
+
+      const resolvedCode =
+        serverCode || (res.status === 401 ? 'AUTH_ERROR' : 'UNKNOWN_ERROR');
       const fallbackMsg =
-        res.status === 500 && !data.error
-          ? 'Lỗi máy chủ Vercel (HTTP 500) khi khởi chạy API bảo mật đề thi. Vui lòng kiểm tra /api/health/firebase-admin và Vercel Function Logs.'
-          : `Lỗi cấu hình bảo mật đề thi (${res.status}).`;
-      const codeSuffix = data.code ? ` [${data.code}]` : '';
+        res.status === 500 && !serverError
+          ? 'Máy chủ Vercel trả lỗi HTTP 500 không kèm JSON (có thể do lỗi khởi chạy Serverless Function trước khi vào handler). Vui lòng kiểm tra /api/health/firebase-admin và Vercel Function Logs.'
+          : `Không thể lưu cấu hình bảo mật đề thi (HTTP ${res.status}).`;
+      const baseMsg = serverError || fallbackMsg;
+      const stageSuffix = serverStage ? ` (giai đoạn: ${serverStage})` : '';
+      const hasCodePrefix = baseMsg.includes(`[${resolvedCode}]`);
       return {
         ok: false,
-        error: `${data.error || fallbackMsg}${data.error && data.code ? codeSuffix : ''}`,
-        code: data.code,
+        code: resolvedCode,
+        errorStage: serverStage,
+        error: `${hasCodePrefix ? '' : `[${resolvedCode}] `}${baseMsg}${stageSuffix}`,
       };
     }
     return {
       ok: true,
-      passwordUpdatedAt: data.passwordUpdatedAt ?? null,
+      passwordUpdatedAt: (data.passwordUpdatedAt as string | null | undefined) ?? null,
     };
   } catch (err) {
     return {
       ok: false,
-      error: err instanceof Error ? err.message : 'Không thể kết nối máy chủ cấu hình bảo mật.',
+      code: 'API_ROUTE_ERROR',
+      errorStage: 'network_fetch',
+      error: `[API_ROUTE_ERROR] ${
+        err instanceof Error ? err.message : 'Không thể kết nối tới /api/exams/security/configure.'
+      }`,
     };
   }
 }
@@ -153,7 +204,7 @@ export async function verifyExamPasswordOnServer(
   if (!headers.Authorization) {
     return {
       ok: false,
-      code: 'UNAUTHENTICATED',
+      code: 'AUTH_ERROR',
       error: 'Vui lòng đăng nhập tài khoản học sinh trước khi xác thực mật khẩu đề thi.',
     };
   }
@@ -167,7 +218,8 @@ export async function verifyExamPasswordOnServer(
       },
       body: JSON.stringify({ examCode: normalizeExamCode(examCode), password }),
     });
-    const data = (await res.json().catch(() => ({}))) as {
+    const { data, isHtml } = await parseApiResponsePayload(res);
+    const typedData = data as {
       ok?: boolean;
       exam?: Exam;
       accessToken?: string;
@@ -176,29 +228,37 @@ export async function verifyExamPasswordOnServer(
       retryAfterSeconds?: number;
       remainingAttempts?: number;
     };
-    if (!res.ok || !data.ok || !data.exam) {
+    if (!res.ok || !typedData.ok || !typedData.exam) {
+      if (res.status === 404 || res.status === 405 || isHtml) {
+        return {
+          ok: false,
+          code: 'API_ROUTE_ERROR',
+          error: 'Không tìm thấy dịch vụ xác thực mật khẩu đề thi. Vui lòng thử lại sau.',
+        };
+      }
       return {
         ok: false,
-        error: data.error || 'Mật khẩu đề thi không chính xác. Vui lòng kiểm tra lại.',
-        code: data.code,
-        retryAfterSeconds: data.retryAfterSeconds,
-        remainingAttempts: data.remainingAttempts,
+        error: typedData.error || 'Mật khẩu đề thi không chính xác. Vui lòng kiểm tra lại.',
+        code: typedData.code,
+        retryAfterSeconds: typedData.retryAfterSeconds,
+        remainingAttempts: typedData.remainingAttempts,
       };
     }
 
     const uid = auth?.currentUser?.uid;
-    if (uid && data.accessToken) {
-      saveStoredExamAccessToken(examCode, uid, data.accessToken);
+    if (uid && typedData.accessToken) {
+      saveStoredExamAccessToken(examCode, uid, typedData.accessToken);
     }
 
     return {
       ok: true,
-      exam: data.exam,
-      accessToken: data.accessToken,
+      exam: typedData.exam,
+      accessToken: typedData.accessToken,
     };
   } catch (err) {
     return {
       ok: false,
+      code: 'API_ROUTE_ERROR',
       error: err instanceof Error ? err.message : 'Không thể xác thực mật khẩu đề thi.',
     };
   }
@@ -213,7 +273,7 @@ export async function accessExamQuestionsOnServer(examCode: string): Promise<{
 }> {
   const headers = await getIdTokenHeader();
   if (!headers.Authorization) {
-    return { authorized: false, status: 'password_required' };
+    return { authorized: false, status: 'password_required', code: 'AUTH_ERROR' };
   }
 
   const cleanCode = normalizeExamCode(examCode);
@@ -228,30 +288,39 @@ export async function accessExamQuestionsOnServer(examCode: string): Promise<{
       },
       body: JSON.stringify({ examCode: cleanCode, accessToken }),
     });
-    const data = (await res.json().catch(() => ({}))) as {
+    const { data, isHtml } = await parseApiResponsePayload(res);
+    const typedData = data as {
       authorized?: boolean;
       status?: string;
       code?: string;
       exam?: Exam;
       error?: string;
     };
-    if (!res.ok || !data.authorized || !data.exam) {
-      if (data.status === 'password_required') {
+    if (!res.ok || !typedData.authorized || !typedData.exam) {
+      if (res.status === 404 || res.status === 405 || isHtml) {
+        return {
+          authorized: false,
+          status: 'server_unavailable',
+          code: 'API_ROUTE_ERROR',
+          error: 'Không thể kết nối API mở đề thi.',
+        };
+      }
+      if (typedData.status === 'password_required') {
         clearStoredExamAccessToken(cleanCode);
       }
       return {
         authorized: false,
-        status: data.status || 'password_required',
-        code: data.code,
-        error: data.error,
+        status: typedData.status || 'password_required',
+        code: typedData.code,
+        error: typedData.error,
       };
     }
     return {
       authorized: true,
-      exam: data.exam,
+      exam: typedData.exam,
     };
   } catch {
-    return { authorized: false, status: 'network_error' };
+    return { authorized: false, status: 'network_error', code: 'API_ROUTE_ERROR' };
   }
 }
 
@@ -291,28 +360,37 @@ export async function submitAndGradeExamOnServer(params: {
         accessToken,
       }),
     });
-    const data = (await res.json().catch(() => ({}))) as {
+    const { data, isHtml } = await parseApiResponsePayload(res);
+    const typedData = data as {
       ok?: boolean;
       submission?: StudentSubmission;
       answerReviewCheck?: ExamAnswerReviewCheck;
       error?: string;
       code?: string;
     };
-    if (!res.ok || !data.ok || !data.submission) {
+    if (!res.ok || !typedData.ok || !typedData.submission) {
+      if (res.status === 404 || res.status === 405 || isHtml) {
+        return {
+          ok: false,
+          code: 'API_ROUTE_ERROR',
+          error: 'Không kết nối được dịch vụ nộp và chấm điểm bài thi.',
+        };
+      }
       return {
         ok: false,
-        error: data.error || `Không thể nộp và chấm điểm bài thi (${res.status}).`,
-        code: data.code,
+        error: typedData.error || `Không thể nộp và chấm điểm bài thi (${res.status}).`,
+        code: typedData.code,
       };
     }
     return {
       ok: true,
-      submission: data.submission,
-      answerReviewCheck: data.answerReviewCheck,
+      submission: typedData.submission,
+      answerReviewCheck: typedData.answerReviewCheck,
     };
   } catch (err) {
     return {
       ok: false,
+      code: 'API_ROUTE_ERROR',
       error: err instanceof Error ? err.message : 'Lỗi kết nối máy chủ khi nộp bài.',
     };
   }
@@ -331,6 +409,7 @@ export async function requestAnswerReviewOnServer(examCode: string): Promise<
     return {
       allowed: false,
       reason: 'unauthenticated',
+      code: 'AUTH_ERROR',
       message: 'Vui lòng đăng nhập tài khoản học sinh để kiểm tra điều kiện và xem đáp án.',
     };
   }
@@ -347,28 +426,38 @@ export async function requestAnswerReviewOnServer(examCode: string): Promise<
       },
       body: JSON.stringify({ examCode: cleanCode, accessToken }),
     });
-    const data = (await res.json().catch(() => ({}))) as ExamAnswerReviewCheck & {
+    const { data, isHtml } = await parseApiResponsePayload(res);
+    if (res.status === 404 || res.status === 405 || isHtml) {
+      return {
+        allowed: false,
+        reason: 'server_unavailable',
+        code: 'API_ROUTE_ERROR',
+        message: 'Không kết nối được dịch vụ kiểm tra điều kiện xem đáp án.',
+      };
+    }
+    const typedData = data as Partial<ExamAnswerReviewCheck> & {
       answerMap?: Record<string, AnswerKeyEntry>;
       showSolutionsAfterSubmit?: boolean;
       exam?: Exam;
       code?: string;
     };
     return {
-      allowed: Boolean(data.allowed),
-      reason: data.reason || (res.ok ? 'allowed' : 'access_denied'),
-      score: data.score,
-      minScore: data.minScore,
-      enabledAt: data.enabledAt ?? null,
-      message: data.message,
-      answerMap: data.answerMap,
-      showSolutionsAfterSubmit: data.showSolutionsAfterSubmit,
-      exam: data.exam,
-      code: data.code,
+      allowed: Boolean(typedData.allowed),
+      reason: typedData.reason || (res.ok ? 'allowed' : 'access_denied'),
+      score: typedData.score,
+      minScore: typedData.minScore,
+      enabledAt: typedData.enabledAt ?? null,
+      message: typedData.message,
+      answerMap: typedData.answerMap,
+      showSolutionsAfterSubmit: typedData.showSolutionsAfterSubmit,
+      exam: typedData.exam,
+      code: typedData.code,
     };
   } catch {
     return {
       allowed: false,
       reason: 'server_unavailable',
+      code: 'API_ROUTE_ERROR',
       message: 'Không thể kết nối máy chủ để xác thực quyền xem đáp án. Vui lòng thử lại.',
     };
   }

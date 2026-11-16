@@ -403,7 +403,7 @@ export const DEFAULT_EXAMS: Exam[] = [
     grade: '12',
     topic: 'hoa_huu_co',
     durationMinutes: 45,
-    totalQuestions: 8,
+    totalQuestions: 9,
     totalScore: 10.0,
     questions: [
       DEFAULT_QUESTIONS[0], // Part 1 - 0.5đ

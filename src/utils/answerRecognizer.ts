@@ -1,5 +1,5 @@
-import { Question, QuestionType, AnswerRecognitionItem, RecognitionStatus, RecognitionSource } from '../types';
-import { extractTablesFromText } from './answerExtractionEngine/documentTableReader';
+import { Question, QuestionType, AnswerRecognitionItem, RecognitionStatus, RecognitionSource, AnswerTableCandidate } from '../types';
+import { extractTablesFromText, isolateAnswerBlock } from './answerExtractionEngine/documentTableReader';
 import { extractAnswersAlgorithmically } from './answerExtractionEngine/algorithmicExtractor';
 import { detectSectionHeader } from './sectionDetector';
 
@@ -8,6 +8,9 @@ export interface SectionAnswersMatrix {
   part2: Map<number, { statements: Record<string, boolean>; source: RecognitionSource; notes?: string }>;
   part3: Map<number, { answer: string; acceptedAnswers: string[]; source: RecognitionSource; notes?: string }>;
   explanations: Map<string, string>; // "part1_1" or "part3_2" -> explanation text
+  candidates: AnswerTableCandidate[];
+  hasAmbiguousCandidates: boolean;
+  extractedTables: { id: string; sourceType: string; surroundingHeader?: string; rows: string[][] }[];
 }
 
 /**
@@ -31,18 +34,43 @@ function cleanTableLine(line: string): string {
  * 5. Detailed solution conclusion extractions ("= 58,4", "≈ 7,1", "Đáp số: 9,5")
  * 6. Inline question cues (*, [Đúng], Đáp án:)
  */
-export function extractComprehensiveAnswerKeys(rawText: string): SectionAnswersMatrix {
+export function extractComprehensiveAnswerKeys(
+  rawText: string,
+  selectedCandidateId?: string
+): SectionAnswersMatrix {
   const matrix: SectionAnswersMatrix = {
     part1: new Map(),
     part2: new Map(),
     part3: new Map(),
     explanations: new Map(),
+    candidates: [],
+    hasAmbiguousCandidates: false,
+    extractedTables: [],
   };
 
   // PASS 0: Fast High-Fidelity 2D Table & Matrix Extraction via Answer Extraction Engine
   try {
     const tables = extractTablesFromText(rawText);
-    const { part1Items, part2Items, part3Items, detailedSolutions } = extractAnswersAlgorithmically(tables, rawText);
+    matrix.extractedTables = tables.map(t => ({
+      id: t.id,
+      sourceType: t.sourceType,
+      surroundingHeader: t.surroundingHeader,
+      rows: t.rows,
+    }));
+
+    const { answerSectionText, isExplicitAnswerBlock } = isolateAnswerBlock(rawText);
+    const algoScanText = isExplicitAnswerBlock ? answerSectionText : rawText;
+    const {
+      part1Items,
+      part2Items,
+      part3Items,
+      detailedSolutions,
+      candidates,
+      hasAmbiguousCandidates,
+    } = extractAnswersAlgorithmically(tables, algoScanText, selectedCandidateId);
+
+    matrix.candidates = candidates;
+    matrix.hasAmbiguousCandidates = hasAmbiguousCandidates;
 
     for (const item of part1Items) {
       matrix.part1.set(item.questionNumber, {
@@ -357,8 +385,12 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
       }
 
       // 2. Inline Part III in Answer Section:
-      // "Câu 1: 4" or "1: 104" or "Câu 3: 58,4" or "Câu 4 = 7,1"
-      const p3InlineMatches = [...line.matchAll(/(?:^|\s|[,;|])(?:Câu\s*)?(\d+)[\s.:\-–—=]+([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z/%°]+)?)/gi)];
+      // "Câu 1: 4" or "1: 104" or "Câu 3: 58,4" or "Câu 4 = 7,1" or "Câu 2: -46"
+      const p3InlineMatches = [
+        ...line.matchAll(
+          /(?:^|\s|[,;|])(?:Câu\s*)?(\d+)[ \t]*(?:[:.=–—]|-(?!\d))[ \t]*([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:[ \t]+(?!(?:Câu|PHẦN)\b)[a-zA-Z/%°]+|[%°])?)/gi
+        ),
+      ];
       if (p3InlineMatches.length > 0) {
         for (const m of p3InlineMatches) {
           const qNum = parseInt(m[1], 10);
@@ -525,7 +557,7 @@ export function buildAnswerRecognitionItems(
         notes: detected?.notes,
       });
 
-      // Update question object
+      // Update question object cleanly while preserving structural error checks
       q.correctOptionId = chosenKey;
       q.recognitionSource = source;
       if (q.options && chosenKey) {
@@ -533,8 +565,17 @@ export function buildAnswerRecognitionItems(
           o.isCorrect = o.id === chosenKey;
         });
       }
-      q.parseStatus = chosenKey ? 'verified' : 'needs_review';
-      q.parseWarning = chosenKey ? undefined : 'Chưa có đáp án chính thức';
+      const hasStem = q.content.trim().length > 0;
+      const hasEnoughOpts = (q.options?.length || 0) >= 2;
+      if (!hasStem || !hasEnoughOpts) {
+        q.parseStatus = 'error';
+        q.parseWarning = !hasStem
+          ? 'Lỗi cấu trúc: Nội dung câu hỏi bị trống'
+          : 'Lỗi cấu trúc: Thiếu các phương án lựa chọn A, B, C, D';
+      } else {
+        q.parseStatus = chosenKey ? 'verified' : 'needs_review';
+        q.parseWarning = chosenKey ? undefined : 'Chưa có đáp án chính thức';
+      }
     } 
     else if (q.type === 'part2_true_false') {
       const qNum = p2Index++;
@@ -584,8 +625,16 @@ export function buildAnswerRecognitionItems(
         });
       });
 
-      q.parseStatus = (stmts.length >= 2 && allStmtsHaveAnswer) ? 'verified' : 'needs_review';
-      q.parseWarning = allStmtsHaveAnswer ? undefined : 'Chưa có đáp án chính thức cho tất cả các ý';
+      const hasStem = q.content.trim().length > 0;
+      if (!hasStem || stmts.length < 2) {
+        q.parseStatus = 'error';
+        q.parseWarning = !hasStem
+          ? 'Lỗi cấu trúc: Nội dung câu hỏi Đúng/Sai bị trống'
+          : 'Lỗi cấu trúc: Không tách được các mệnh đề a, b, c, d';
+      } else {
+        q.parseStatus = allStmtsHaveAnswer ? 'verified' : 'needs_review';
+        q.parseWarning = allStmtsHaveAnswer ? undefined : 'Chưa có đáp án chính thức cho tất cả các ý';
+      }
       q.recognitionSource = detectedTF?.source || 'question_content';
     } 
     else if (q.type === 'part3_short_answer') {
@@ -593,6 +642,11 @@ export function buildAnswerRecognitionItems(
       const detectedShort = matrix.part3.get(qNum) || (promptNum > 0 ? matrix.part3.get(promptNum) : undefined);
       const finalVal = detectedShort?.answer || q.shortAnswerConfig?.acceptableAnswers[0] || '';
       const hasVal = !!finalVal;
+      const compactLen = finalVal.replace(/\s+/g, '').length;
+      const exceeds4Chars = hasVal && compactLen > 4;
+      const lenWarning = exceeds4Chars
+        ? `Đáp án "${finalVal}" dài ${compactLen} ký tự (vượt giới hạn 4 ký tự phiếu GDPT 2018 — vui lòng kiểm tra)`
+        : undefined;
 
       if (hasVal) part3Found++;
 
@@ -605,21 +659,26 @@ export function buildAnswerRecognitionItems(
         correctAnswer: finalVal,
         acceptedAnswers: detectedShort?.acceptedAnswers || (finalVal ? [finalVal, finalVal.replace(',', '.'), finalVal.replace('.', ',')] : []),
         tolerance: 0.05,
-        recognitionStatus: hasVal ? 'verified' : 'not_found',
+        recognitionStatus: !hasVal ? 'not_found' : exceeds4Chars ? 'needs_review' : 'verified',
         recognitionSource: detectedShort?.source || (q.shortAnswerConfig?.acceptableAnswers.length ? 'question_content' : 'manual'),
-        teacherVerified: hasVal,
+        teacherVerified: hasVal && !exceeds4Chars,
         notes: detectedShort?.notes,
+        validationIssues: lenWarning ? [lenWarning] : undefined,
       });
 
-      if (hasVal) {
+      const hasStem = q.content.trim().length > 0;
+      if (!hasStem) {
+        q.parseStatus = 'error';
+        q.parseWarning = 'Lỗi cấu trúc: Nội dung câu trả lời ngắn bị trống';
+      } else if (hasVal) {
         q.shortAnswerConfig = {
           acceptableAnswers: detectedShort?.acceptedAnswers || [finalVal, finalVal.replace(',', '.'), finalVal.replace('.', ',')],
           isNumeric: !isNaN(Number(finalVal.replace(',', '.'))),
           numericValue: parseFloat(finalVal.replace(',', '.') || '0'),
           tolerance: 0.05,
         };
-        q.parseStatus = 'verified';
-        q.parseWarning = undefined;
+        q.parseStatus = exceeds4Chars ? 'needs_review' : 'verified';
+        q.parseWarning = lenWarning;
         q.recognitionSource = detectedShort?.source || 'question_content';
       } else {
         q.shortAnswerConfig = {

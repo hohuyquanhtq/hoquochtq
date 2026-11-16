@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import { Question, Exam, ExamRuleScore, ChemGrade, ChemTopic, Folder } from '../../types';
 import { 
   FileCheck, 
@@ -118,27 +118,49 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     }
 
     // Dynamic balancing:
-    // If we have Part II, fix Part II at standard 1.0 point per question (or proportion)
-    const p2Budget = Math.min(4.0, p2Count * 1.0);
-    const remainingForP1andP3 = 10.0 - (p2Count > 0 ? p2Budget : 0);
-
     const nonP2Total = p1Count + p3Count;
+    if (p2Count > 0 && (nonP2Total === 0 || p2Count > 10 || part2Model === 'custom_per_statement')) {
+      // Scale across all parts smoothly
+      if (nonP2Total === 0) {
+        setPart2Model('custom_per_statement');
+        setPart2CustomScore(Math.round((10.0 / (p2Count * 4)) * 1000) / 1000);
+        return;
+      }
+      const p2Budget = Math.min(4.0, p2Count * 1.0);
+      setPart2Model('custom_per_statement');
+      setPart2CustomScore(Math.round((p2Budget / (p2Count * 4)) * 1000) / 1000);
+      const remaining = 10.0 - p2Budget;
+      const perQuestionBase = Math.floor((remaining / nonP2Total) * 100) / 100;
+      setPart1Score(perQuestionBase);
+      setPart3Score(perQuestionBase);
+      const diff = 10.0 - (p1Count * perQuestionBase + p2Budget + p3Count * perQuestionBase);
+      if (p3Count > 0 && Math.abs(diff) > 0.001) {
+        setPart3Score(Math.round((perQuestionBase + diff / p3Count) * 100) / 100);
+      }
+      return;
+    }
+
+    const p2Budget = p2Count * 1.0;
+    const remainingForP1andP3 = 10.0 - p2Budget;
+
     if (nonP2Total > 0) {
       const perQuestionBase = Math.floor((remainingForP1andP3 / nonP2Total) * 100) / 100;
       setPart1Score(perQuestionBase);
       setPart3Score(perQuestionBase);
-      
-      // Fine tune remainder to make exact 10.0
-      const current = (p1Count * perQuestionBase) + p2Budget + (p3Count * perQuestionBase);
+
+      const current = p1Count * perQuestionBase + p2Budget + p3Count * perQuestionBase;
       const diff = 10.0 - current;
       if (p3Count > 0 && Math.abs(diff) > 0.001) {
-        setPart3Score(Math.round((perQuestionBase + (diff / p3Count)) * 100) / 100);
+        setPart3Score(Math.round((perQuestionBase + diff / p3Count) * 100) / 100);
       }
     }
   };
 
   const [createdExamForShare, setCreatedExamForShare] = useState<Exam | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const pendingDraftRef = useRef<{ examId: string; code: string; inputCodeSnapshot: string } | null>(
+    null
+  );
 
   const handleRemoveQuestion = (id: string) => {
     setQuestions(questions.filter(q => q.id !== id));
@@ -190,36 +212,59 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
     // Auto-balance if score is not exactly 10.0
     if (!isScoreExactly10) {
-      const p2Budget = Math.min(4.0, p2Count * 1.0);
-      const remaining = 10.0 - (p2Count > 0 ? p2Budget : 0);
       const nonP2 = p1Count + p3Count;
+      let p2Budget =
+        finalPart2Model === 'standard_moet'
+          ? p2Count * 1.0
+          : p2Count * 4 * finalPart2Custom;
+
+      if (p2Count > 0 && (nonP2 === 0 || p2Budget >= 10.0)) {
+        finalPart2Model = 'custom_per_statement';
+        p2Budget = nonP2 === 0 ? 10.0 : Math.min(4.0, p2Count * 1.0);
+        finalPart2Custom = Math.round((p2Budget / (p2Count * 4)) * 1000) / 1000;
+      }
+
+      const remaining = Math.max(0, 10.0 - p2Budget);
       if (nonP2 > 0) {
         const base = Math.floor((remaining / nonP2) * 100) / 100;
         finalPart1Score = base;
         finalPart3Score = base;
         const diff = 10.0 - (p1Count * base + p2Budget + p3Count * base);
-        if (p3Count > 0) {
-          finalPart3Score = Math.round((base + (diff / p3Count)) * 100) / 100;
+        if (p3Count > 0 && Math.abs(diff) > 0.001) {
+          finalPart3Score = Math.round((base + diff / p3Count) * 100) / 100;
         }
       }
     }
 
-    // Clean and validate code consistently without injecting mismatching hyphens
-    let cleanCode = normalizeExamCode(code.trim() || `HQ${Math.floor(10 + Math.random() * 90)}`);
+    // Reuse pending draft identity on retry so partial failures NEVER create duplicate exams
+    const rawInputCode = code.trim();
+    const canReusePending =
+      pendingDraftRef.current && pendingDraftRef.current.inputCodeSnapshot === rawInputCode;
+
+    let cleanCode = canReusePending
+      ? pendingDraftRef.current!.code
+      : normalizeExamCode(rawInputCode || `HQ${Math.floor(10 + Math.random() * 90)}`);
     if (!cleanCode) {
       cleanCode = `HQ${Math.floor(10 + Math.random() * 90)}`;
     }
-    
-    // Check if code already belongs to another existing exam
-    const existingExams = StorageService.getExams();
-    const isConflict = existingExams.some(e => normalizeExamCode(e.code) === cleanCode);
-    if (isConflict) {
-      cleanCode = `${cleanCode}${Math.floor(10 + Math.random() * 89)}`;
+
+    const examId = canReusePending
+      ? pendingDraftRef.current!.examId
+      : `exam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+    if (!canReusePending) {
+      const existingExams = StorageService.getExams();
+      const isConflict = existingExams.some(
+        (e) => e.id !== examId && normalizeExamCode(e.code) === cleanCode
+      );
+      if (isConflict) {
+        cleanCode = `${cleanCode}${Math.floor(10 + Math.random() * 89)}`;
+      }
+      pendingDraftRef.current = { examId, code: cleanCode, inputCodeSnapshot: rawInputCode };
     }
 
     const ownerId = currentUserId || auth.currentUser?.uid || 'teacher_1';
     const resolvedAuthorName = currentUserName || auth.currentUser?.displayName || APP_CONFIG.APP_AUTHOR;
-    const examId = `exam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
     const nowIso = new Date().toISOString();
 
     const baseExam: Exam = {
@@ -309,31 +354,34 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         passwordUpdatedAt: requiresPassword ? passwordUpdatedAt : null,
       };
 
-      // 1. Guaranteed database persistence with verified readback (NEVER contains plaintext password)
-      const savedSuccess = StorageService.addExam(newExam, ownerId);
-      if (!savedSuccess) {
-        setFormError('Không thể lưu đề thi vào bộ nhớ. Vui lòng kiểm tra dung lượng trình duyệt và thử lại!');
-        return;
-      }
-
-      // Sync exam projections to Cloud Firestore
+      // 1. Sync exam projections to Cloud Firestore BEFORE localStorage so failed Firestore commit never leaves duplicate local drafts
       if (auth.currentUser) {
         await syncExamToFirestore(newExam, ownerId);
       }
+
+      // 2. Guaranteed local persistence with verified readback (NEVER contains plaintext password)
+      const savedSuccess = StorageService.addExam(newExam, ownerId);
+      if (!savedSuccess) {
+        setFormError(
+          '[EXAM_SAVE_ERROR] Không thể lưu đề thi vào bộ nhớ trình duyệt. Vui lòng kiểm tra dung lượng lưu trữ và thử lại!'
+        );
+        return;
+      }
+
+      pendingDraftRef.current = null;
 
       // Clear plaintext password from component state immediately after hashing on server
       setExamPassword('');
       setConfirmExamPassword('');
 
-      // 2. Notify parent state
+      // 3. Notify parent state
       onSaveExam(newExam);
 
-      // 3. Immediately show the Share & QR Code modal
+      // 4. Immediately show the Share & QR Code modal
       setCreatedExamForShare(newExam);
     } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : 'Không thể đồng bộ đề thi lên Firestore. Vui lòng thử lại!'
-      );
+      const msg = err instanceof Error ? err.message : 'Không thể đồng bộ đề thi lên Firestore. Vui lòng thử lại!';
+      setFormError(msg.startsWith('[') ? msg : `[EXAM_SAVE_ERROR] ${msg}`);
     } finally {
       setIsSavingExam(false);
     }
@@ -543,6 +591,21 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                 <option value="standard_moet">Chuẩn Bộ GD&ĐT (1 ý=0.1; 2 ý=0.25; 3 ý=0.5; 4 ý=1.0đ)</option>
                 <option value="custom_per_statement">Chia đều điểm từng mệnh đề a, b, c, d</option>
               </select>
+              {part2Model === 'custom_per_statement' && (
+                <div className="flex items-center gap-2 pt-1">
+                  <span className="text-slate-500">Điểm mỗi ý (a/b/c/d):</span>
+                  <input
+                    type="number"
+                    step="0.05"
+                    min="0"
+                    max="2.5"
+                    value={part2CustomScore}
+                    onChange={(e) => setPart2CustomScore(Number(e.target.value))}
+                    className="w-20 p-1 rounded-md border border-slate-300 font-bold text-center bg-white"
+                  />
+                  <span className="text-slate-500">điểm</span>
+                </div>
+              )}
             </div>
 
             {/* Part III scoring config */}
@@ -866,7 +929,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                       {q.statements.map(s => (
                         <div key={s.id} className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] flex justify-between items-center">
                           <span><b>{s.id})</b> <ChemRenderer text={s.statement} inline /></span>
-                          <span className={`px-1.5 py-0.2 rounded font-bold text-[10px] ${s.correctAnswer ? 'text-emerald-700 bg-emerald-100' : 'text-rose-700 bg-rose-100'}`}>
+                          <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${s.correctAnswer ? 'text-emerald-700 bg-emerald-100' : 'text-rose-700 bg-rose-100'}`}>
                             {s.correctAnswer ? 'Đúng' : 'Sai'}
                           </span>
                         </div>

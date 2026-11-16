@@ -4,6 +4,7 @@
  */
 
 import { RawDocumentTable, ExtractedAnswerItem } from './types';
+import type { AnswerTableCandidate } from '../../types';
 
 /**
  * Normalizes True/False token to 'Đ' or 'S'
@@ -72,24 +73,166 @@ export function normalizeShortAnswer(rawVal: string): {
 }
 
 /**
+ * Extracts variant code (e.g. "101", "202") from table header or first row
+ */
+export function detectVariantCodeFromText(text?: string): string | undefined {
+  if (!text) return undefined;
+  const m = text.match(/\bMÃ\s*ĐỀ(?:\s*THI)?\s*[:\-–]?\s*([A-Z0-9]{2,6})\b/i);
+  return m ? m[1].toUpperCase() : undefined;
+}
+
+/**
+ * Detects candidate answer tables / variant codes when multiple plausible tables exist
+ */
+export function buildAnswerTableCandidates(
+  tables: RawDocumentTable[],
+  _text: string
+): {
+  candidates: AnswerTableCandidate[];
+  hasAmbiguousCandidates: boolean;
+} {
+  const candidates: AnswerTableCandidate[] = [];
+  const variantGroups = new Map<string, RawDocumentTable[]>();
+  const answerLikeTables: RawDocumentTable[] = [];
+
+  for (const tbl of tables) {
+    const flatText = `${tbl.surroundingHeader || ''} ${tbl.rows.slice(0, 2).map(r => r.join(' ')).join(' ')}`;
+    const hasAnswerMarkers =
+      isLikelyPart2Matrix(tbl.rows) ||
+      isLikelyPart2RowWise(tbl.rows) ||
+      detectHorizontalHeaderAnswerPairs(tbl.rows).questions.length >= 2 ||
+      /(?:ĐÁP\s*ÁN|MÃ\s*ĐỀ|CÂU\s+1\b)/i.test(flatText);
+
+    if (!hasAnswerMarkers) continue;
+    answerLikeTables.push(tbl);
+
+    const vCode = detectVariantCodeFromText(flatText);
+    if (vCode) {
+      if (!variantGroups.has(vCode)) variantGroups.set(vCode, []);
+      variantGroups.get(vCode)!.push(tbl);
+    }
+  }
+
+  // Case 1: Multiple exam variant codes (e.g. Mã đề 101, Mã đề 102)
+  if (variantGroups.size > 1) {
+    for (const [vCode, groupTbls] of variantGroups.entries()) {
+      const tempP1 = new Map<number, ExtractedAnswerItem>();
+      const tempP2 = new Map<string, ExtractedAnswerItem>();
+      const tempP3 = new Map<number, ExtractedAnswerItem>();
+      groupTbls.forEach(t => processTable(t, tempP1, tempP2, tempP3));
+      const itemCount = tempP1.size + tempP2.size + tempP3.size;
+      const preview = groupTbls
+        .slice(0, 2)
+        .map(t => t.rows.slice(0, 3).map(r => r.join(' | ')).join('\n'))
+        .join('\n---\n');
+
+      candidates.push({
+        id: `variant_${vCode}`,
+        label: `Bảng đáp án Mã đề ${vCode} (${itemCount} mục)`,
+        variantCode: vCode,
+        sectionHint: 'mixed',
+        itemCount,
+        previewText: preview.slice(0, 280),
+        sourceSnippet: preview,
+      });
+    }
+    return {
+      candidates,
+      hasAmbiguousCandidates: candidates.length > 1,
+    };
+  }
+
+  // Case 2: Multiple conflicting horizontal Part I tables with overlapping Q1..QN
+  const p1TableInfos: { tbl: RawDocumentTable; qs: number[]; p1Count: number }[] = [];
+  for (const tbl of answerLikeTables) {
+    if (isLikelyPart2Matrix(tbl.rows) || isLikelyPart2RowWise(tbl.rows)) continue;
+    const tempP1 = new Map<number, ExtractedAnswerItem>();
+    const tempP2 = new Map<string, ExtractedAnswerItem>();
+    const tempP3 = new Map<number, ExtractedAnswerItem>();
+    processTable(tbl, tempP1, tempP2, tempP3);
+    if (tempP1.size >= 3) {
+      p1TableInfos.push({
+        tbl,
+        qs: Array.from(tempP1.keys()),
+        p1Count: tempP1.size,
+      });
+    }
+  }
+
+  if (p1TableInfos.length > 1) {
+    // Check if there is significant question overlap (e.g., two different tables both covering Q1..Q5)
+    const firstSet = new Set(p1TableInfos[0].qs);
+    const hasOverlap = p1TableInfos.slice(1).some(info => {
+      const overlap = info.qs.filter(q => firstSet.has(q)).length;
+      return overlap >= Math.min(3, info.qs.length);
+    });
+
+    if (hasOverlap) {
+      p1TableInfos.forEach((info, idx) => {
+        const minQ = Math.min(...info.qs);
+        const maxQ = Math.max(...info.qs);
+        const preview = info.tbl.rows.slice(0, 3).map(r => r.join(' | ')).join('\n');
+        candidates.push({
+          id: info.tbl.id,
+          label: info.tbl.surroundingHeader
+            ? `${info.tbl.surroundingHeader} (Câu ${minQ}–${maxQ})`
+            : `Bảng đáp án #${idx + 1} (Câu ${minQ}–${maxQ}, ${info.p1Count} mục)`,
+          sectionHint: 'part1',
+          questionRange: `${minQ}-${maxQ}`,
+          itemCount: info.p1Count,
+          previewText: preview.slice(0, 280),
+          sourceSnippet: preview,
+        });
+      });
+    }
+  }
+
+  return {
+    candidates,
+    hasAmbiguousCandidates: candidates.length > 1,
+  };
+}
+
+/**
  * Parses all 3 sections from extracted 2D tables and document text
  */
 export function extractAnswersAlgorithmically(
   tables: RawDocumentTable[],
-  text: string
+  text: string,
+  selectedCandidateId?: string
 ): {
   part1Items: ExtractedAnswerItem[];
   part2Items: ExtractedAnswerItem[];
   part3Items: ExtractedAnswerItem[];
   detailedSolutions: Map<string, string>;
   solutionChoices: Map<number, string>;
+  candidates: AnswerTableCandidate[];
+  hasAmbiguousCandidates: boolean;
 } {
   const part1Map = new Map<number, ExtractedAnswerItem>();
   const part2Map = new Map<string, ExtractedAnswerItem>(); // "qNum-sub" -> item
   const part3Map = new Map<number, ExtractedAnswerItem>();
 
-  // 1. First pass: Analyze all 2D structured tables
-  for (const table of tables) {
+  const { candidates, hasAmbiguousCandidates } = buildAnswerTableCandidates(tables, text);
+
+  // Filter tables if teacher picked a specific variant/table candidate
+  let activeTables = tables;
+  if (selectedCandidateId) {
+    if (selectedCandidateId.startsWith('variant_')) {
+      const targetCode = selectedCandidateId.replace(/^variant_/, '');
+      activeTables = tables.filter(tbl => {
+        const flatText = `${tbl.surroundingHeader || ''} ${tbl.rows.slice(0, 2).map(r => r.join(' ')).join(' ')}`;
+        const vCode = detectVariantCodeFromText(flatText);
+        return !vCode || vCode === targetCode;
+      });
+    } else {
+      const competingIds = new Set(candidates.map(c => c.id));
+      activeTables = tables.filter(tbl => !competingIds.has(tbl.id) || tbl.id === selectedCandidateId);
+    }
+  }
+
+  // 1. First pass: Analyze active 2D structured tables
+  for (const table of activeTables) {
     processTable(table, part1Map, part2Map, part3Map);
   }
 
@@ -108,6 +251,8 @@ export function extractAnswersAlgorithmically(
     part3Items: Array.from(part3Map.values()).sort((a, b) => a.questionNumber - b.questionNumber),
     detailedSolutions,
     solutionChoices,
+    candidates,
+    hasAmbiguousCandidates,
   };
 }
 
@@ -150,12 +295,9 @@ function processTable(
     return;
   }
 
-  // --- CASE B: PART I & PART III HORIZONTAL TABLES ---
-  // E.g.:
-  // Row 0: ["Câu", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12"]
-  // Row 1: ["Đáp án", "C", "B", "C", "C", "B", "A", "C", "B", "A", "A", "B", "C"]
+  // --- CASE B: PART I & PART III HORIZONTAL TABLES (supports multi-row blocks) ---
   const horizontalPairs = detectHorizontalHeaderAnswerPairs(rows);
-  if (horizontalPairs) {
+  if (horizontalPairs.questions.length > 0) {
     const { questions, answers } = horizontalPairs;
     for (let i = 0; i < questions.length; i++) {
       const qNum = questions[i];
@@ -397,42 +539,54 @@ function parsePart2RowWise(rows: string[][], part2Map: Map<string, ExtractedAnsw
 }
 
 /**
- * Detects horizontal question-answer rows (e.g. Row 0 = Câu 1..12, Row 1 = Đáp án C..B)
+ * Detects horizontal question-answer rows across ALL wrapped rows in the table
+ * (e.g. Row 0 = Câu 1..9, Row 1 = Đáp án A..D, Row 2 = Câu 10..18, Row 3 = Đáp án B..C)
  */
 function detectHorizontalHeaderAnswerPairs(rows: string[][]): {
   questions: number[];
   answers: string[];
-} | null {
+} {
+  const questions: number[] = [];
+  const answers: string[] = [];
+
   for (let r = 0; r < rows.length - 1; r++) {
     const r1 = rows[r];
     const r2 = rows[r + 1];
 
     if (r1.length < 3 || r2.length < 3) continue;
 
-    // Check if r1 starts with "Câu" or similar and has numeric cells
+    // Check if r1 starts with "Câu" or numeric header and r2 contains answer-like tokens (not another Câu header)
     const r1First = r1[0].toLowerCase();
-    const isQRow = r1First.includes('câu') || r1First.includes('tt') || r1First.includes('stt') || /^\d+$/.test(r1[1]);
+    const r2First = r2[0].toLowerCase();
+    const isQRow =
+      r1First.includes('câu') ||
+      r1First.includes('tt') ||
+      r1First.includes('stt') ||
+      (/^\d+$/.test(r1[0]) && /^\d+$/.test(r1[1]));
+    const r2IsAnotherQRow = r2First.includes('câu') || r2First.includes('tt');
 
-    if (isQRow) {
+    if (isQRow && !r2IsAnotherQRow) {
       const startCol = /^\d+$/.test(r1[0]) ? 0 : 1;
-      const questions: number[] = [];
-      const answers: string[] = [];
+      const pairQs: number[] = [];
+      const pairAns: string[] = [];
 
       for (let c = startCol; c < Math.min(r1.length, r2.length); c++) {
         const qNum = parseInt(r1[c].replace(/\D/g, ''), 10);
         if (!isNaN(qNum) && qNum > 0) {
-          questions.push(qNum);
-          answers.push(r2[c] ? r2[c].trim() : '');
+          pairQs.push(qNum);
+          pairAns.push(r2[c] ? r2[c].trim() : '');
         }
       }
 
-      if (questions.length >= 3) {
-        return { questions, answers };
+      if (pairQs.length >= 2) {
+        questions.push(...pairQs);
+        answers.push(...pairAns);
+        r++; // skip the paired answer row
       }
     }
   }
 
-  return null;
+  return { questions, answers };
 }
 
 /**
@@ -605,7 +759,11 @@ function processTextLists(
   // --- Part 3 inline regex ---
   const p3Text = p3Block || text;
   if (p3Text) {
-    const p3Matches = [...p3Text.matchAll(/(?:^|\n|[,;|])\s*(?:Câu\s*)?(\d+)\s*[:.\-–=]\s*([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]+)?)/gi)];
+    const p3Matches = [
+      ...p3Text.matchAll(
+        /(?:^|\n|[,;|])[ \t]*(?:Câu\s*)?(\d+)[ \t]*(?:[:.=–—]|-(?!\d))[ \t]*([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:[ \t]+(?!(?:Câu|PHẦN)\b)[a-zA-Z%°]+|[%°])?)/gi
+      ),
+    ];
     for (const m of p3Matches) {
       const qNum = parseInt(m[1], 10);
       const valStr = m[2];

@@ -25,6 +25,9 @@ export interface FirestoreDocument {
 
 function stripUndefinedForAdmin(value: unknown): unknown {
   if (value === undefined) return undefined;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : 0;
+  }
   if (value === null || typeof value !== 'object') return value;
   if (value instanceof Date) return value;
   if (Array.isArray(value)) {

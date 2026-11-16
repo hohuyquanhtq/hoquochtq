@@ -184,6 +184,21 @@ export function htmlToMarkdownWithTables(html: string): string {
 }
 
 /**
+ * Detects a section/variant header in nearby preceding lines (e.g. "PHẦN II", "Mã đề 101")
+ */
+function findNearbyTableHeader(lines: string[], startIndex: number): string | undefined {
+  const parts: string[] = [];
+  for (let k = Math.max(0, startIndex - 3); k < startIndex; k++) {
+    const l = lines[k].trim();
+    if (!l) continue;
+    if (/(?:PHẦN\s+(?:III|II|I|3|2|1)\b|MÃ\s*ĐỀ\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN|ĐÁP\s*ÁN|TRẢ\s*LỜI\s*NGẮN|ĐÚNG\s*[-–\/]?\s*SAI)/i.test(l)) {
+      parts.push(l);
+    }
+  }
+  return parts.length > 0 ? parts.join(' | ') : undefined;
+}
+
+/**
  * Extracts Markdown tables (`| ... | ... |`) or text grids from text
  */
 export function extractTablesFromText(text: string): RawDocumentTable[] {
@@ -191,6 +206,7 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
 
   let currentMarkdownRows: string[][] = [];
+  let markdownStartIdx = -1;
   let inMarkdownTable = false;
 
   for (let i = 0; i < lines.length; i++) {
@@ -206,7 +222,10 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
         .slice(1, -1)
         .split('|')
         .map(c => c.trim());
-      
+
+      if (!inMarkdownTable) {
+        markdownStartIdx = i;
+      }
       currentMarkdownRows.push(cells);
       inMarkdownTable = true;
     } else {
@@ -215,8 +234,10 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
           id: `tbl_md_${tables.length + 1}`,
           sourceType: 'markdown',
           rows: currentMarkdownRows,
+          surroundingHeader: findNearbyTableHeader(lines, markdownStartIdx),
         });
         currentMarkdownRows = [];
+        markdownStartIdx = -1;
         inMarkdownTable = false;
       }
     }
@@ -227,8 +248,48 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
       id: `tbl_md_${tables.length + 1}`,
       sourceType: 'markdown',
       rows: currentMarkdownRows,
+      surroundingHeader: findNearbyTableHeader(lines, markdownStartIdx >= 0 ? markdownStartIdx : 0),
     });
   }
+
+  // Also parse multi-column PDF / tab-delimited or space-aligned text grids (e.g. "1  A  7  B  13  C")
+  let currentGridRows: string[][] = [];
+  let gridStartIdx = -1;
+  const flushGrid = () => {
+    if (currentGridRows.length >= 2) {
+      tables.push({
+        id: `tbl_cols_${tables.length + 1}`,
+        sourceType: 'pdf_coords',
+        rows: currentGridRows,
+        surroundingHeader: findNearbyTableHeader(lines, gridStartIdx >= 0 ? gridStartIdx : 0),
+      });
+    }
+    currentGridRows = [];
+    gridStartIdx = -1;
+  };
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.startsWith('|')) {
+      flushGrid();
+      continue;
+    }
+    // Split on tab or >=2 spaces (preserved by pdfExtractor coordinate column gaps)
+    if (/\t|  +/.test(line)) {
+      const cols = line.split(/\t|  +/).map(c => c.trim()).filter(Boolean);
+      const isAnswerLikeGridRow =
+        cols.length >= 4 &&
+        cols.every(c => c.length <= 18) &&
+        cols.some(c => /^(?:Câu|\d+|[A-D]|Đ|S|Đúng|Sai|[-+]?\d+(?:[,.]\d+)?)$/i.test(c));
+      if (isAnswerLikeGridRow) {
+        if (currentGridRows.length === 0) gridStartIdx = i;
+        currentGridRows.push(cols);
+        continue;
+      }
+    }
+    flushGrid();
+  }
+  flushGrid();
 
   // Also parse text-grid tables (e.g. lines starting with "Câu 1 2 3..." followed by "Đáp án B A C...")
   for (let i = 0; i < lines.length; i++) {
@@ -238,6 +299,7 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
     if (headerMatch && i + 1 < lines.length) {
       const qNums = headerMatch[1].trim().split(/\s+/).filter(Boolean);
       const nextLine = lines[i + 1];
+      const headerCtx = findNearbyTableHeader(lines, i);
       
       // Part I horizontal grid
       if (nextLine.match(/^(?:Đáp\s*án(?:\s*:)?\s+)?([A-D\s]+)$/i)) {
@@ -250,6 +312,7 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
               ['Câu', ...qNums],
               ['Đáp án', ...answers],
             ],
+            surroundingHeader: headerCtx,
           });
         }
       }
@@ -268,6 +331,7 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
             id: `tbl_textgrid_p2_${tables.length + 1}`,
             sourceType: 'text_grid',
             rows: matrixRows,
+            surroundingHeader: headerCtx || 'PHẦN II',
           });
         }
       }
@@ -283,6 +347,7 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
               ['Câu', ...qNums],
               ['Đáp án', ...ansTokens],
             ],
+            surroundingHeader: headerCtx || 'PHẦN III',
           });
         }
       }

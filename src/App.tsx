@@ -19,6 +19,7 @@ import {
 } from './types';
 import { StorageService } from './services/storage';
 import { Header } from './components/common/Header';
+import { WorkspaceSidebar } from './components/common/WorkspaceSidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SystemDesignModal } from './components/docs/SystemDesignModal';
 import { APP_CONFIG } from './constants/brand';
@@ -66,6 +67,7 @@ import { ExamCreator } from './components/teacher/ExamCreator';
 import { ExamManager } from './components/teacher/ExamManager';
 import { ExamResults } from './components/teacher/ExamResults';
 import { ClassManager } from './components/teacher/ClassManager';
+import { SystemSettingsView } from './components/teacher/SystemSettingsView';
 
 // Student Components
 import { StudentHome, StudentAssignedExamItem } from './components/student/StudentHome';
@@ -106,6 +108,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<string>(() =>
     initialDirectCode ? 'exam_landing' : 'dashboard'
   );
+  const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSystemDocsOpen, setIsSystemDocsOpen] = useState(false);
 
   // Scoped Workspace State (Strict UID isolation)
@@ -173,7 +176,7 @@ export default function App() {
 
     setIsLoadingWorkspace(true);
     try {
-      if (user.role === 'teacher') {
+      if (user.role === 'teacher' || user.role === 'admin') {
         const ws = await fetchTeacherWorkspaceFromFirestore(uid);
         setQuestions(ws.questions);
         setFolders(ws.folders);
@@ -789,6 +792,484 @@ export default function App() {
     );
   }
 
+  const isWorkspaceShell =
+    isAuthenticatedSession &&
+    (userProfile?.role === 'teacher' || userProfile?.role === 'admin') &&
+    !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab);
+
+  const renderWorkspaceSubNav = () => {
+    if (['upload_exam', 'create_exam'].includes(activeTab)) {
+      return (
+        <div className="mb-5 flex flex-wrap items-center gap-2 bg-white border border-slate-200 rounded-2xl p-2 shadow-2xs">
+          <button
+            type="button"
+            onClick={() => setActiveTab('upload_exam')}
+            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
+              activeTab === 'upload_exam'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            Tải file Word / PDF tự động
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('create_exam')}
+            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
+              activeTab === 'create_exam'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            Soạn đề &amp; Ma trận đề thi
+          </button>
+        </div>
+      );
+    }
+
+    if (['exam_manager', 'question_bank', 'folder_manager'].includes(activeTab)) {
+      return (
+        <div className="mb-5 flex flex-wrap items-center gap-2 bg-white border border-slate-200 rounded-2xl p-2 shadow-2xs">
+          <button
+            type="button"
+            onClick={() => setActiveTab('exam_manager')}
+            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
+              activeTab === 'exam_manager'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            Kho đề thi ({exams.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('question_bank')}
+            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
+              activeTab === 'question_bank'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            Ngân hàng câu hỏi ({questions.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('folder_manager')}
+            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
+              activeTab === 'folder_manager'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'text-slate-700 hover:bg-slate-100'
+            }`}
+          >
+            Thư mục chuyên đề ({folders.length})
+          </button>
+        </div>
+      );
+    }
+
+    return null;
+  };
+
+  const renderMainViewportContent = () => (
+    <ErrorBoundary fallbackTitle="Không thể hiển thị nội dung" onResetToHome={resetToRoleHome}>
+      {postSyncNotice && isAuthenticatedSession && (
+        <div className="mb-4 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-between gap-2">
+          <span>{postSyncNotice}</span>
+          <button
+            type="button"
+            onClick={clearPostSyncNotice}
+            className="text-emerald-700 hover:text-emerald-950 font-bold text-[11px]"
+          >
+            Đóng
+          </button>
+        </div>
+      )}
+
+      {isLoadingWorkspace && isAuthenticatedSession && activeTab !== 'take_exam' && activeTab !== 'exam_landing' && (
+        <div className="mb-4 px-4 py-2 rounded-xl bg-teal-50 border border-teal-200 text-teal-800 text-xs font-semibold flex items-center gap-2">
+          <div className="w-3.5 h-3.5 border-2 border-teal-600 border-t-transparent rounded-full animate-spin" />
+          <span>Đang đồng bộ không gian dữ liệu riêng từ Cloud Firestore...</span>
+        </div>
+      )}
+
+      {/* --- DIRECT EXAM JOIN LANDING (Guests & Students) --- */}
+      {activeTab === 'exam_landing' && (
+        <ExamJoinLanding
+          exam={directJoinExam}
+          examCode={directJoinCode}
+          status={directJoinStatus}
+          statusMessage={directJoinMessage}
+          currentUser={userProfile}
+          onStartExam={(ex, name, cls) => {
+            handleStartExam(ex, name, cls, directJoinOwnerId);
+          }}
+          onPasswordVerified={(unlockedExam) => {
+            setDirectJoinExam(unlockedExam);
+            setDirectJoinStatus('found');
+            setDirectJoinMessage(undefined);
+          }}
+          onRequestLoginForProtectedExam={() => {
+            const code = directJoinCode || extractExamCodeFromLocation(window.location);
+            if (code) {
+              setPendingExamCodeAfterAuth(normalizeExamCode(code));
+            }
+            setGuestExamMode(false);
+            setActiveTab('dashboard');
+          }}
+          onRetryLookup={() => void resolveDirectExamByCode(directJoinCode)}
+          onBackToHome={() => {
+            if (isAuthenticatedSession && userProfile) {
+              resetToRoleHome();
+            } else {
+              handleExitGuestModeToAuth();
+            }
+          }}
+        />
+      )}
+
+      {/* --- SHARED EXAM TAKING & RESULT VIEWS --- */}
+      {activeTab === 'take_exam' &&
+        (activeExamForTaking ? (
+          <ExamTaker
+            exam={activeExamForTaking}
+            studentName={activeStudentName || userProfile?.name || 'Thí sinh'}
+            studentClass={activeStudentClass || userProfile?.className || 'Tự do'}
+            onFinishExam={handleFinishExam}
+            onExitWithoutSave={() => {
+              if (isAuthenticatedSession && userProfile) {
+                clearExamUrlParam();
+                setGuestExamMode(false);
+                setActiveTab(
+                  userProfile.role === 'teacher' || userProfile.role === 'admin'
+                    ? 'exam_manager'
+                    : 'student_home'
+                );
+              } else {
+                handleExitGuestModeToAuth();
+              }
+            }}
+          />
+        ) : (
+          <div className="max-w-xl mx-auto py-12 px-4 text-center bg-white border border-slate-200 rounded-3xl shadow-lg space-y-4">
+            <h2 className="text-lg font-extrabold text-slate-900">Không tìm thấy phiên làm bài</h2>
+            <p className="text-xs text-slate-600">Vui lòng chọn hoặc nhập mã bài thi để bắt đầu lại.</p>
+            <button
+              type="button"
+              onClick={resetToRoleHome}
+              className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold"
+            >
+              Quay về trang chủ
+            </button>
+          </div>
+        ))}
+
+      {activeTab === 'review_submission' &&
+        (reviewSubmission ? (
+          <ExamResultView
+            submission={reviewSubmission}
+            exam={reviewExamOverride}
+            answerReviewCheck={reviewAnswerCheck}
+            isTeacherPreview={reviewIsTeacherPreview}
+            onUnlockAnswers={(hydrated) => setReviewExamOverride(hydrated)}
+            onBackToHome={() => {
+              if (isAuthenticatedSession && userProfile) {
+                clearExamUrlParam();
+                setGuestExamMode(false);
+                setActiveTab(
+                  userProfile.role === 'teacher' || userProfile.role === 'admin'
+                    ? 'exam_manager'
+                    : 'student_home'
+                );
+              } else {
+                handleExitGuestModeToAuth();
+              }
+            }}
+          />
+        ) : (
+          <div className="max-w-xl mx-auto py-12 px-4 text-center bg-white border border-slate-200 rounded-3xl shadow-lg space-y-4">
+            <h2 className="text-lg font-extrabold text-slate-900">Chưa có dữ liệu bài làm để xem lại</h2>
+            <button
+              type="button"
+              onClick={resetToRoleHome}
+              className="px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold"
+            >
+              Quay về trang chủ
+            </button>
+          </div>
+        ))}
+
+      {/* --- AUTHENTICATED TEACHER & ADMIN WORKSPACE VIEWS --- */}
+      {isAuthenticatedSession &&
+        (userProfile?.role === 'teacher' || userProfile?.role === 'admin') &&
+        !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
+          <ProtectedRoute allowedRoles={['teacher', 'admin']} onBackHome={resetToRoleHome}>
+            {renderWorkspaceSubNav()}
+
+            {userProfile.role === 'admin' && (activeTab === 'admin_dashboard' || activeTab === 'admin_users') && (
+              <AdminDashboard
+                currentUser={userProfile}
+                questions={questions}
+                exams={exams}
+                submissions={submissions}
+                folders={folders}
+                sectionFocus={activeTab === 'admin_users' ? 'users' : 'overview'}
+                onDataResetOrRestored={reloadDataFromStorage}
+              />
+            )}
+
+            {activeTab === 'dashboard' && (
+              <TeacherDashboard
+                currentUser={userProfile}
+                questions={questions}
+                exams={exams}
+                submissions={submissions}
+                enrollments={enrollments}
+                classesCount={classes.length}
+                isSeedingSamples={isSeedingSamples}
+                onNavigate={(tab) => setActiveTab(tab)}
+                onOpenExamResults={handleOpenExamResults}
+                onTogglePublish={handleToggleExamPublish}
+                onSeedStarterSamples={handleSeedStarterSamples}
+              />
+            )}
+
+            {activeTab === 'upload_exam' && (
+              <ExamUploader
+                onSaveToQuestionBank={handleSaveQuestionsToBank}
+                onCreateExamFromParsed={handleCreateExamFromParsed}
+                onFileParsedRecord={handleFileParsedRecord}
+              />
+            )}
+
+            {activeTab === 'question_bank' && (
+              <QuestionBank
+                questions={questions}
+                folders={folders}
+                onAddQuestion={handleAddQuestion}
+                onUpdateQuestion={handleUpdateQuestion}
+                onDeleteQuestion={handleDeleteQuestion}
+                onCreateExamFromSelected={handleCreateExamFromSelected}
+              />
+            )}
+
+            {activeTab === 'folder_manager' && (
+              <FolderManager
+                folders={folders}
+                questions={questions}
+                exams={exams}
+                onSaveFolders={handleSaveFolders}
+                onNavigateToExam={(id) => handleOpenExamResults(id)}
+              />
+            )}
+
+            {activeTab === 'create_exam' && (
+              <ExamCreator
+                initialTitle={creatorInitialTitle}
+                initialQuestions={creatorInitialQuestions}
+                initialGrade={creatorInitialGrade}
+                folders={folders}
+                currentUserId={activeUid}
+                currentUserName={userProfile.name}
+                onSaveExam={handleSaveExam}
+                onCancel={() => setActiveTab('dashboard')}
+              />
+            )}
+
+            {(activeTab === 'exam_manager' || activeTab === 'online_exams') && (
+              <ExamManager
+                exams={exams}
+                submissions={submissions}
+                mode={activeTab === 'online_exams' ? 'online' : 'all'}
+                onCreateNew={() => {
+                  setCreatorInitialQuestions([]);
+                  setCreatorInitialTitle('Đề thi Hóa học mới');
+                  setActiveTab('create_exam');
+                }}
+                onOpenResults={handleOpenExamResults}
+                onTakeExamAsPreview={(ex) => handleStartExam(ex, userProfile.name, 'Giáo viên xem thử', activeUid)}
+                onTogglePublish={handleToggleExamPublish}
+                onExamUpdated={handleExamUpdated}
+                onDeleteExam={handleDeleteExam}
+              />
+            )}
+
+            {activeTab === 'class_manager' && (
+              <ClassManager
+                currentUser={userProfile}
+                classes={classes}
+                enrollments={enrollments}
+                exams={exams}
+                submissions={submissions}
+                onSaveClass={handleSaveClass}
+                onDeleteClass={handleDeleteClass}
+                onRemoveEnrollment={handleRemoveEnrollment}
+              />
+            )}
+
+            {activeTab === 'exam_results' && (
+              <ExamResults
+                exam={exams.find((e) => e.id === selectedExamIdForResults) || exams[0]}
+                exams={exams}
+                submissions={submissions.filter(
+                  (s) => s.examId === (selectedExamIdForResults || exams[0]?.id)
+                )}
+                onSelectExam={(examId) => setSelectedExamIdForResults(examId)}
+                onBack={() => setActiveTab('exam_manager')}
+              />
+            )}
+
+            {activeTab === 'system_settings' && (
+              <SystemSettingsView
+                currentUser={userProfile}
+                onProfileUpdated={(updated) => setLocalUpdatedProfile(updated)}
+                onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
+                onOpenAdminLegacy={
+                  userProfile.role === 'admin' ? () => setActiveTab('admin_dashboard') : undefined
+                }
+              />
+            )}
+
+            {![
+              'dashboard',
+              'admin_dashboard',
+              'admin_users',
+              'upload_exam',
+              'question_bank',
+              'folder_manager',
+              'create_exam',
+              'exam_manager',
+              'online_exams',
+              'class_manager',
+              'exam_results',
+              'system_settings',
+            ].includes(activeTab) && (
+              userProfile.role === 'admin' ? (
+                <AdminDashboard
+                  currentUser={userProfile}
+                  questions={questions}
+                  exams={exams}
+                  submissions={submissions}
+                  folders={folders}
+                  onDataResetOrRestored={reloadDataFromStorage}
+                />
+              ) : (
+                <TeacherDashboard
+                  currentUser={userProfile}
+                  questions={questions}
+                  exams={exams}
+                  submissions={submissions}
+                  enrollments={enrollments}
+                  classesCount={classes.length}
+                  isSeedingSamples={isSeedingSamples}
+                  onNavigate={(tab) => setActiveTab(tab)}
+                  onOpenExamResults={handleOpenExamResults}
+                  onTogglePublish={handleToggleExamPublish}
+                  onSeedStarterSamples={handleSeedStarterSamples}
+                />
+              )
+            )}
+          </ProtectedRoute>
+        )}
+
+      {/* --- AUTHENTICATED STUDENT VIEWS --- */}
+      {isAuthenticatedSession &&
+        userProfile?.role === 'student' &&
+        !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
+          <ProtectedRoute allowedRoles={['student']} onBackHome={resetToRoleHome}>
+            <StudentHome
+              currentUser={userProfile}
+              exams={exams}
+              submissions={submissions}
+              enrollments={enrollments}
+              assignedExams={assignedExams}
+              onJoinClassByCode={handleJoinClassByCode}
+              onStartExam={handleStartExam}
+              onOpenExamLanding={(code) => void resolveDirectExamByCode(code)}
+              onReviewSubmission={handleReviewSubmission}
+            />
+          </ProtectedRoute>
+        )}
+    </ErrorBoundary>
+  );
+
+  const renderFooter = () => (
+    <footer className="border-t border-slate-200 bg-white py-5 text-xs text-slate-600">
+      <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
+        <div className="text-center md:text-left space-y-1">
+          <p className="font-bold text-slate-800 text-sm">
+            {APP_CONFIG.APP_NAME} – {APP_CONFIG.APP_DESCRIPTION}
+          </p>
+          <p className="text-slate-500 flex flex-wrap items-center justify-center md:justify-start gap-2">
+            <span>
+              Tác giả: <strong className="text-slate-700 font-semibold">{APP_CONFIG.APP_AUTHOR}</strong>
+            </span>
+            <span className="hidden sm:inline">•</span>
+            <span>{APP_CONFIG.APP_SCHOOL}</span>
+          </p>
+        </div>
+        <div className="flex items-center gap-3 text-slate-500 text-xs shrink-0">
+          <button
+            type="button"
+            onClick={() => setIsSystemDocsOpen(true)}
+            className="hover:text-teal-700 font-medium transition-colors"
+          >
+            Hồ sơ kiến trúc &amp; Giới thiệu
+          </button>
+          <span>•</span>
+          <span>Phiên bản {APP_CONFIG.APP_VERSION}</span>
+          <span>•</span>
+          <span>Bộ GD&amp;ĐT</span>
+        </div>
+      </div>
+    </footer>
+  );
+
+  if (isWorkspaceShell && userProfile) {
+    return (
+      <div className="h-screen flex overflow-hidden bg-slate-50 font-sans">
+        <WorkspaceSidebar
+          activeTab={activeTab}
+          userRole={userProfile.role}
+          onSelectTab={(tab) => {
+            setGuestExamMode(false);
+            setActiveTab(tab);
+          }}
+          onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
+          isMobileOpen={isMobileSidebarOpen}
+          onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        />
+
+        <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
+          <Header
+            workspaceMode
+            currentUser={userProfile}
+            isGuest={false}
+            activeTab={activeTab}
+            setActiveTab={(tab) => {
+              setGuestExamMode(false);
+              setActiveTab(tab);
+            }}
+            onOpenMobileMenu={() => setIsMobileSidebarOpen(true)}
+            onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
+            onProfileUpdated={(updated) => setLocalUpdatedProfile(updated)}
+            onLogout={handleLogout}
+          />
+
+          <main className="flex-1 min-h-0 overflow-y-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div className="max-w-7xl mx-auto">
+              {renderMainViewportContent()}
+            </div>
+            <div className="mt-10 -mx-4 sm:-mx-6 lg:-mx-8 -mb-6">
+              {renderFooter()}
+            </div>
+          </main>
+        </div>
+
+        <SystemDesignModal isOpen={isSystemDocsOpen} onClose={() => setIsSystemDocsOpen(false)} />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
       {/* Global Header (Hide during ongoing exam for full concentration) */}
@@ -812,321 +1293,11 @@ export default function App() {
 
       {/* Main Content Viewport */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <ErrorBoundary fallbackTitle="Không thể hiển thị nội dung" onResetToHome={resetToRoleHome}>
-          {postSyncNotice && isAuthenticatedSession && (
-            <div className="mb-4 px-4 py-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-bold flex items-center justify-between gap-2">
-              <span>{postSyncNotice}</span>
-              <button
-                type="button"
-                onClick={clearPostSyncNotice}
-                className="text-emerald-700 hover:text-emerald-950 font-bold text-[11px]"
-              >
-                Đóng
-              </button>
-            </div>
-          )}
-
-          {isLoadingWorkspace && isAuthenticatedSession && activeTab !== 'take_exam' && activeTab !== 'exam_landing' && (
-            <div className="mb-4 px-4 py-2 rounded-xl bg-blue-50 border border-blue-200 text-blue-800 text-xs font-semibold flex items-center gap-2">
-              <div className="w-3.5 h-3.5 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-              <span>Đang đồng bộ không gian dữ liệu riêng từ Cloud Firestore...</span>
-            </div>
-          )}
-
-          {/* --- DIRECT EXAM JOIN LANDING (Guests & Students) --- */}
-          {activeTab === 'exam_landing' && (
-            <ExamJoinLanding
-              exam={directJoinExam}
-              examCode={directJoinCode}
-              status={directJoinStatus}
-              statusMessage={directJoinMessage}
-              currentUser={userProfile}
-              onStartExam={(ex, name, cls) => {
-                handleStartExam(ex, name, cls, directJoinOwnerId);
-              }}
-              onPasswordVerified={(unlockedExam) => {
-                setDirectJoinExam(unlockedExam);
-                setDirectJoinStatus('found');
-                setDirectJoinMessage(undefined);
-              }}
-              onRequestLoginForProtectedExam={() => {
-                const code = directJoinCode || extractExamCodeFromLocation(window.location);
-                if (code) {
-                  setPendingExamCodeAfterAuth(normalizeExamCode(code));
-                }
-                setGuestExamMode(false);
-                setActiveTab('dashboard');
-              }}
-              onRetryLookup={() => void resolveDirectExamByCode(directJoinCode)}
-              onBackToHome={() => {
-                if (isAuthenticatedSession && userProfile) {
-                  resetToRoleHome();
-                } else {
-                  handleExitGuestModeToAuth();
-                }
-              }}
-            />
-          )}
-
-          {/* --- SHARED EXAM TAKING & RESULT VIEWS --- */}
-          {activeTab === 'take_exam' &&
-            (activeExamForTaking ? (
-              <ExamTaker
-                exam={activeExamForTaking}
-                studentName={activeStudentName || userProfile?.name || 'Thí sinh'}
-                studentClass={activeStudentClass || userProfile?.className || 'Tự do'}
-                onFinishExam={handleFinishExam}
-                onExitWithoutSave={() => {
-                  if (isAuthenticatedSession && userProfile) {
-                    clearExamUrlParam();
-                    setGuestExamMode(false);
-                    setActiveTab(userProfile.role === 'teacher' ? 'exam_manager' : 'student_home');
-                  } else {
-                    handleExitGuestModeToAuth();
-                  }
-                }}
-              />
-            ) : (
-              <div className="max-w-xl mx-auto py-12 px-4 text-center bg-white border border-slate-200 rounded-3xl shadow-lg space-y-4">
-                <h2 className="text-lg font-extrabold text-slate-900">Không tìm thấy phiên làm bài</h2>
-                <p className="text-xs text-slate-600">Vui lòng chọn hoặc nhập mã bài thi để bắt đầu lại.</p>
-                <button
-                  type="button"
-                  onClick={resetToRoleHome}
-                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
-                >
-                  Quay về trang chủ
-                </button>
-              </div>
-            ))}
-
-          {activeTab === 'review_submission' &&
-            (reviewSubmission ? (
-              <ExamResultView
-                submission={reviewSubmission}
-                exam={reviewExamOverride}
-                answerReviewCheck={reviewAnswerCheck}
-                isTeacherPreview={reviewIsTeacherPreview}
-                onUnlockAnswers={(hydrated) => setReviewExamOverride(hydrated)}
-                onBackToHome={() => {
-                  if (isAuthenticatedSession && userProfile) {
-                    clearExamUrlParam();
-                    setGuestExamMode(false);
-                    setActiveTab(userProfile.role === 'teacher' ? 'exam_manager' : 'student_home');
-                  } else {
-                    handleExitGuestModeToAuth();
-                  }
-                }}
-              />
-            ) : (
-              <div className="max-w-xl mx-auto py-12 px-4 text-center bg-white border border-slate-200 rounded-3xl shadow-lg space-y-4">
-                <h2 className="text-lg font-extrabold text-slate-900">Chưa có dữ liệu bài làm để xem lại</h2>
-                <button
-                  type="button"
-                  onClick={resetToRoleHome}
-                  className="px-5 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
-                >
-                  Quay về trang chủ
-                </button>
-              </div>
-            ))}
-
-          {/* --- AUTHENTICATED TEACHER VIEWS --- */}
-          {isAuthenticatedSession &&
-            userProfile?.role === 'teacher' &&
-            !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
-              <ProtectedRoute allowedRoles={['teacher']} onBackHome={resetToRoleHome}>
-                {activeTab === 'dashboard' && (
-                  <TeacherDashboard
-                    currentUser={userProfile}
-                    questions={questions}
-                    exams={exams}
-                    submissions={submissions}
-                    classesCount={classes.length}
-                    isSeedingSamples={isSeedingSamples}
-                    onNavigate={(tab) => setActiveTab(tab)}
-                    onOpenExamResults={handleOpenExamResults}
-                    onTogglePublish={handleToggleExamPublish}
-                    onSeedStarterSamples={handleSeedStarterSamples}
-                  />
-                )}
-
-                {activeTab === 'upload_exam' && (
-                  <ExamUploader
-                    onSaveToQuestionBank={handleSaveQuestionsToBank}
-                    onCreateExamFromParsed={handleCreateExamFromParsed}
-                    onFileParsedRecord={handleFileParsedRecord}
-                  />
-                )}
-
-                {activeTab === 'question_bank' && (
-                  <QuestionBank
-                    questions={questions}
-                    folders={folders}
-                    onAddQuestion={handleAddQuestion}
-                    onUpdateQuestion={handleUpdateQuestion}
-                    onDeleteQuestion={handleDeleteQuestion}
-                    onCreateExamFromSelected={handleCreateExamFromSelected}
-                  />
-                )}
-
-                {activeTab === 'folder_manager' && (
-                  <FolderManager
-                    folders={folders}
-                    questions={questions}
-                    exams={exams}
-                    onSaveFolders={handleSaveFolders}
-                    onNavigateToExam={(id) => handleOpenExamResults(id)}
-                  />
-                )}
-
-                {activeTab === 'create_exam' && (
-                  <ExamCreator
-                    initialTitle={creatorInitialTitle}
-                    initialQuestions={creatorInitialQuestions}
-                    initialGrade={creatorInitialGrade}
-                    folders={folders}
-                    currentUserId={activeUid}
-                    currentUserName={userProfile.name}
-                    onSaveExam={handleSaveExam}
-                    onCancel={() => setActiveTab('dashboard')}
-                  />
-                )}
-
-                {activeTab === 'exam_manager' && (
-                  <ExamManager
-                    exams={exams}
-                    submissions={submissions}
-                    onCreateNew={() => {
-                      setCreatorInitialQuestions([]);
-                      setCreatorInitialTitle('Đề thi Hóa học mới');
-                      setActiveTab('create_exam');
-                    }}
-                    onOpenResults={handleOpenExamResults}
-                    onTakeExamAsPreview={(ex) => handleStartExam(ex, userProfile.name, 'Giáo viên xem thử', activeUid)}
-                    onTogglePublish={handleToggleExamPublish}
-                    onExamUpdated={handleExamUpdated}
-                    onDeleteExam={handleDeleteExam}
-                  />
-                )}
-
-                {activeTab === 'class_manager' && (
-                  <ClassManager
-                    currentUser={userProfile}
-                    classes={classes}
-                    enrollments={enrollments}
-                    exams={exams}
-                    submissions={submissions}
-                    onSaveClass={handleSaveClass}
-                    onDeleteClass={handleDeleteClass}
-                    onRemoveEnrollment={handleRemoveEnrollment}
-                  />
-                )}
-
-                {activeTab === 'exam_results' && (
-                  <ExamResults
-                    exam={exams.find((e) => e.id === selectedExamIdForResults) || exams[0]}
-                    submissions={submissions.filter(
-                      (s) => s.examId === (selectedExamIdForResults || exams[0]?.id)
-                    )}
-                    onBack={() => setActiveTab('exam_manager')}
-                  />
-                )}
-
-                {![
-                  'dashboard',
-                  'upload_exam',
-                  'question_bank',
-                  'folder_manager',
-                  'create_exam',
-                  'exam_manager',
-                  'class_manager',
-                  'exam_results',
-                ].includes(activeTab) && (
-                  <TeacherDashboard
-                    currentUser={userProfile}
-                    questions={questions}
-                    exams={exams}
-                    submissions={submissions}
-                    classesCount={classes.length}
-                    isSeedingSamples={isSeedingSamples}
-                    onNavigate={(tab) => setActiveTab(tab)}
-                    onOpenExamResults={handleOpenExamResults}
-                    onTogglePublish={handleToggleExamPublish}
-                    onSeedStarterSamples={handleSeedStarterSamples}
-                  />
-                )}
-              </ProtectedRoute>
-            )}
-
-          {/* --- AUTHENTICATED STUDENT VIEWS --- */}
-          {isAuthenticatedSession &&
-            userProfile?.role === 'student' &&
-            !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
-              <ProtectedRoute allowedRoles={['student']} onBackHome={resetToRoleHome}>
-                <StudentHome
-                  currentUser={userProfile}
-                  exams={exams}
-                  submissions={submissions}
-                  enrollments={enrollments}
-                  assignedExams={assignedExams}
-                  onJoinClassByCode={handleJoinClassByCode}
-                  onStartExam={handleStartExam}
-                  onOpenExamLanding={(code) => void resolveDirectExamByCode(code)}
-                  onReviewSubmission={handleReviewSubmission}
-                />
-              </ProtectedRoute>
-            )}
-
-          {/* --- AUTHENTICATED ADMIN VIEW --- */}
-          {isAuthenticatedSession &&
-            userProfile?.role === 'admin' &&
-            !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
-              <ProtectedRoute allowedRoles={['admin']} onBackHome={resetToRoleHome}>
-                <AdminDashboard
-                  currentUser={userProfile}
-                  questions={questions}
-                  exams={exams}
-                  submissions={submissions}
-                  folders={folders}
-                  onDataResetOrRestored={reloadDataFromStorage}
-                />
-              </ProtectedRoute>
-            )}
-        </ErrorBoundary>
+        {renderMainViewportContent()}
       </main>
 
       {/* Footer */}
-      {activeTab !== 'take_exam' && (
-        <footer className="border-t border-slate-200 bg-white py-6 text-xs text-slate-600">
-          <div className="max-w-7xl mx-auto px-4 flex flex-col md:flex-row items-center justify-between gap-4">
-            <div className="text-center md:text-left space-y-1">
-              <p className="font-bold text-slate-800 text-sm">
-                {APP_CONFIG.APP_NAME} – {APP_CONFIG.APP_DESCRIPTION}
-              </p>
-              <p className="text-slate-500 flex flex-wrap items-center justify-center md:justify-start gap-2">
-                <span>
-                  Tác giả: <strong className="text-slate-700 font-semibold">{APP_CONFIG.APP_AUTHOR}</strong>
-                </span>
-                <span className="hidden sm:inline">•</span>
-                <span>{APP_CONFIG.APP_SCHOOL}</span>
-              </p>
-            </div>
-            <div className="flex items-center gap-3 text-slate-500 text-xs shrink-0">
-              <button
-                onClick={() => setIsSystemDocsOpen(true)}
-                className="hover:text-blue-600 font-medium transition-colors"
-              >
-                Hồ sơ kiến trúc &amp; Giới thiệu
-              </button>
-              <span>•</span>
-              <span>Phiên bản {APP_CONFIG.APP_VERSION}</span>
-              <span>•</span>
-              <span>Bộ GD&amp;ĐT</span>
-            </div>
-          </div>
-        </footer>
-      )}
+      {activeTab !== 'take_exam' && renderFooter()}
 
       {/* System Technical Architecture & Design Modal */}
       <SystemDesignModal isOpen={isSystemDocsOpen} onClose={() => setIsSystemDocsOpen(false)} />

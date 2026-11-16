@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Exam, StudentSubmission } from '../../types';
 import { 
   FileCheck, 
@@ -28,6 +28,7 @@ import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
 interface ExamManagerProps {
   exams: Exam[];
   submissions: StudentSubmission[];
+  mode?: 'all' | 'online';
   onCreateNew: () => void;
   onOpenResults: (examId: string) => void;
   onTakeExamAsPreview: (exam: Exam) => void;
@@ -40,6 +41,7 @@ interface ExamManagerProps {
 export const ExamManager: React.FC<ExamManagerProps> = ({
   exams,
   submissions,
+  mode = 'all',
   onCreateNew,
   onOpenResults,
   onTakeExamAsPreview,
@@ -51,6 +53,13 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
   const [activeSecurityExam, setActiveSecurityExam] = useState<Exam | null>(null);
+  const [publishFilter, setPublishFilter] = useState<'all' | 'published' | 'closed'>(
+    mode === 'online' ? 'published' : 'all'
+  );
+
+  useEffect(() => {
+    setPublishFilter(mode === 'online' ? 'published' : 'all');
+  }, [mode]);
 
   const handleCopyCode = (code: string) => {
     navigator.clipboard?.writeText(code);
@@ -58,41 +67,97 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
     setTimeout(() => setCopiedCode(null), 2500);
   };
 
+  const publishedCount = exams.filter((e) => e.isPublished).length;
+  const closedCount = exams.length - publishedCount;
+  const displayedExams = exams.filter((e) => {
+    if (publishFilter === 'published') return e.isPublished;
+    if (publishFilter === 'closed') return !e.isPublished;
+    return true;
+  });
+
   return (
     <div className="space-y-6">
       
       {/* Top Banner */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-blue-600 font-bold text-xs uppercase tracking-wider">
-            <FileCheck className="w-4 h-4" />
-            <span>Tổ chức thi & Quản lý bài kiểm tra</span>
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-teal-700 font-bold text-xs uppercase tracking-wider">
+              <FileCheck className="w-4 h-4" />
+              <span>
+                {mode === 'online'
+                  ? 'Phòng thi trực tuyến & Mã tham gia'
+                  : 'Kho đề thi & Quản lý bài kiểm tra'}
+              </span>
+            </div>
+            <h1 className="text-2xl font-bold text-slate-900 mt-1">
+              {mode === 'online'
+                ? `Bài Thi Trực Tuyến (${publishedCount} đang mở)`
+                : `Kho Đề Thi & Phòng Thi (${exams.length})`}
+            </h1>
+            <p className="text-sm text-slate-600 mt-1">
+              Quản lý mã tham gia, mật khẩu phòng thi, điều kiện điểm sàn xem đáp án và kết quả nộp bài của học sinh.
+            </p>
           </div>
-          <h1 className="text-xl md:text-2xl font-extrabold text-slate-900 mt-1">
-            Phòng Thi Trực Tuyến & Danh Sách Đề Thi ({exams.length})
-          </h1>
-          <p className="text-xs md:text-sm text-slate-500 mt-1">
-            Quản lý mã tham gia, mật khẩu phòng thi, điều kiện điểm sàn xem đáp án và kết quả nộp bài của học sinh.
-          </p>
+
+          <button
+            type="button"
+            onClick={onCreateNew}
+            className="min-h-[44px] px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold shadow-xs transition-all flex items-center gap-2 shrink-0"
+          >
+            <Plus className="w-4 h-4" />
+            <span>Tạo đề thi mới</span>
+          </button>
         </div>
 
-        <button
-          onClick={onCreateNew}
-          className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-2 shrink-0"
-        >
-          <Plus className="w-4 h-4" />
-          <span>Tạo đề thi mới</span>
-        </button>
+        {/* Status Filter Bar */}
+        <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
+          <button
+            type="button"
+            onClick={() => setPublishFilter('all')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+              publishFilter === 'all'
+                ? 'bg-slate-900 text-white'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            Tất cả đề ({exams.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setPublishFilter('published')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+              publishFilter === 'published'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
+            }`}
+          >
+            Đang mở thi ({publishedCount})
+          </button>
+          <button
+            type="button"
+            onClick={() => setPublishFilter('closed')}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
+              publishFilter === 'closed'
+                ? 'bg-amber-600 text-white'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+            }`}
+          >
+            Đang đóng ({closedCount})
+          </button>
+        </div>
       </div>
 
       {/* Exams Grid */}
       <div className="space-y-4">
-        {exams.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500 text-xs">
-            Chưa có đề thi nào. Nhấn &ldquo;Tạo đề thi mới&rdquo; hoặc &ldquo;Tải đề thi từ File&rdquo; để bắt đầu!
+        {displayedExams.length === 0 ? (
+          <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500 text-sm">
+            {exams.length === 0
+              ? 'Chưa có đề thi nào. Nhấn "Tạo đề thi mới" hoặc vào mục Tạo đề thi để tải file Word/PDF.'
+              : 'Không có đề thi nào phù hợp với bộ lọc trạng thái hiện tại.'}
           </div>
         ) : (
-          exams.map((exam) => {
+          displayedExams.map((exam) => {
             const examSubs = submissions.filter(s => s.examId === exam.id);
             const isCopied = copiedCode === exam.code;
             const policy = getEffectiveAnswerReviewConfig(exam);
@@ -104,7 +169,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
             return (
               <div
                 key={exam.id}
-                className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:border-blue-300 transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-5"
+                className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:border-teal-300 transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-5"
               >
                 {/* Left: Info */}
                 <div className="space-y-2 flex-1">

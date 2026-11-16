@@ -5,23 +5,17 @@ import {
   GraduationCap,
   ShieldCheck,
   UserCircle2,
-  Layers,
-  BookOpen,
-  FileCheck,
-  BarChart3,
-  FileText,
-  Code,
-  FolderTree,
   LogOut,
   LogIn,
   Edit2,
   X,
-  Users,
   KeyRound,
   Eye,
   EyeOff,
   CheckCircle2,
   AlertCircle,
+  Menu,
+  Code,
 } from 'lucide-react';
 import { APP_CONFIG, getUserGreeting } from '../../constants/brand';
 import { updateOwnUserProfile, changeCurrentUserPassword } from '../../services/authService';
@@ -29,19 +23,40 @@ import { updateOwnUserProfile, changeCurrentUserPassword } from '../../services/
 interface HeaderProps {
   currentUser: User | null;
   isGuest?: boolean;
+  workspaceMode?: boolean;
+  pageTitle?: string;
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  onOpenMobileMenu?: () => void;
   onOpenSystemDocs: () => void;
   onProfileUpdated?: (updated: User) => void;
   onLogout?: () => void | Promise<void>;
   onRequestAuth?: () => void;
 }
 
+const TAB_TITLES: Record<string, string> = {
+  dashboard: 'Tổng quan Dashboard',
+  upload_exam: 'Tạo đề thi từ Word / PDF',
+  create_exam: 'Soạn đề thi & Ma trận',
+  exam_manager: 'Kho đề thi & Phòng thi',
+  question_bank: 'Ngân hàng câu hỏi',
+  folder_manager: 'Thư mục chuyên đề',
+  online_exams: 'Bài thi trực tuyến',
+  exam_results: 'Kết quả và thống kê',
+  class_manager: 'Quản lý học sinh & Lớp học',
+  system_settings: 'Thiết lập hệ thống',
+  admin_dashboard: 'Quản trị hệ thống',
+  admin_users: 'Quản lý học sinh & Tài khoản',
+};
+
 export const Header: React.FC<HeaderProps> = ({
   currentUser,
   isGuest = false,
+  workspaceMode = false,
+  pageTitle,
   activeTab,
   setActiveTab,
+  onOpenMobileMenu,
   onOpenSystemDocs,
   onProfileUpdated,
   onLogout,
@@ -146,251 +161,160 @@ export const Header: React.FC<HeaderProps> = ({
       ? 'admin_dashboard'
       : 'dashboard';
 
+  const resolvedTitle = pageTitle || TAB_TITLES[activeTab] || 'QUIZ PRO';
+
   return (
-    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-slate-200 shadow-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 gap-2">
-          {/* Logo & Brand */}
-          <div className="flex items-center gap-3 shrink-0">
+    <header className="shrink-0 min-h-[68px] z-30 bg-white border-b border-slate-200">
+      <div className={workspaceMode ? 'h-[68px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4' : 'max-w-7xl mx-auto h-[68px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4'}>
+        {/* Left: Workspace Page Title + Mobile Menu Trigger OR Guest/Student Brand */}
+        {workspaceMode ? (
+          <div className="flex items-center gap-3 min-w-0">
+            {onOpenMobileMenu && (
+              <button
+                type="button"
+                onClick={onOpenMobileMenu}
+                aria-label="Mở menu điều hướng"
+                className="lg:hidden p-2 rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 shrink-0"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 truncate">
+                  {resolvedTitle}
+                </h2>
+                {currentUser && (
+                  <span className="hidden sm:inline-flex px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-xs font-semibold shrink-0">
+                    {currentUser.role === 'admin' ? 'Quản trị viên' : 'Giáo viên'}
+                  </span>
+                )}
+              </div>
+              {currentUser?.name && (
+                <p className="text-xs text-slate-500 truncate hidden md:block">
+                  Tài khoản: <span className="font-semibold text-slate-700">{currentUser.name}</span>
+                </p>
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="flex items-center gap-3 min-w-0">
             <button
+              type="button"
               onClick={() => setActiveTab(homeTab)}
-              className="flex items-center gap-2.5 text-left group focus:outline-none"
+              className="flex items-center gap-2.5 text-left group focus:outline-none shrink-0"
             >
-              <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-700 to-indigo-500 flex items-center justify-center text-white shadow-md shadow-blue-500/20 group-hover:scale-105 transition-transform">
+              <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-xs group-hover:bg-teal-700 transition-colors">
                 <FlaskConical className="w-5 h-5" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
-                  <span className="font-extrabold text-xl tracking-tight text-slate-900 group-hover:text-blue-600 transition-colors">
-                    HQ<span className="text-blue-600">Test</span>
+                  <span className="font-extrabold text-xl tracking-tight text-slate-900">
+                    QUIZ <span className="text-teal-700">PRO</span>
                   </span>
-                  <span className="px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-800 rounded-md">
-                    Trực Tuyến
+                  <span className="px-2 py-0.5 text-xs font-bold bg-teal-50 text-teal-800 border border-teal-200 rounded-md hidden sm:inline-block">
+                    {APP_CONFIG.APP_NAME}
                   </span>
                 </div>
-                <p className="text-[11px] text-slate-500 font-medium hidden sm:block">
+                <p className="text-xs text-slate-500 font-medium hidden sm:block">
                   {APP_CONFIG.APP_DESCRIPTION}
                 </p>
               </div>
             </button>
-          </div>
 
-          {/* Navigation for Authenticated Teacher */}
-          {!isGuest && currentUser?.role === 'teacher' && (
-            <nav className="hidden lg:flex items-center gap-1">
+            {!isGuest && currentUser?.role === 'student' && (
               <button
-                onClick={() => setActiveTab('dashboard')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'dashboard'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <Layers className="w-3.5 h-3.5" />
-                Tổng quan
-              </button>
-              <button
-                onClick={() => setActiveTab('upload_exam')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'upload_exam'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <FileText className="w-3.5 h-3.5" />
-                Tải đề
-              </button>
-              <button
-                onClick={() => setActiveTab('question_bank')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'question_bank'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <BookOpen className="w-3.5 h-3.5" />
-                Câu hỏi
-              </button>
-              <button
-                onClick={() => setActiveTab('folder_manager')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'folder_manager'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <FolderTree className="w-3.5 h-3.5" />
-                Thư mục
-              </button>
-              <button
-                onClick={() => setActiveTab('exam_manager')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'exam_manager' || activeTab === 'create_exam'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <FileCheck className="w-3.5 h-3.5" />
-                Đề thi
-              </button>
-              <button
-                onClick={() => setActiveTab('class_manager')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'class_manager'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <Users className="w-3.5 h-3.5" />
-                Lớp học
-              </button>
-              <button
-                onClick={() => setActiveTab('exam_results')}
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-colors flex items-center gap-1.5 ${
-                  activeTab === 'exam_results'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
-                }`}
-              >
-                <BarChart3 className="w-3.5 h-3.5" />
-                Điểm thi
-              </button>
-            </nav>
-          )}
-
-          {/* Navigation for Authenticated Student */}
-          {!isGuest && currentUser?.role === 'student' && (
-            <nav className="hidden sm:flex items-center gap-2">
-              <button
+                type="button"
                 onClick={() => setActiveTab('student_home')}
-                className={`px-3 py-1.5 rounded-lg text-sm font-semibold transition-colors flex items-center gap-1.5 ${
+                className={`hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-sm font-semibold transition-colors ${
                   activeTab === 'student_home'
-                    ? 'bg-blue-50 text-blue-700 border border-blue-200/60'
-                    : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+                    ? 'bg-teal-50 text-teal-800 border border-teal-200'
+                    : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
                 <GraduationCap className="w-4 h-4" />
-                Phòng thi &amp; Lớp học
+                <span>Phòng thi &amp; Lớp học</span>
               </button>
-            </nav>
-          )}
-
-          {/* Navigation for Authenticated Admin */}
-          {!isGuest && currentUser?.role === 'admin' && (
-            <nav className="hidden sm:flex items-center gap-2">
-              <button
-                onClick={() => setActiveTab('admin_dashboard')}
-                className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-purple-50 text-purple-800 border border-purple-200 flex items-center gap-1.5"
-              >
-                <ShieldCheck className="w-4 h-4" />
-                Quản trị tài khoản &amp; Hệ thống
-              </button>
-            </nav>
-          )}
-
-          {/* Right Action Controls */}
-          <div className="flex items-center gap-2">
-            {/* System Architecture Button */}
-            <button
-              onClick={onOpenSystemDocs}
-              title="Xem Sơ đồ kiến trúc & Thiết kế kỹ thuật"
-              className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-slate-300 bg-slate-50 text-slate-700 hover:text-slate-900 text-xs font-semibold shadow-2xs transition-colors"
-            >
-              <Code className="w-3.5 h-3.5 text-blue-600" />
-              <span>Kiến trúc</span>
-            </button>
-
-            {isGuest || !currentUser ? (
-              <button
-                type="button"
-                onClick={onRequestAuth}
-                className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors"
-              >
-                <LogIn className="w-3.5 h-3.5" />
-                <span>Đăng nhập / Đăng ký</span>
-              </button>
-            ) : (
-              <>
-                <button
-                  type="button"
-                  onClick={handleOpenProfile}
-                  title="Hồ sơ cá nhân & Đổi mật khẩu"
-                  className="flex items-center gap-2 pl-2 pr-2.5 py-1 rounded-xl border border-slate-200 hover:border-blue-300 hover:bg-blue-50/40 transition-all text-left group"
-                >
-                  <div
-                    className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
-                      currentUser.role === 'teacher'
-                        ? 'bg-blue-100 text-blue-700'
-                        : currentUser.role === 'admin'
-                        ? 'bg-purple-100 text-purple-700'
-                        : 'bg-emerald-100 text-emerald-700'
-                    }`}
-                  >
-                    {currentUser.role === 'teacher' ? (
-                      <FlaskConical className="w-4 h-4" />
-                    ) : currentUser.role === 'admin' ? (
-                      <ShieldCheck className="w-4 h-4" />
-                    ) : (
-                      <GraduationCap className="w-4 h-4" />
-                    )}
-                  </div>
-                  <div className="hidden sm:block text-left text-xs">
-                    <p className="font-bold text-slate-800 leading-tight truncate max-w-[140px] flex items-center gap-1">
-                      <span>{currentUser.name || currentUser.email}</span>
-                      <Edit2 className="w-2.5 h-2.5 text-slate-400 group-hover:text-blue-600" />
-                    </p>
-                    <p className="text-slate-500 text-[10px] font-medium">
-                      {currentUser.role === 'teacher'
-                        ? 'Giáo viên'
-                        : currentUser.role === 'admin'
-                        ? 'Quản trị viên'
-                        : `Học sinh${currentUser.className ? ` • ${currentUser.className}` : ''}`}
-                    </p>
-                  </div>
-                </button>
-
-                {onLogout && (
-                  <button
-                    type="button"
-                    onClick={() => void onLogout()}
-                    title="Đăng xuất khỏi tài khoản"
-                    className="px-2.5 py-2 rounded-xl border border-slate-200 hover:border-rose-200 hover:bg-rose-50 text-slate-600 hover:text-rose-700 text-xs font-bold flex items-center gap-1 transition-colors"
-                  >
-                    <LogOut className="w-3.5 h-3.5" />
-                    <span className="hidden md:inline">Đăng xuất</span>
-                  </button>
-                )}
-              </>
             )}
           </div>
-        </div>
-
-        {/* Compact Mobile Navigation for Authenticated Teacher */}
-        {!isGuest && currentUser?.role === 'teacher' && (
-          <nav className="flex lg:hidden items-center gap-1 overflow-x-auto pb-2 pt-0.5 text-xs">
-            {[
-              { id: 'dashboard', label: 'Tổng quan' },
-              { id: 'upload_exam', label: 'Tải đề' },
-              { id: 'question_bank', label: 'Câu hỏi' },
-              { id: 'folder_manager', label: 'Thư mục' },
-              { id: 'exam_manager', label: 'Đề thi' },
-              { id: 'class_manager', label: 'Lớp học' },
-              { id: 'exam_results', label: 'Điểm thi' },
-            ].map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setActiveTab(item.id)}
-                className={`px-2.5 py-1 rounded-lg font-semibold whitespace-nowrap ${
-                  activeTab === item.id
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
-          </nav>
         )}
+
+        {/* Right: Prominent Author & School Unit Badge + Account Controls */}
+        <div className="flex items-center gap-3 shrink-0">
+          {/* Author Identity & Unit Badge (Always visible at top-right, never hidden in dropdown) */}
+          <div className="hidden md:flex flex-col items-end text-right leading-tight">
+            <span className="text-[18px] font-bold text-slate-900 tracking-tight whitespace-nowrap">
+              {APP_CONFIG.APP_AUTHOR}
+            </span>
+            <span className="mt-0.5 inline-flex items-center px-2.5 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 text-[11px] font-bold tracking-wide whitespace-nowrap">
+              TRƯỜNG THPT CHUYÊN NGUYỄN BỈNH KHIÊM | TỔ HÓA HỌC
+            </span>
+          </div>
+
+          {!workspaceMode && (
+            <button
+              type="button"
+              onClick={onOpenSystemDocs}
+              title="Hồ sơ kiến trúc hệ thống"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3 min-h-[40px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-semibold transition-colors"
+            >
+              <Code className="w-4 h-4 text-teal-600" />
+              <span className="hidden lg:inline">Kiến trúc</span>
+            </button>
+          )}
+
+          {isGuest || !currentUser ? (
+            <button
+              type="button"
+              onClick={onRequestAuth}
+              className="px-4 min-h-[40px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold shadow-xs flex items-center gap-2 transition-colors"
+            >
+              <LogIn className="w-4 h-4" />
+              <span>Đăng nhập</span>
+            </button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={handleOpenProfile}
+                title="Hồ sơ cá nhân & Đổi mật khẩu"
+                className="flex items-center gap-2 px-2.5 min-h-[40px] rounded-xl border border-slate-200 hover:border-teal-300 hover:bg-teal-50/40 transition-all text-left group"
+              >
+                <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
+                  {currentUser.role === 'admin' ? (
+                    <ShieldCheck className="w-4 h-4" />
+                  ) : currentUser.role === 'student' ? (
+                    <GraduationCap className="w-4 h-4" />
+                  ) : (
+                    <UserCircle2 className="w-4 h-4" />
+                  )}
+                </div>
+                <span className="hidden sm:inline text-sm font-semibold text-slate-800 max-w-[120px] truncate">
+                  {currentUser.name || currentUser.email}
+                </span>
+                <Edit2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-teal-700 shrink-0" />
+              </button>
+
+              {onLogout && (
+                <button
+                  type="button"
+                  onClick={() => void onLogout()}
+                  title="Đăng xuất khỏi tài khoản"
+                  className="px-3 min-h-[40px] rounded-xl border border-slate-200 hover:border-rose-200 hover:bg-rose-50 text-slate-700 hover:text-rose-700 text-sm font-semibold flex items-center gap-1.5 transition-colors"
+                >
+                  <LogOut className="w-4 h-4 shrink-0" />
+                  <span className="hidden sm:inline">Đăng xuất</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Compact Author Strip on Mobile (< md) */}
+      <div className="md:hidden bg-teal-50/80 border-b border-teal-200/80 px-4 py-1 flex items-center justify-between gap-2 text-xs">
+        <span className="font-bold text-slate-900 truncate">{APP_CONFIG.APP_AUTHOR}</span>
+        <span className="font-bold text-teal-800 truncate">THPT CHUYÊN NBK | TỔ HÓA HỌC</span>
       </div>
 
       {/* Profile & Change Password Modal */}

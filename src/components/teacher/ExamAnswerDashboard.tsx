@@ -100,39 +100,43 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
           {/* Action Buttons */}
           <div className="flex flex-wrap items-center gap-2">
             <button
+              type="button"
               onClick={onReRecognize}
-              className="px-3 py-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs font-bold transition-all flex items-center gap-1.5 hover:bg-slate-50"
+              className="px-3.5 py-2 min-h-[40px] rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 hover:bg-slate-50"
               title="Chạy lại bộ máy bóc tách thuật toán"
             >
-              <RotateCcw className="w-3.5 h-3.5 text-slate-600" />
-              <span>⚡ Quét lại đáp án</span>
+              <RotateCcw className="w-4 h-4 text-slate-600" />
+              <span>Quét lại đáp án</span>
             </button>
 
             <button
+              type="button"
               onClick={onDeepScan}
               disabled={isDeepScanning}
-              className="px-3 py-2 rounded-xl border border-purple-200 hover:border-purple-300 bg-purple-50 text-purple-800 text-xs font-bold transition-all flex items-center gap-1.5 hover:bg-purple-100 disabled:opacity-50"
-              title="Quét sâu bằng Gemini AI cho các dạng bảng phức tạp"
+              className="px-3.5 py-2 min-h-[40px] rounded-xl border border-indigo-200 hover:border-indigo-300 bg-indigo-50 text-indigo-800 text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 hover:bg-indigo-100 disabled:opacity-50"
+              title="Quét sâu bằng AI cho các dạng bảng phức tạp"
             >
-              <Bot className={`w-4 h-4 text-purple-600 ${isDeepScanning ? 'animate-spin' : ''}`} />
-              <span>{isDeepScanning ? 'Đang quét sâu...' : '🤖 Quét sâu AI'}</span>
+              <Bot className={`w-4 h-4 text-indigo-600 ${isDeepScanning ? 'animate-spin' : ''}`} />
+              <span>{isDeepScanning ? 'Đang quét sâu...' : 'Quét sâu AI'}</span>
             </button>
 
             <button
+              type="button"
               onClick={onViewSnippet}
-              className="px-3 py-2 rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs font-bold transition-all flex items-center gap-1.5 hover:bg-slate-50"
+              className="px-3.5 py-2 min-h-[40px] rounded-xl border border-slate-200 hover:border-slate-300 bg-white text-slate-700 text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 hover:bg-slate-50"
               title="Xem văn bản đáp án trích xuất từ tài liệu gốc"
             >
-              <Eye className="w-3.5 h-3.5 text-slate-600" />
-              <span>👁️ Xem trích đoạn nguồn</span>
+              <Eye className="w-4 h-4 text-slate-600" />
+              <span>Xem trích đoạn nguồn</span>
             </button>
 
             <button
+              type="button"
               onClick={onVerifyAll}
-              className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold transition-all flex items-center gap-1.5 shadow-sm shadow-emerald-500/20"
+              className="px-4 py-2 min-h-[40px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs sm:text-sm font-semibold transition-all flex items-center gap-1.5 shadow-xs"
             >
-              <CheckCheck className="w-4 h-4 text-emerald-200" />
-              <span>✓ Xác nhận toàn bộ ({totalCount})</span>
+              <CheckCheck className="w-4 h-4 text-teal-100" />
+              <span>Xác nhận toàn bộ ({totalCount})</span>
             </button>
           </div>
         </div>
@@ -727,12 +731,20 @@ export const ExamAnswerDashboard: React.FC<ExamAnswerDashboardProps> = ({
                       {/* Trạng thái */}
                       <td className="py-2.5 px-3 text-center">
                         {isVerified ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">
                             <CheckCircle2 className="w-3 h-3 text-emerald-600" />
                             Chính xác
                           </span>
+                        ) : item.recognitionStatus === 'needs_review' ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-800"
+                            title={item.validationIssues?.join(' ') || 'Cần kiểm tra lại đáp án Phần III'}
+                          >
+                            <AlertTriangle className="w-3 h-3 text-amber-600" />
+                            Cần kiểm tra
+                          </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800">
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800">
                             <XCircle className="w-3 h-3 text-rose-600" />
                             Chưa có
                           </span>

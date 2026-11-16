@@ -159,11 +159,11 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
         state.initialized && state.projectIdMatched && state.databaseIdMatched && state.db !== null;
       const errorCode: FirebaseAdminErrorCode | null = ready
         ? null
-        : state.errorCode || 'ADMIN_INIT_FAILED';
+        : state.errorCode || 'ADMIN_INIT_ERROR';
       return {
         ready,
         errorCode,
-        message: formatFirebaseAdminErrorMessage(errorCode),
+        message: formatFirebaseAdminErrorMessage(errorCode, state.errorDetail),
       };
     },
 
@@ -517,7 +517,7 @@ function resolveAdminDiagnostic(store: ExamSecurityStore): ExamAdminDiagnostic {
   }
   if (typeof store.getAdminDiagnostic === 'function') {
     const diag = store.getAdminDiagnostic();
-    const errorCode = diag.errorCode || 'MISSING_ENV_VAR';
+    const errorCode = diag.errorCode || 'CONFIG_MISSING';
     return {
       ready: false,
       errorCode,
@@ -526,8 +526,8 @@ function resolveAdminDiagnostic(store: ExamSecurityStore): ExamAdminDiagnostic {
   }
   return {
     ready: false,
-    errorCode: 'MISSING_ENV_VAR',
-    message: formatFirebaseAdminErrorMessage('MISSING_ENV_VAR'),
+    errorCode: 'CONFIG_MISSING',
+    message: formatFirebaseAdminErrorMessage('CONFIG_MISSING'),
   };
 }
 
@@ -536,21 +536,23 @@ function mapBackendFailureToResponse(
   store: ExamSecurityStore,
   context: {
     api: string;
-    stage: string;
+    errorStage: string;
     firestoreStatus?: 'not_attempted' | 'permission_denied' | 'not_found' | 'write_failed' | 'read_failed';
+    isWriteStage?: boolean;
     extraBody?: Record<string, unknown>;
   }
 ): ApiResponse {
   const extraBody = context.extraBody || {};
   const rawMsg = err instanceof Error ? err.message : String(err);
   const errorType = err instanceof Error ? err.name || 'Error' : typeof err;
+  const timestamp = new Date().toISOString();
 
   if (rawMsg === 'SERVER_CREDENTIALS_MISSING') {
     const diag = resolveAdminDiagnostic(store);
-    const errorCode = diag.errorCode || 'MISSING_ENV_VAR';
+    const errorCode = diag.errorCode || 'CONFIG_MISSING';
     logFirebaseAdminEvent({
       api: context.api,
-      stage: context.stage,
+      errorStage: context.errorStage,
       errorType: 'AdminSdkNotReady',
       errorCode,
       message: diag.message,
@@ -560,7 +562,9 @@ function mapBackendFailureToResponse(
       status: 503,
       body: {
         ...extraBody,
-        stage: context.stage,
+        stage: context.errorStage,
+        errorStage: context.errorStage,
+        timestamp,
         code: errorCode,
         error: diag.message,
         ...('message' in extraBody ? { message: diag.message } : {}),
@@ -569,23 +573,38 @@ function mapBackendFailureToResponse(
   }
 
   const fsCode = classifyFirestoreError(err);
-  const friendly = formatFirebaseAdminErrorMessage(fsCode);
-  const status = fsCode === 'FIRESTORE_PERMISSION_DENIED' ? 403 : 503;
+  const upperMsg = rawMsg.toUpperCase();
+  const isNetworkOrDbDown =
+    upperMsg.includes('UNAVAILABLE') ||
+    upperMsg.includes('DEADLINE_EXCEEDED') ||
+    upperMsg.includes('ECONNREFUSED') ||
+    upperMsg.includes('ENOTFOUND') ||
+    upperMsg.includes('NOT_FOUND') ||
+    upperMsg.includes('NOT-FOUND') ||
+    upperMsg.includes('FETCH FAILED');
+
+  const resolvedCode: FirebaseAdminErrorCode =
+    fsCode === 'DATABASE_PERMISSION_ERROR'
+      ? 'DATABASE_PERMISSION_ERROR'
+      : context.isWriteStage && !isNetworkOrDbDown
+      ? 'EXAM_SAVE_ERROR'
+      : 'DATABASE_ERROR';
+
+  const friendly = formatFirebaseAdminErrorMessage(resolvedCode);
+  const status = resolvedCode === 'DATABASE_PERMISSION_ERROR' ? 403 : resolvedCode === 'EXAM_SAVE_ERROR' ? 500 : 503;
   const firestoreStatus =
     context.firestoreStatus ||
-    (fsCode === 'FIRESTORE_PERMISSION_DENIED'
+    (resolvedCode === 'DATABASE_PERMISSION_ERROR'
       ? 'permission_denied'
-      : fsCode === 'FIRESTORE_NOT_FOUND'
-      ? 'not_found'
-      : context.stage.includes('write') || context.stage.includes('save')
+      : context.isWriteStage || context.errorStage.includes('write') || context.errorStage.includes('save')
       ? 'write_failed'
       : 'read_failed');
 
   logFirebaseAdminEvent({
     api: context.api,
-    stage: context.stage,
+    errorStage: context.errorStage,
     errorType,
-    errorCode: fsCode,
+    errorCode: resolvedCode,
     message: `${friendly} (${sanitizeSensitiveLogText(rawMsg)})`,
     firestoreStatus,
   });
@@ -594,8 +613,10 @@ function mapBackendFailureToResponse(
     status,
     body: {
       ...extraBody,
-      stage: context.stage,
-      code: fsCode,
+      stage: context.errorStage,
+      errorStage: context.errorStage,
+      timestamp,
+      code: resolvedCode,
       error: friendly,
       ...('message' in extraBody ? { message: friendly } : {}),
     },
@@ -620,19 +641,22 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       const bearer = extractBearerToken(req);
       const caller = await store.verifyIdToken(bearer);
       if (!caller) {
+        const timestamp = new Date().toISOString();
         logFirebaseAdminEvent({
           api: apiName,
-          stage,
+          errorStage: stage,
           errorType: 'AuthError',
-          errorCode: 'UNAUTHENTICATED',
+          errorCode: 'AUTH_ERROR',
           message: 'Missing or invalid Firebase ID Token',
         });
         return {
           status: 401,
           body: {
             stage,
-            code: 'UNAUTHENTICATED',
-            error: 'Vui lòng đăng nhập tài khoản giáo viên hợp lệ.',
+            errorStage: stage,
+            timestamp,
+            code: 'AUTH_ERROR',
+            error: 'Không xác thực được phiên đăng nhập giáo viên (Firebase ID Token). Vui lòng đăng nhập lại.',
           },
         };
       }
@@ -645,7 +669,12 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       if (!validateSafeDocCode(examCode) || !examId) {
         return {
           status: 400,
-          body: { stage, error: 'Mã đề thi hoặc ID đề thi không hợp lệ.' },
+          body: {
+            stage,
+            errorStage: stage,
+            code: 'EXAM_SAVE_ERROR',
+            error: 'Mã đề thi hoặc ID đề thi không hợp lệ.',
+          },
         };
       }
 
@@ -658,10 +687,11 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       stage = 'admin_sdk_check';
       if (!store.hasAdminAccess()) {
         const diag = resolveAdminDiagnostic(store);
-        if (requiresPassword || (diag.errorCode && diag.errorCode !== 'MISSING_ENV_VAR')) {
+        if (requiresPassword || (diag.errorCode && diag.errorCode !== 'CONFIG_MISSING')) {
+          const timestamp = new Date().toISOString();
           logFirebaseAdminEvent({
             api: apiName,
-            stage,
+            errorStage: stage,
             errorType: 'AdminSdkNotReady',
             errorCode: diag.errorCode,
             message: diag.message,
@@ -671,6 +701,8 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
             status: 503,
             body: {
               stage,
+              errorStage: stage,
+              timestamp,
               code: diag.errorCode,
               error: diag.message,
             },
@@ -689,11 +721,12 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         const isTeacher =
           roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
         if (!isTeacher) {
+          const timestamp = new Date().toISOString();
           logFirebaseAdminEvent({
             api: apiName,
-            stage,
+            errorStage: stage,
             errorType: 'AuthorizationError',
-            errorCode: 'FORBIDDEN_ROLE',
+            errorCode: 'DATABASE_PERMISSION_ERROR',
             message: 'Caller does not have active teacher or admin role',
             firestoreStatus: 'ok',
           });
@@ -701,7 +734,9 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
             status: 403,
             body: {
               stage,
-              code: 'FORBIDDEN_ROLE',
+              errorStage: stage,
+              timestamp,
+              code: 'DATABASE_PERMISSION_ERROR',
               error:
                 'Chỉ tài khoản giáo viên đang hoạt động hoặc quản trị viên mới có quyền cấu hình bảo mật đề thi.',
             },
@@ -716,7 +751,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       } catch (err) {
         return mapBackendFailureToResponse(err, store, {
           api: apiName,
-          stage,
+          errorStage: stage,
           firestoreStatus: 'read_failed',
         });
       }
@@ -726,7 +761,15 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       );
 
       if (!roleInfo.isAdmin && existingOwner !== caller.uid) {
-        return { status: 403, body: { stage, error: 'Bạn không phải chủ sở hữu của đề thi này.' } };
+        return {
+          status: 403,
+          body: {
+            stage,
+            errorStage: stage,
+            code: 'DATABASE_PERMISSION_ERROR',
+            error: 'Bạn không phải chủ sở hữu của đề thi này.',
+          },
+        };
       }
 
       stage = 'validate_answer_review_policy';
@@ -738,6 +781,8 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
           status: 400,
           body: {
             stage,
+            errorStage: stage,
+            code: 'EXAM_SAVE_ERROR',
             error: 'Điểm sàn xem đáp án phải nằm trong khoảng từ 0.0 đến 10.0 điểm.',
           },
         };
@@ -750,7 +795,12 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         if (!Number.isFinite(parsedMs)) {
           return {
             status: 400,
-            body: { stage, error: 'Thời điểm mở xem đáp án không hợp lệ.' },
+            body: {
+              stage,
+              errorStage: stage,
+              code: 'EXAM_SAVE_ERROR',
+              error: 'Thời điểm mở xem đáp án không hợp lệ.',
+            },
           };
         }
         answerReviewEnabledAt = new Date(parsedMs).toISOString();
@@ -768,10 +818,36 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         if (rawPassword.length < 6) {
           return {
             status: 400,
-            body: { stage, error: 'Mật khẩu đề thi phải có ít nhất 6 ký tự.' },
+            body: {
+              stage,
+              errorStage: stage,
+              code: 'PASSWORD_HASH_ERROR',
+              error: 'Mật khẩu đề thi phải có ít nhất 6 ký tự.',
+            },
           };
         }
-        finalPasswordHash = hashExamPassword(rawPassword);
+        try {
+          finalPasswordHash = hashExamPassword(rawPassword);
+        } catch (hashErr) {
+          const timestamp = new Date().toISOString();
+          logFirebaseAdminEvent({
+            api: apiName,
+            errorStage: stage,
+            errorType: hashErr instanceof Error ? hashErr.name || 'Error' : typeof hashErr,
+            errorCode: 'PASSWORD_HASH_ERROR',
+            message: hashErr instanceof Error ? hashErr.message : 'Password hash failed',
+          });
+          return {
+            status: 500,
+            body: {
+              stage,
+              errorStage: stage,
+              timestamp,
+              code: 'PASSWORD_HASH_ERROR',
+              error: 'Không thể mã hóa mật khẩu đề thi trên máy chủ.',
+            },
+          };
+        }
         finalPasswordUpdatedAt = nowIso;
       } else if (passwordAction === 'keep') {
         if (!finalPasswordHash && store.hasAdminAccess()) {
@@ -779,6 +855,8 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
             status: 400,
             body: {
               stage,
+              errorStage: stage,
+              code: 'PASSWORD_HASH_ERROR',
               error: 'Đề thi chưa có mật khẩu trước đó. Vui lòng nhập mật khẩu mới (tối thiểu 6 ký tự).',
             },
           };
@@ -918,7 +996,8 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       } catch (err) {
         return mapBackendFailureToResponse(err, store, {
           api: apiName,
-          stage,
+          errorStage: stage,
+          isWriteStage: true,
           firestoreStatus: 'write_failed',
         });
       }
@@ -936,21 +1015,24 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         },
       };
     } catch (err) {
+      const timestamp = new Date().toISOString();
       const errorType = err instanceof Error ? err.name || 'Error' : typeof err;
       const safeMsg = sanitizeSensitiveLogText(err instanceof Error ? err.message : String(err));
       logFirebaseAdminEvent({
         api: apiName,
-        stage,
+        errorStage: stage,
         errorType,
-        errorCode: 'INTERNAL_CONFIGURE_ERROR',
+        errorCode: 'UNKNOWN_ERROR',
         message: safeMsg,
       });
       return {
         status: 500,
         body: {
           stage,
-          code: 'INTERNAL_CONFIGURE_ERROR',
-          error: `Lỗi cấu hình bảo mật ở bước "${stage}": ${safeMsg || 'Lỗi không xác định'}`,
+          errorStage: stage,
+          timestamp,
+          code: 'UNKNOWN_ERROR',
+          error: `Lỗi chưa phân loại ở bước "${stage}": ${safeMsg || 'Lỗi không xác định'}`,
         },
       };
     }
@@ -963,7 +1045,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
    */
   async function handleVerifyExamPassword(req: ApiRequest): Promise<ApiResponse> {
     if (req.method !== 'POST') {
-      return { status: 405, body: { error: 'Phương thức không hợp lệ.' } };
+      return { status: 405, body: { code: 'API_ROUTE_ERROR', error: 'Phương thức không hợp lệ.' } };
     }
 
     const bearer = extractBearerToken(req);
@@ -973,7 +1055,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         status: 401,
         body: {
           error: 'Vui lòng đăng nhập tài khoản học sinh để xác thực mật khẩu vào thi.',
-          code: 'UNAUTHENTICATED',
+          code: 'AUTH_ERROR',
         },
       };
     }
@@ -982,7 +1064,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       const diag = resolveAdminDiagnostic(store);
       logFirebaseAdminEvent({
         api: 'POST /api/exams/verify-password',
-        stage: 'admin_sdk_check',
+        errorStage: 'admin_sdk_check',
         errorType: 'AdminSdkNotReady',
         errorCode: diag.errorCode,
         message: diag.message,
@@ -991,7 +1073,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         status: 503,
         body: {
           stage: 'admin_sdk_check',
-          error: diag.message,
+          error: 'Hệ thống xác thực đề thi đang tạm bảo trì. Vui lòng thử lại sau.',
           code: diag.errorCode,
         },
       };
@@ -1137,7 +1219,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     } catch (err) {
       return mapBackendFailureToResponse(err, store, {
         api: 'POST /api/exams/verify-password',
-        stage: 'firestore_verify_password',
+        errorStage: 'firestore_verify_password',
       });
     }
   }
@@ -1148,7 +1230,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
    */
   async function handleAccessExamQuestions(req: ApiRequest): Promise<ApiResponse> {
     if (req.method !== 'POST') {
-      return { status: 405, body: { error: 'Phương thức không hợp lệ.' } };
+      return { status: 405, body: { code: 'API_ROUTE_ERROR', error: 'Phương thức không hợp lệ.' } };
     }
 
     const bearer = extractBearerToken(req);
@@ -1156,7 +1238,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     if (!caller) {
       return {
         status: 401,
-        body: { authorized: false, status: 'password_required', error: 'Chưa đăng nhập.' },
+        body: { authorized: false, status: 'password_required', code: 'AUTH_ERROR', error: 'Chưa đăng nhập.' },
       };
     }
 
@@ -1164,7 +1246,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       const diag = resolveAdminDiagnostic(store);
       logFirebaseAdminEvent({
         api: 'POST /api/exams/access-questions',
-        stage: 'admin_sdk_check',
+        errorStage: 'admin_sdk_check',
         errorType: 'AdminSdkNotReady',
         errorCode: diag.errorCode,
         message: diag.message,
@@ -1176,7 +1258,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
           status: 'server_unavailable',
           stage: 'admin_sdk_check',
           code: diag.errorCode,
-          error: diag.message,
+          error: 'Hệ thống đề thi đang tạm bảo trì. Vui lòng thử lại sau.',
         },
       };
     }
@@ -1255,7 +1337,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     } catch (err) {
       return mapBackendFailureToResponse(err, store, {
         api: 'POST /api/exams/access-questions',
-        stage: 'firestore_access_questions',
+        errorStage: 'firestore_access_questions',
         firestoreStatus: 'read_failed',
         extraBody: {
           authorized: false,
@@ -1272,14 +1354,14 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
    */
   async function handleSubmitAndGradeExam(req: ApiRequest): Promise<ApiResponse> {
     if (req.method !== 'POST') {
-      return { status: 405, body: { error: 'Phương thức không hợp lệ.' } };
+      return { status: 405, body: { code: 'API_ROUTE_ERROR', error: 'Phương thức không hợp lệ.' } };
     }
 
     if (!store.hasAdminAccess()) {
       const diag = resolveAdminDiagnostic(store);
       logFirebaseAdminEvent({
         api: 'POST /api/exams/submit-and-grade',
-        stage: 'admin_sdk_check',
+        errorStage: 'admin_sdk_check',
         errorType: 'AdminSdkNotReady',
         errorCode: diag.errorCode,
         message: diag.message,
@@ -1288,7 +1370,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         status: 503,
         body: {
           stage: 'admin_sdk_check',
-          error: diag.message,
+          error: 'Hệ thống chấm điểm trực tuyến đang tạm bảo trì. Vui lòng thử lại sau.',
           code: diag.errorCode,
         },
       };
@@ -1459,7 +1541,8 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     } catch (err) {
       return mapBackendFailureToResponse(err, store, {
         api: 'POST /api/exams/submit-and-grade',
-        stage: 'firestore_submit_and_grade',
+        errorStage: 'firestore_submit_and_grade',
+        isWriteStage: true,
       });
     }
   }
@@ -1471,7 +1554,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
    */
   async function handleRequestAnswerReview(req: ApiRequest): Promise<ApiResponse> {
     if (req.method !== 'POST') {
-      return { status: 405, body: { error: 'Phương thức không hợp lệ.' } };
+      return { status: 405, body: { code: 'API_ROUTE_ERROR', error: 'Phương thức không hợp lệ.' } };
     }
 
     const bearer = extractBearerToken(req);
@@ -1482,6 +1565,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         body: {
           allowed: false,
           reason: 'unauthenticated',
+          code: 'AUTH_ERROR',
           message: 'Bạn cần đăng nhập tài khoản học sinh để xem đáp án.',
         },
       };
@@ -1491,7 +1575,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       const diag = resolveAdminDiagnostic(store);
       logFirebaseAdminEvent({
         api: 'POST /api/exams/request-answer-review',
-        stage: 'admin_sdk_check',
+        errorStage: 'admin_sdk_check',
         errorType: 'AdminSdkNotReady',
         errorCode: diag.errorCode,
         message: diag.message,
@@ -1503,8 +1587,8 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
           reason: 'server_unavailable',
           stage: 'admin_sdk_check',
           code: diag.errorCode,
-          error: diag.message,
-          message: diag.message,
+          error: 'Hệ thống kiểm tra đáp án đang tạm bảo trì. Vui lòng thử lại sau.',
+          message: 'Hệ thống kiểm tra đáp án đang tạm bảo trì. Vui lòng thử lại sau.',
         },
       };
     }
@@ -1639,7 +1723,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     } catch (err) {
       return mapBackendFailureToResponse(err, store, {
         api: 'POST /api/exams/request-answer-review',
-        stage: 'firestore_request_answer_review',
+        errorStage: 'firestore_request_answer_review',
         firestoreStatus: 'read_failed',
         extraBody: {
           allowed: false,

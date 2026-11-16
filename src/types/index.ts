@@ -358,6 +358,25 @@ export interface DetectedExamSection {
   teacherConfirmed?: boolean;
 }
 
+export interface AnswerTableCandidate {
+  id: string;
+  label: string;
+  variantCode?: string;
+  sectionHint?: 'part1' | 'part2' | 'part3' | 'mixed';
+  questionRange?: string;
+  itemCount: number;
+  previewText: string;
+  sourceSnippet?: string;
+}
+
+export interface PdfExtractionMeta {
+  pageCount: number;
+  pagesWithText: number;
+  charCount: number;
+  isLikelyScanned: boolean;
+  warning?: string;
+}
+
 export interface ParsedExamResult {
   title: string;
   grade?: ChemGrade;
@@ -387,6 +406,22 @@ export interface ParsedExamResult {
   detectedSections?: DetectedExamSection[];
   hasAmbiguousSections?: boolean;
   sectionsConfirmed?: boolean;
+
+  // Multi-table / Variant Answer Mapping Confirmation
+  answerTableCandidates?: AnswerTableCandidate[];
+  selectedAnswerCandidateId?: string;
+  hasAmbiguousAnswerMapping?: boolean;
+  answerMappingConfirmed?: boolean;
+  part3LengthWarningsCount?: number;
+
+  // PDF & Table Extraction Diagnostics
+  pdfMeta?: PdfExtractionMeta;
+  extractedTables?: {
+    id: string;
+    sourceType: string;
+    surroundingHeader?: string;
+    rows: string[][];
+  }[];
 
   // Equation & OMML Parse Diagnostics
   equationWarnings?: string[];

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import confetti from 'canvas-confetti';
 import { Exam, StudentAnswer, StudentSubmission } from '../../types';
 import { 
@@ -93,14 +93,15 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, []);
 
-  // Countdown timer
+  const handleSubmitRef = useRef<(autoTimeout?: boolean) => void>(() => {});
+
+  // Countdown timer (pure state updater; auto-submit runs in effect below with latest answers)
   useEffect(() => {
-    if (safeQuestions.length === 0) return;
+    if (safeQuestions.length === 0 || isSubmitting) return;
     const timer = setInterval(() => {
       setTimeLeftSeconds(prev => {
         if (prev <= 1) {
           clearInterval(timer);
-          handleSubmit(true); // Auto-submit when time expires
           return 0;
         }
         return prev - 1;
@@ -108,7 +109,13 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
     }, 1000);
 
     return () => clearInterval(timer);
-  }, [safeQuestions.length]);
+  }, [safeQuestions.length, isSubmitting]);
+
+  useEffect(() => {
+    if (safeQuestions.length > 0 && timeLeftSeconds === 0 && !isSubmitting) {
+      handleSubmitRef.current(true);
+    }
+  }, [safeQuestions.length, timeLeftSeconds, isSubmitting]);
 
   const safeIndex = safeQuestions.length > 0 ? Math.min(currentIndex, safeQuestions.length - 1) : 0;
   const currentQuestion = safeQuestions[safeIndex];
@@ -208,6 +215,8 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
 
     onFinishExam(submission);
   };
+
+  handleSubmitRef.current = handleSubmit;
 
   // Format countdown mm:ss
   const mins = Math.floor(timeLeftSeconds / 60);

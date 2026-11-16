@@ -80,15 +80,17 @@ export function createVercelHandler(handler: (req: ApiRequest) => Promise<ApiRes
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
       res.end(JSON.stringify(result.body));
     } catch (err) {
+      const timestamp = new Date().toISOString();
       const rawMsg = err instanceof Error ? err.message : 'Internal server error';
       const errorType = err instanceof Error ? err.name || 'Error' : typeof err;
       console.error(
         JSON.stringify({
           scope: 'HQTest_API',
+          timestamp,
           api: req.url || 'unknown',
-          stage: 'vercel_adapter_catch',
+          errorStage: 'vercel_adapter_catch',
           errorType,
-          errorCode: 'INTERNAL_SERVER_ERROR',
+          errorCode: 'UNKNOWN_ERROR',
           message: rawMsg.replace(/-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]').slice(0, 400),
         })
       );
@@ -97,8 +99,10 @@ export function createVercelHandler(handler: (req: ApiRequest) => Promise<ApiRes
       res.end(
         JSON.stringify({
           error: `Lỗi máy chủ (${errorType}): vui lòng kiểm tra /api/health/firebase-admin và Vercel Function Logs.`,
-          code: 'INTERNAL_SERVER_ERROR',
+          code: 'UNKNOWN_ERROR',
+          errorStage: 'vercel_adapter_catch',
           stage: 'vercel_adapter_catch',
+          timestamp,
         })
       );
     }

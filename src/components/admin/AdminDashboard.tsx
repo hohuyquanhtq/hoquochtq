@@ -35,6 +35,7 @@ interface AdminDashboardProps {
   exams: Exam[];
   submissions: StudentSubmission[];
   folders: Folder[];
+  sectionFocus?: 'overview' | 'users';
   onDataResetOrRestored: () => void;
 }
 
@@ -46,11 +47,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   exams,
   submissions,
   folders,
+  sectionFocus = 'overview',
   onDataResetOrRestored,
 }) => {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
-  const [filterTab, setFilterTab] = useState<UserFilterTab>('all');
+  const [filterTab, setFilterTab] = useState<UserFilterTab>(
+    sectionFocus === 'users' ? 'student' : 'all'
+  );
+  useEffect(() => {
+    setFilterTab(sectionFocus === 'users' ? 'student' : 'all');
+  }, [sectionFocus]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);

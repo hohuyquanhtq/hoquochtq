@@ -7,10 +7,12 @@ import {
   TrueFalseStatement,
   DetectedExamSection,
   SectionDetectionMethod,
+  PdfExtractionMeta,
 } from '../types';
 import { extractComprehensiveAnswerKeys, buildAnswerRecognitionItems } from './answerRecognizer';
 import { isolateAnswerBlock } from './answerExtractionEngine/documentTableReader';
 import { parseDocxWithEquations, DocxEquationWarning } from './docxEquationParser';
+import { extractTextFromPdfDetailed, PdfExtractionResult } from './pdfExtractor';
 import {
   detectSectionHeader,
   detectSectionHeaderDetailed,
@@ -18,8 +20,8 @@ import {
   SectionDetectionCandidate,
 } from './sectionDetector';
 
-export { detectSectionHeader, detectSectionHeaderDetailed };
-export type { SectionDetectionCandidate };
+export { detectSectionHeader, detectSectionHeaderDetailed, extractTextFromPdfDetailed };
+export type { SectionDetectionCandidate, PdfExtractionResult };
 
 /**
  * Extracts rich markdown text from a DOCX ArrayBuffer,
@@ -45,8 +47,8 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
 }
 
 /**
- * Extracts and parses a DOCX exam in one pass while preserving OMML conversion warnings
- * and unsupported equation XML fragments.
+ * Extracts and parses a DOCX exam in one pass while preserving OMML conversion warnings,
+ * extracted tables, and unsupported equation XML fragments.
  */
 export async function parseDocxExam(
   arrayBuffer: ArrayBuffer,
@@ -57,6 +59,12 @@ export async function parseDocxExam(
     if (res && res.fullMarkdownText && res.fullMarkdownText.trim().length > 20) {
       const result = parseExamContent(res.fullMarkdownText, defaultGrade, {
         equationWarnings: res.warnings,
+        extractedTables: res.tables.map(t => ({
+          id: t.id,
+          sourceType: t.sourceType,
+          surroundingHeader: t.surroundingHeader,
+          rows: t.rows,
+        })),
       });
       return { text: res.fullMarkdownText, result };
     }
@@ -69,49 +77,35 @@ export async function parseDocxExam(
 }
 
 /**
- * Extracts text from a PDF ArrayBuffer using pdfjs-dist,
- * reconstructing line breaks from Y-coordinates and hasEOL markers so section headers stay on separate lines.
+ * Extracts text from a PDF ArrayBuffer using pdfjs-dist with coordinate-based line reconstruction.
  */
 export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
-    const pdfjsLib = await import('pdfjs-dist');
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
-    const pdf = await loadingTask.promise;
-    let fullText = '';
-    for (let i = 1; i <= pdf.numPages; i++) {
-      const page = await pdf.getPage(i);
-      const textContent = await page.getTextContent();
-      let pageText = '';
-      let lastY: number | null = null;
-      for (const item of textContent.items as any[]) {
-        const str = typeof item.str === 'string' ? item.str : '';
-        const y = Array.isArray(item.transform) ? item.transform[5] : null;
-        if (lastY !== null && y !== null && Math.abs(y - lastY) > 4) {
-          pageText += '\n';
-        } else if (
-          pageText.length > 0 &&
-          !pageText.endsWith('\n') &&
-          !pageText.endsWith(' ') &&
-          str &&
-          !str.startsWith(' ')
-        ) {
-          pageText += ' ';
-        }
-        pageText += str;
-        if (item.hasEOL) {
-          pageText += '\n';
-          lastY = null;
-        } else if (y !== null && str.trim()) {
-          lastY = y;
-        }
-      }
-      fullText += pageText + '\n\n';
-    }
-    return fullText;
+    const detailed = await extractTextFromPdfDetailed(arrayBuffer);
+    return detailed.text;
   } catch (err) {
     console.warn('PDF extraction warning:', err);
     return '';
   }
+}
+
+/**
+ * Extracts and parses a PDF exam cleanly while surfacing scanned/OCR warnings (never substitutes fake samples).
+ */
+export async function parsePdfExam(
+  arrayBuffer: ArrayBuffer,
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+): Promise<{ text: string; pdfMeta: PdfExtractionMeta; result: ParsedExamResult }> {
+  const detailed = await extractTextFromPdfDetailed(arrayBuffer);
+  const pdfMeta: PdfExtractionMeta = {
+    pageCount: detailed.pageCount,
+    pagesWithText: detailed.pagesWithText,
+    charCount: detailed.charCount,
+    isLikelyScanned: detailed.isLikelyScanned,
+    warning: detailed.warning,
+  };
+  const result = parseExamContent(detailed.text, defaultGrade, { pdfMeta });
+  return { text: detailed.text, pdfMeta, result };
 }
 
 /**
@@ -301,7 +295,7 @@ export function extractPart3Data(fullText: string): {
   let inlineAnswer: string | undefined = undefined;
 
   const ansMatch = prompt.match(
-    /(?:^|\n)\s*(?:Đáp\s*án|Trả\s*lời|KQ|Kết\s*quả)[\s.:\-–—=]+([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]+)?)\s*$/i
+    /(?:^|\n)\s*(?:Đáp\s*án|Trả\s*lời|KQ|Kết\s*quả)(?:\s*[:=.]\s*|\s+[-–—]\s+|\s+)([-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]+)?)\s*$/i
   );
   if (ansMatch) {
     inlineAnswer = ansMatch[1].trim();
@@ -575,7 +569,28 @@ export function recalculateParsedExamResult(
     detectedSections: updatedSections,
     hasAmbiguousSections,
     sectionsConfirmed: sectionsConfirmed !== undefined ? sectionsConfirmed : !hasAmbiguousSections,
+    part3LengthWarningsCount: answerItems.filter(it => it.section === 'part3' && (it.validationIssues?.length || 0) > 0).length,
   };
+}
+
+/**
+ * Ensures distinct inline questions like "... D. Methane. Câu 2. Chất nào..." split onto separate lines
+ * without splitting references inside prose ("từ Câu 1 đến Câu 12").
+ */
+function separateInlineQuestionStarts(text: string): string {
+  return text
+    .split(/\r?\n/)
+    .map(rawLine => {
+      const line = rawLine.trim();
+      if (!line) return '';
+      // Split before "Câu <N>." / "Câu <N>:" when preceded by sentence punctuation or option text,
+      // avoiding Vietnamese prepositions like "từ", "đến", "và", "như", "ở", "xem"
+      return line.replace(
+        /(?<!\b(?:từ|đến|và|của|như|theo|ở|tại|xem|giữa|cho|tới))\s+((?:\*{0,2})?(?:Câu|Bài)\s+\d+(?:\s*\([^)]+\))?(?:\*{0,2})?\s*[.:–—])/gi,
+        '\n$1'
+      );
+    })
+    .join('\n');
 }
 
 /**
@@ -585,7 +600,12 @@ export function recalculateParsedExamResult(
 export function parseExamContent(
   rawText: string,
   defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12',
-  extraMeta?: { equationWarnings?: DocxEquationWarning[] }
+  extraMeta?: {
+    equationWarnings?: DocxEquationWarning[];
+    selectedAnswerCandidateId?: string;
+    pdfMeta?: PdfExtractionMeta;
+    extractedTables?: { id: string; sourceType: string; surroundingHeader?: string; rows: string[][] }[];
+  }
 ): ParsedExamResult {
   // 1. Isolate question content from answer keys and solutions
   const { answerSectionText } = isolateAnswerBlock(rawText);
@@ -594,7 +614,8 @@ export function parseExamContent(
       ? rawText.slice(0, rawText.indexOf(answerSectionText))
       : rawText;
 
-  const lines = (examBodyText.trim() ? examBodyText : rawText)
+  const normalizedBodyText = separateInlineQuestionStarts(examBodyText.trim() ? examBodyText : rawText);
+  const lines = normalizedBodyText
     .split(/\r?\n/)
     .map(l => l.trim())
     .filter(Boolean);
@@ -610,7 +631,7 @@ export function parseExamContent(
   }
 
   // 3. Pre-extract Answer Keys matrix from the full document
-  const answerKeys = extractComprehensiveAnswerKeys(rawText);
+  const answerKeys = extractComprehensiveAnswerKeys(rawText, extraMeta?.selectedAnswerCandidateId);
 
   // 4. Split question lines into distinct question blocks while tracking section transitions & metadata
   const sectionTrackers: InternalSectionTracker[] = [];
@@ -1032,6 +1053,16 @@ export function parseExamContent(
     });
   }
 
+  const combinedTables =
+    extraMeta?.extractedTables && extraMeta.extractedTables.length > 0
+      ? extraMeta.extractedTables
+      : answerKeys.extractedTables;
+  const hasAmbiguousAnswerMapping =
+    answerKeys.hasAmbiguousCandidates && !extraMeta?.selectedAnswerCandidateId;
+  const part3LengthWarningsCount = answerItems.filter(
+    it => it.section === 'part3' && (it.validationIssues?.length || 0) > 0
+  ).length;
+
   return {
     title,
     grade: defaultGrade,
@@ -1056,6 +1087,13 @@ export function parseExamContent(
     detectedSections,
     hasAmbiguousSections,
     sectionsConfirmed: !hasAmbiguousSections,
+    answerTableCandidates: answerKeys.candidates,
+    selectedAnswerCandidateId: extraMeta?.selectedAnswerCandidateId,
+    hasAmbiguousAnswerMapping,
+    answerMappingConfirmed: !hasAmbiguousAnswerMapping,
+    part3LengthWarningsCount,
+    pdfMeta: extraMeta?.pdfMeta,
+    extractedTables: combinedTables,
     ...(eqWarnings.length > 0
       ? {
           equationWarnings: eqWarnings.map(w => w.message),

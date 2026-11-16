@@ -172,6 +172,21 @@ export function validateAndCrossCheckAnswers(
         message: `Câu ${item.questionNumber} (Phần III) chưa có nội dung đáp án số/chuỗi.`,
       });
       item.validationStatus = 'not_found';
+    } else {
+      const compactVal = item.correctAnswer.replace(/\s+/g, '');
+      if (compactVal.length > 4) {
+        const lenMsg = `Đáp án "${item.correctAnswer}" có ${compactVal.length} ký tự (chuẩn phiếu GDPT 2018 tối đa 4 ký tự gồm dấu "-", ",") — vui lòng kiểm tra lại.`;
+        issues.push({
+          type: 'invalid_domain_value',
+          severity: 'warning',
+          section: 'part3',
+          questionNumber: item.questionNumber,
+          message: `Câu ${item.questionNumber} (Phần III): ${lenMsg}`,
+          suggestedFix: 'Làm tròn số theo đúng quy ước đề bài để vừa tối đa 4 ký tự.',
+        });
+        item.validationStatus = 'needs_review';
+        item.validationIssues = [...(item.validationIssues || []), lenMsg];
+      }
     }
   }
 

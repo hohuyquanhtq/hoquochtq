@@ -36,56 +36,56 @@ export const SystemDesignModal: React.FC<SystemDesignModalProps> = ({ isOpen, on
         </div>
 
         {/* Tab Navigation */}
-        <div className="flex border-b border-slate-200 bg-slate-50 px-6 gap-2 pt-2">
+        <div className="flex overflow-x-auto border-b border-slate-200 bg-slate-50 px-4 sm:px-6 gap-2 pt-2 shrink-0">
           <button
             onClick={() => setActiveTab('architecture')}
-            className={`px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 sm:px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'architecture'
                 ? 'bg-white text-blue-600 border-t-2 border-blue-600 border-x border-slate-200 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Layers className="w-4 h-4" /> 1. Kiến Trúc & Công Nghệ
+            <Layers className="w-4 h-4 shrink-0" /> 1. Kiến Trúc & Công Nghệ
           </button>
           <button
             onClick={() => setActiveTab('functional')}
-            className={`px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 sm:px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'functional'
                 ? 'bg-white text-blue-600 border-t-2 border-blue-600 border-x border-slate-200 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <GitBranch className="w-4 h-4" /> 2. Sơ Đồ Chức Năng
+            <GitBranch className="w-4 h-4 shrink-0" /> 2. Sơ Đồ Chức Năng
           </button>
           <button
             onClick={() => setActiveTab('database')}
-            className={`px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 sm:px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'database'
                 ? 'bg-white text-blue-600 border-t-2 border-blue-600 border-x border-slate-200 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Database className="w-4 h-4" /> 3. Thiết Kế Cơ Sở Dữ Liệu (ERD)
+            <Database className="w-4 h-4 shrink-0" /> 3. Thiết Kế Cơ Sở Dữ Liệu (ERD)
           </button>
           <button
             onClick={() => setActiveTab('chemistry')}
-            className={`px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 sm:px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'chemistry'
                 ? 'bg-white text-blue-600 border-t-2 border-blue-600 border-x border-slate-200 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <Cpu className="w-4 h-4" /> 4. Cơ Chế Xử Lý Hóa Học & Parser
+            <Cpu className="w-4 h-4 shrink-0" /> 4. Cơ Chế Xử Lý Hóa Học & Parser
           </button>
           <button
             onClick={() => setActiveTab('roadmap')}
-            className={`px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 ${
+            className={`px-3 sm:px-4 py-2 text-xs font-bold rounded-t-lg transition-colors flex items-center gap-1.5 whitespace-nowrap shrink-0 ${
               activeTab === 'roadmap'
                 ? 'bg-white text-blue-600 border-t-2 border-blue-600 border-x border-slate-200 shadow-2xs'
                 : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            <CheckCircle2 className="w-4 h-4" /> 5. Kế Hoạch 7 Bước Triển Khai
+            <CheckCircle2 className="w-4 h-4 shrink-0" /> 5. Kế Hoạch 7 Bước Triển Khai
           </button>
         </div>
 

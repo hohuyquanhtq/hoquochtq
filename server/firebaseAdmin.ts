@@ -14,15 +14,17 @@ export const EXPECTED_FIRESTORE_DATABASE_ID =
   'ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e';
 
 export type FirebaseAdminErrorCode =
-  | 'MISSING_ENV_VAR'
-  | 'INVALID_JSON'
-  | 'MISSING_REQUIRED_FIELDS'
-  | 'PROJECT_ID_MISMATCH'
-  | 'INVALID_PRIVATE_KEY_FORMAT'
-  | 'ADMIN_INIT_FAILED'
-  | 'FIRESTORE_PERMISSION_DENIED'
-  | 'FIRESTORE_NOT_FOUND'
-  | 'FIRESTORE_UNAVAILABLE';
+  | 'CONFIG_MISSING'
+  | 'CONFIG_PARSE_ERROR'
+  | 'PRIVATE_KEY_ERROR'
+  | 'ADMIN_INIT_ERROR'
+  | 'AUTH_ERROR'
+  | 'DATABASE_ERROR'
+  | 'DATABASE_PERMISSION_ERROR'
+  | 'PASSWORD_HASH_ERROR'
+  | 'EXAM_SAVE_ERROR'
+  | 'API_ROUTE_ERROR'
+  | 'UNKNOWN_ERROR';
 
 export interface FirebaseAdminInitResult {
   initialized: boolean;
@@ -30,6 +32,7 @@ export interface FirebaseAdminInitResult {
   projectIdMatched: boolean;
   databaseIdMatched: boolean;
   errorCode: FirebaseAdminErrorCode | null;
+  errorDetail: string | null;
   app: App | null;
   auth: Auth | null;
   db: Firestore | null;
@@ -42,6 +45,8 @@ export interface FirebaseAdminHealthStatus {
   databaseIdMatched: boolean;
   environmentVariablePresent: boolean;
   errorCode: FirebaseAdminErrorCode | null;
+  errorStage: string | null;
+  timestamp: string;
   message: string;
 }
 
@@ -66,29 +71,39 @@ export function normalizeServiceAccountPrivateKey(rawKey: string): string {
   return unescaped.trim();
 }
 
-export function formatFirebaseAdminErrorMessage(errorCode: FirebaseAdminErrorCode | null): string {
+export function formatFirebaseAdminErrorMessage(
+  errorCode: FirebaseAdminErrorCode | null,
+  detail?: string | null
+): string {
+  if (detail && detail.trim()) {
+    return detail.trim();
+  }
   switch (errorCode) {
     case null:
       return 'Firebase Admin SDK đã khởi tạo và kết nối Firestore thành công.';
-    case 'MISSING_ENV_VAR':
-      return 'Backend chưa được cấu hình: thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ.';
-    case 'INVALID_JSON':
-      return 'Biến FIREBASE_SERVICE_ACCOUNT_JSON không phải chuỗi JSON hợp lệ (lỗi parse JSON).';
-    case 'MISSING_REQUIRED_FIELDS':
-      return 'FIREBASE_SERVICE_ACCOUNT_JSON thiếu trường bắt buộc (project_id, client_email hoặc private_key).';
-    case 'PROJECT_ID_MISMATCH':
-      return `project_id trong Service Account không khớp với dự án Firebase ${EXPECTED_FIREBASE_PROJECT_ID}.`;
-    case 'INVALID_PRIVATE_KEY_FORMAT':
-      return 'Trường private_key trong FIREBASE_SERVICE_ACCOUNT_JSON không đúng định dạng PEM hợp lệ hoặc bị lỗi ký tự xuống dòng.';
-    case 'FIRESTORE_PERMISSION_DENIED':
-      return 'Service Account không có quyền truy cập Cloud Firestore (PERMISSION_DENIED). Vui lòng kiểm tra quyền IAM cho Service Account.';
-    case 'FIRESTORE_NOT_FOUND':
-      return `Không tìm thấy cơ sở dữ liệu Firestore ${EXPECTED_FIRESTORE_DATABASE_ID} trên dự án ${EXPECTED_FIREBASE_PROJECT_ID}.`;
-    case 'FIRESTORE_UNAVAILABLE':
-      return 'Không thể kết nối tới dịch vụ Cloud Firestore từ backend.';
-    case 'ADMIN_INIT_FAILED':
-    default:
+    case 'CONFIG_MISSING':
+      return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ Vercel.';
+    case 'CONFIG_PARSE_ERROR':
+      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON hoặc thiếu project_id / client_email / project_id không khớp agile-booster-w8p5g.';
+    case 'PRIVATE_KEY_ERROR':
+      return 'Trường private_key trong FIREBASE_SERVICE_ACCOUNT_JSON không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
+    case 'ADMIN_INIT_ERROR':
       return 'Không thể khởi tạo Firebase Admin SDK trên backend.';
+    case 'AUTH_ERROR':
+      return 'Không xác thực được Firebase ID Token. Vui lòng đăng xuất và đăng nhập lại.';
+    case 'DATABASE_PERMISSION_ERROR':
+      return 'Service Account hoặc tài khoản không đủ quyền thao tác dữ liệu trên Cloud Firestore.';
+    case 'DATABASE_ERROR':
+      return `Không kết nối được tới cơ sở dữ liệu Firestore ${EXPECTED_FIRESTORE_DATABASE_ID} trên dự án ${EXPECTED_FIREBASE_PROJECT_ID}.`;
+    case 'PASSWORD_HASH_ERROR':
+      return 'Lỗi mã hóa mật khẩu đề thi trên máy chủ.';
+    case 'EXAM_SAVE_ERROR':
+      return 'Lỗi lưu cấu hình bảo mật đề thi lên Cloud Firestore.';
+    case 'API_ROUTE_ERROR':
+      return 'Không tìm thấy hoặc gọi sai API endpoint cấu hình bảo mật đề thi.';
+    case 'UNKNOWN_ERROR':
+    default:
+      return 'Đã xảy ra lỗi chưa phân loại trên máy chủ xử lý bảo mật đề thi.';
   }
 }
 
@@ -105,9 +120,9 @@ export function sanitizeSensitiveLogText(raw: string): string {
 
 export function logFirebaseAdminEvent(params: {
   api: string;
-  stage: string;
+  errorStage: string;
   errorType: string;
-  errorCode: string | null;
+  errorCode: FirebaseAdminErrorCode | string | null;
   message: string;
   firestoreStatus?: 'not_attempted' | 'connected' | 'permission_denied' | 'not_found' | 'write_failed' | 'read_failed' | 'ok';
 }): void {
@@ -115,8 +130,9 @@ export function logFirebaseAdminEvent(params: {
   console.error(
     JSON.stringify({
       scope: 'HQTest_API',
+      timestamp: new Date().toISOString(),
       api: params.api,
-      stage: params.stage,
+      errorStage: params.errorStage,
       errorType: params.errorType,
       errorCode: params.errorCode,
       message: sanitizeSensitiveLogText(params.message),
@@ -145,22 +161,15 @@ export function classifyFirestoreError(err: unknown): FirebaseAdminErrorCode {
     upper.includes('PERMISSION-DENIED') ||
     upper.includes('INSUFFICIENT PERMISSIONS')
   ) {
-    return 'FIRESTORE_PERMISSION_DENIED';
+    return 'DATABASE_PERMISSION_ERROR';
   }
-  if (
-    code === '5' ||
-    status === 404 ||
-    upper.includes('NOT_FOUND') ||
-    upper.includes('NOT-FOUND')
-  ) {
-    return 'FIRESTORE_NOT_FOUND';
-  }
-  return 'FIRESTORE_UNAVAILABLE';
+  return 'DATABASE_ERROR';
 }
 
 function parseServiceAccountJson(rawValue: string): {
   parsed?: { projectId: string; clientEmail: string; privateKey: string };
   errorCode?: FirebaseAdminErrorCode;
+  errorDetail?: string;
 } {
   let decoded: unknown;
   try {
@@ -169,11 +178,17 @@ function parseServiceAccountJson(rawValue: string): {
       decoded = JSON.parse(decoded);
     }
   } catch {
-    return { errorCode: 'INVALID_JSON' };
+    return {
+      errorCode: 'CONFIG_PARSE_ERROR',
+      errorDetail: 'Biến FIREBASE_SERVICE_ACCOUNT_JSON không phải chuỗi JSON hợp lệ (lỗi parse JSON).',
+    };
   }
 
   if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
-    return { errorCode: 'INVALID_JSON' };
+    return {
+      errorCode: 'CONFIG_PARSE_ERROR',
+      errorDetail: 'Nội dung FIREBASE_SERVICE_ACCOUNT_JSON phải là một JSON object Service Account.',
+    };
   }
 
   const obj = decoded as RawServiceAccountPayload;
@@ -181,12 +196,25 @@ function parseServiceAccountJson(rawValue: string): {
   const clientEmail = typeof obj.client_email === 'string' ? obj.client_email.trim() : '';
   const rawPrivateKey = typeof obj.private_key === 'string' ? obj.private_key : '';
 
-  if (!projectId || !clientEmail || !rawPrivateKey.trim()) {
-    return { errorCode: 'MISSING_REQUIRED_FIELDS' };
+  if (!projectId || !clientEmail) {
+    return {
+      errorCode: 'CONFIG_PARSE_ERROR',
+      errorDetail: 'FIREBASE_SERVICE_ACCOUNT_JSON thiếu trường bắt buộc (project_id hoặc client_email).',
+    };
   }
 
   if (projectId !== EXPECTED_FIREBASE_PROJECT_ID) {
-    return { errorCode: 'PROJECT_ID_MISMATCH' };
+    return {
+      errorCode: 'CONFIG_PARSE_ERROR',
+      errorDetail: `project_id trong Service Account không khớp với dự án Firebase ${EXPECTED_FIREBASE_PROJECT_ID}.`,
+    };
+  }
+
+  if (!rawPrivateKey.trim()) {
+    return {
+      errorCode: 'PRIVATE_KEY_ERROR',
+      errorDetail: 'FIREBASE_SERVICE_ACCOUNT_JSON thiếu trường private_key.',
+    };
   }
 
   const privateKey = normalizeServiceAccountPrivateKey(rawPrivateKey);
@@ -194,13 +222,19 @@ function parseServiceAccountJson(rawValue: string): {
     !privateKey.includes('-----BEGIN') ||
     !privateKey.includes('PRIVATE KEY-----')
   ) {
-    return { errorCode: 'INVALID_PRIVATE_KEY_FORMAT' };
+    return {
+      errorCode: 'PRIVATE_KEY_ERROR',
+      errorDetail: 'Trường private_key không đúng định dạng PEM hợp lệ.',
+    };
   }
 
   try {
     crypto.createPrivateKey(privateKey);
   } catch {
-    return { errorCode: 'INVALID_PRIVATE_KEY_FORMAT' };
+    return {
+      errorCode: 'PRIVATE_KEY_ERROR',
+      errorDetail: 'Không thể giải mã private_key (kiểm tra ký tự xuống dòng \\n trong JSON).',
+    };
   }
 
   return {
@@ -228,7 +262,8 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
       environmentVariablePresent: false,
       projectIdMatched: false,
       databaseIdMatched: false,
-      errorCode: 'MISSING_ENV_VAR',
+      errorCode: 'CONFIG_MISSING',
+      errorDetail: formatFirebaseAdminErrorMessage('CONFIG_MISSING'),
       app: null,
       auth: null,
       db: null,
@@ -240,18 +275,16 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
     return cachedInitResult;
   }
 
-  const { parsed, errorCode } = parseServiceAccountJson(rawEnv);
+  const { parsed, errorCode, errorDetail } = parseServiceAccountJson(rawEnv);
   if (!parsed || errorCode) {
     cachedEnvFingerprint = rawEnv;
     cachedInitResult = {
       initialized: false,
       environmentVariablePresent: true,
-      projectIdMatched:
-        errorCode !== 'PROJECT_ID_MISMATCH' &&
-        errorCode !== 'INVALID_JSON' &&
-        errorCode !== 'MISSING_REQUIRED_FIELDS',
+      projectIdMatched: errorCode === 'PRIVATE_KEY_ERROR',
       databaseIdMatched: false,
-      errorCode: errorCode || 'INVALID_JSON',
+      errorCode: errorCode || 'CONFIG_PARSE_ERROR',
+      errorDetail: errorDetail || formatFirebaseAdminErrorMessage(errorCode || 'CONFIG_PARSE_ERROR'),
       app: null,
       auth: null,
       db: null,
@@ -282,6 +315,24 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
       (db as unknown as { databaseId?: string }).databaseId || EXPECTED_FIRESTORE_DATABASE_ID;
     const databaseIdMatched = resolvedDbId === EXPECTED_FIRESTORE_DATABASE_ID;
 
+    if (!projectIdMatched || !databaseIdMatched) {
+      cachedEnvFingerprint = rawEnv;
+      cachedInitResult = {
+        initialized: false,
+        environmentVariablePresent: true,
+        projectIdMatched,
+        databaseIdMatched,
+        errorCode: 'ADMIN_INIT_ERROR',
+        errorDetail: !projectIdMatched
+          ? `Firebase Admin App projectId không khớp ${EXPECTED_FIREBASE_PROJECT_ID}.`
+          : `Firestore Database ID không khớp ${EXPECTED_FIRESTORE_DATABASE_ID}.`,
+        app: null,
+        auth: null,
+        db: null,
+      };
+      return cachedInitResult;
+    }
+
     cachedEnvFingerprint = rawEnv;
     cachedInitResult = {
       initialized: true,
@@ -289,6 +340,7 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
       projectIdMatched,
       databaseIdMatched,
       errorCode: null,
+      errorDetail: null,
       app,
       auth,
       db,
@@ -298,14 +350,21 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
     const safeCode =
       err && typeof err === 'object' && 'code' in err && typeof err.code === 'string'
         ? err.code
-        : 'ADMIN_INIT_FAILED';
+        : 'ADMIN_INIT_ERROR';
     const isPrivateKeyIssue =
       safeCode.includes('invalid-credential') ||
       (err instanceof Error && err.message.toLowerCase().includes('private key'));
     const classified: FirebaseAdminErrorCode = isPrivateKeyIssue
-      ? 'INVALID_PRIVATE_KEY_FORMAT'
-      : 'ADMIN_INIT_FAILED';
-    console.error(`[HQTest Admin] Initialization failed with code: ${classified}`);
+      ? 'PRIVATE_KEY_ERROR'
+      : 'ADMIN_INIT_ERROR';
+    logFirebaseAdminEvent({
+      api: 'firebaseAdmin.init',
+      errorStage: 'admin_sdk_init',
+      errorType: err instanceof Error ? err.name || 'Error' : typeof err,
+      errorCode: classified,
+      message: err instanceof Error ? err.message : 'Firebase Admin initialization failed',
+      firestoreStatus: 'not_attempted',
+    });
     cachedEnvFingerprint = rawEnv;
     cachedInitResult = {
       initialized: false,
@@ -313,6 +372,7 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
       projectIdMatched: true,
       databaseIdMatched: false,
       errorCode: classified,
+      errorDetail: formatFirebaseAdminErrorMessage(classified),
       app: null,
       auth: null,
       db: null,
@@ -329,7 +389,7 @@ export function isFirebaseAdminReady(): boolean {
 export function getFirebaseAdminDb(): Firestore {
   const state = getFirebaseAdminState();
   if (!state.initialized || !state.db) {
-    throw new Error(state.errorCode || 'MISSING_ENV_VAR');
+    throw new Error(state.errorCode || 'CONFIG_MISSING');
   }
   return state.db;
 }
@@ -337,7 +397,7 @@ export function getFirebaseAdminDb(): Firestore {
 export function getFirebaseAdminAuth(): Auth {
   const state = getFirebaseAdminState();
   if (!state.initialized || !state.auth) {
-    throw new Error(state.errorCode || 'MISSING_ENV_VAR');
+    throw new Error(state.errorCode || 'CONFIG_MISSING');
   }
   return state.auth;
 }
@@ -348,8 +408,9 @@ export function getFirebaseAdminFieldValue(): typeof FieldValue {
 
 export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthStatus> {
   const state = getFirebaseAdminState();
+  const timestamp = new Date().toISOString();
   if (!state.initialized || !state.db) {
-    const errorCode = state.errorCode || 'ADMIN_INIT_FAILED';
+    const errorCode = state.errorCode || 'ADMIN_INIT_ERROR';
     return {
       adminInitialized: false,
       projectIdMatched: state.projectIdMatched,
@@ -357,7 +418,9 @@ export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthSta
       databaseIdMatched: false,
       environmentVariablePresent: state.environmentVariablePresent,
       errorCode,
-      message: formatFirebaseAdminErrorMessage(errorCode),
+      errorStage: 'admin_sdk_init',
+      timestamp,
+      message: formatFirebaseAdminErrorMessage(errorCode, state.errorDetail),
     };
   }
 
@@ -370,11 +433,20 @@ export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthSta
       databaseIdMatched: state.databaseIdMatched,
       environmentVariablePresent: true,
       errorCode: null,
+      errorStage: null,
+      timestamp,
       message: formatFirebaseAdminErrorMessage(null),
     };
   } catch (err) {
     const errorCode = classifyFirestoreError(err);
-    console.error(`[HQTest Admin] Firestore health check failed: ${errorCode}`);
+    logFirebaseAdminEvent({
+      api: 'GET /api/health/firebase-admin',
+      errorStage: 'firestore_connectivity_check',
+      errorType: err instanceof Error ? err.name || 'Error' : typeof err,
+      errorCode,
+      message: err instanceof Error ? err.message : 'Firestore health check failed',
+      firestoreStatus: errorCode === 'DATABASE_PERMISSION_ERROR' ? 'permission_denied' : 'read_failed',
+    });
     return {
       adminInitialized: true,
       projectIdMatched: state.projectIdMatched,
@@ -382,6 +454,8 @@ export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthSta
       databaseIdMatched: state.databaseIdMatched,
       environmentVariablePresent: true,
       errorCode,
+      errorStage: 'firestore_connectivity_check',
+      timestamp,
       message: formatFirebaseAdminErrorMessage(errorCode),
     };
   }

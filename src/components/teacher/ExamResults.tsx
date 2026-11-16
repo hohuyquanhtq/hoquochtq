@@ -21,20 +21,45 @@ import { ChemRenderer } from '../../utils/chemRenderer';
 import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
 
 interface ExamResultsProps {
-  exam: Exam;
+  exam?: Exam;
+  exams?: Exam[];
   submissions: StudentSubmission[];
+  onSelectExam?: (examId: string) => void;
   onBack: () => void;
   onShareExam?: (exam: Exam) => void;
 }
 
 export const ExamResults: React.FC<ExamResultsProps> = ({
   exam,
+  exams = [],
   submissions,
+  onSelectExam,
   onBack,
   onShareExam,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedClass, setSelectedClass] = useState<string>('all');
+
+  if (!exam) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-4 shadow-xs">
+        <div className="w-12 h-12 rounded-2xl bg-slate-100 text-slate-600 flex items-center justify-center mx-auto">
+          <BarChart3 className="w-6 h-6" />
+        </div>
+        <h2 className="text-lg font-bold text-slate-900">Chưa có đề thi để xem kết quả</h2>
+        <p className="text-sm text-slate-600 max-w-md mx-auto">
+          Hãy tạo hoặc tải lên một đề thi và mở phòng thi để theo dõi điểm số và thống kê bài làm của học sinh tại đây.
+        </p>
+        <button
+          type="button"
+          onClick={onBack}
+          className="px-4 py-2.5 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold"
+        >
+          Quay về Kho đề thi
+        </button>
+      </div>
+    );
+  }
 
   const filteredSubs = submissions.filter(s => {
     if (selectedClass !== 'all' && s.studentClass !== selectedClass) return false;
@@ -78,65 +103,80 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
     <div className="space-y-6">
       
       {/* Top Header */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBack}
-            className="p-2 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors"
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </button>
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-mono text-xs font-bold px-2 py-0.5 rounded-md bg-blue-100 text-blue-800">
-                {exam.code}
-              </span>
-              {exam.requiresPassword && (
-                <span className="text-[11px] font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 inline-flex items-center gap-1">
-                  <Lock className="w-3 h-3" />
-                  <span>Có mật khẩu</span>
-                </span>
-              )}
-              <span
-                className={`text-[11px] font-bold px-2 py-0.5 rounded-md ${
-                  policy.allowAnswerReview
-                    ? 'bg-indigo-100 text-indigo-800'
-                    : 'bg-rose-50 text-rose-700'
-                }`}
-              >
-                {policy.allowAnswerReview
-                  ? `Điểm sàn xem đáp án: ≥ ${policy.answerReviewMinScore.toFixed(1)}đ`
-                  : 'Không mở đáp án'}
-              </span>
-              <span className="text-xs font-semibold text-slate-500">
-                Báo cáo &amp; Thống kê kết quả kiểm tra
-              </span>
-            </div>
-            <h1 className="text-xl md:text-2xl font-extrabold text-slate-900 mt-1">
-              {exam.title}
-            </h1>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
-          {onShareExam && (
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
             <button
-              onClick={() => onShareExam(exam)}
-              className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-md shadow-blue-500/20 transition-all flex items-center gap-2"
-              title="Lấy link trực tiếp và tạo mã QR cho học sinh"
+              type="button"
+              onClick={onBack}
+              className="p-2.5 rounded-xl border border-slate-200 hover:bg-slate-100 text-slate-600 transition-colors"
             >
-              <BarChart3 className="w-4 h-4 hidden" />
-              <span>Chia sẻ &amp; QR</span>
+              <ArrowLeft className="w-5 h-5" />
             </button>
-          )}
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="font-mono text-xs font-bold px-2 py-0.5 rounded-md bg-teal-100 text-teal-800">
+                  {exam.code}
+                </span>
+                {exam.requiresPassword && (
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 inline-flex items-center gap-1">
+                    <Lock className="w-3 h-3" />
+                    <span>Có mật khẩu</span>
+                  </span>
+                )}
+                <span
+                  className={`text-xs font-bold px-2 py-0.5 rounded-md ${
+                    policy.allowAnswerReview
+                      ? 'bg-indigo-100 text-indigo-800'
+                      : 'bg-rose-50 text-rose-700'
+                  }`}
+                >
+                  {policy.allowAnswerReview
+                    ? `Điểm sàn xem đáp án: ≥ ${policy.answerReviewMinScore.toFixed(1)}đ`
+                    : 'Không mở đáp án'}
+                </span>
+              </div>
+              <h1 className="text-xl md:text-2xl font-bold text-slate-900 mt-1">
+                {exam.title}
+              </h1>
+            </div>
+          </div>
 
-          <button
-            onClick={handleExport}
-            className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold shadow-md shadow-emerald-500/20 transition-all flex items-center gap-2"
-          >
-            <FileSpreadsheet className="w-4 h-4" />
-            <span>Xuất Bảng Điểm Excel (.xlsx)</span>
-          </button>
+          <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+            {exams.length > 1 && onSelectExam && (
+              <select
+                value={exam.id}
+                onChange={(e) => onSelectExam(e.target.value)}
+                className="min-h-[44px] px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-50 text-sm font-semibold text-slate-800 max-w-xs"
+              >
+                {exams.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.code} — {item.title}
+                  </option>
+                ))}
+              </select>
+            )}
+
+            {onShareExam && (
+              <button
+                type="button"
+                onClick={() => onShareExam(exam)}
+                className="min-h-[44px] px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold shadow-xs transition-all flex items-center gap-2"
+                title="Lấy link trực tiếp và tạo mã QR cho học sinh"
+              >
+                <span>Chia sẻ &amp; QR</span>
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleExport}
+              className="min-h-[44px] px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs transition-all flex items-center gap-2"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              <span>Xuất Excel (.xlsx)</span>
+            </button>
+          </div>
         </div>
       </div>
 

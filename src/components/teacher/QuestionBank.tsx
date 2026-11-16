@@ -91,10 +91,28 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     }
   };
 
+  const [newQType, setNewQType] = useState<QuestionType>('part1_single_choice');
+  const [newStatements, setNewStatements] = useState<Array<{ id: string; statement: string; correctAnswer: boolean }>>([
+    { id: 'a', statement: '', correctAnswer: true },
+    { id: 'b', statement: '', correctAnswer: false },
+    { id: 'c', statement: '', correctAnswer: true },
+    { id: 'd', statement: '', correctAnswer: false },
+  ]);
+  const [newShortAnswer, setNewShortAnswer] = useState('');
+  const [newShortUnit, setNewShortUnit] = useState('');
+
   const handleAiExplain = async (q: Question) => {
     setAiLoadingId(q.id);
     try {
       const exp = await generateAiChemistryExplanation(q);
+      const isErrorNotice =
+        exp.startsWith('Lưu ý: Cần thiết lập GEMINI_API_KEY') ||
+        exp.startsWith('Đã xảy ra lỗi khi kết nối') ||
+        exp.startsWith('Không thể tạo lời giải tự động');
+      if (isErrorNotice) {
+        showToast(exp);
+        return;
+      }
       const updated = { ...q, explanation: exp };
       onUpdateQuestion(updated);
       showToast('Đã tạo giải thích hóa học thành công!');
@@ -465,7 +483,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
               {editingQuestion.type === 'part1_single_choice' && (
                 <div className="space-y-2">
-                  <label className="block font-bold text-slate-700">Các phương án & Đáp án đúng:</label>
+                  <label className="block font-bold text-slate-700">Các phương án &amp; Đáp án đúng:</label>
                   {editingQuestion.options?.map((opt, i) => (
                     <div key={opt.id} className="flex items-center gap-2">
                       <input
@@ -481,13 +499,96 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                         value={opt.text}
                         onChange={(e) => {
                           const newOpts = [...(editingQuestion.options || [])];
-                          newOpts[i].text = e.target.value;
+                          newOpts[i] = { ...newOpts[i], text: e.target.value };
                           setEditingQuestion({ ...editingQuestion, options: newOpts });
                         }}
                         className="flex-1 p-2 rounded-lg border border-slate-300 text-xs"
                       />
                     </div>
                   ))}
+                </div>
+              )}
+
+              {editingQuestion.type === 'part2_true_false' && (
+                <div className="space-y-2">
+                  <label className="block font-bold text-slate-700">Các mệnh đề Đúng / Sai:</label>
+                  {(editingQuestion.statements || []).map((stmt, i) => (
+                    <div key={stmt.id} className="flex items-center gap-2 p-2 rounded-xl bg-slate-50 border border-slate-200">
+                      <span className="font-bold text-indigo-700 w-5">{stmt.id})</span>
+                      <input
+                        type="text"
+                        value={stmt.statement}
+                        onChange={(e) => {
+                          const nextStmts = [...(editingQuestion.statements || [])];
+                          nextStmts[i] = { ...nextStmts[i], statement: e.target.value };
+                          setEditingQuestion({ ...editingQuestion, statements: nextStmts });
+                        }}
+                        className="flex-1 p-2 rounded-lg border border-slate-300 text-xs bg-white"
+                      />
+                      <select
+                        value={stmt.correctAnswer ? 'true' : 'false'}
+                        onChange={(e) => {
+                          const nextStmts = [...(editingQuestion.statements || [])];
+                          nextStmts[i] = { ...nextStmts[i], correctAnswer: e.target.value === 'true' };
+                          setEditingQuestion({ ...editingQuestion, statements: nextStmts });
+                        }}
+                        className="p-2 rounded-lg border border-slate-300 text-xs font-bold bg-white"
+                      >
+                        <option value="true">Đúng</option>
+                        <option value="false">Sai</option>
+                      </select>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {editingQuestion.type === 'part3_short_answer' && (
+                <div className="space-y-2">
+                  <label className="block font-bold text-slate-700">
+                    Đáp án chấp nhận (cách nhau bởi dấu chấm phẩy `;`):
+                  </label>
+                  <input
+                    type="text"
+                    value={editingQuestion.shortAnswerConfig?.acceptableAnswers.join('; ') || ''}
+                    onChange={(e) => {
+                      const list = e.target.value
+                        .split(';')
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                      const firstNum = Number((list[0] || '').replace(',', '.'));
+                      const isNum = list.length > 0 && !Number.isNaN(firstNum);
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        shortAnswerConfig: {
+                          ...editingQuestion.shortAnswerConfig,
+                          acceptableAnswers: list,
+                          isNumeric: isNum,
+                          numericValue: isNum ? firstNum : undefined,
+                          tolerance: editingQuestion.shortAnswerConfig?.tolerance ?? 0.05,
+                        },
+                      });
+                    }}
+                    placeholder="Ví dụ: 58,4; 58.4"
+                    className="w-full p-2 rounded-lg border border-slate-300 text-xs font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={editingQuestion.shortAnswerConfig?.unit || ''}
+                    onChange={(e) =>
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        shortAnswerConfig: {
+                          acceptableAnswers: editingQuestion.shortAnswerConfig?.acceptableAnswers || [],
+                          isNumeric: editingQuestion.shortAnswerConfig?.isNumeric ?? false,
+                          numericValue: editingQuestion.shortAnswerConfig?.numericValue,
+                          tolerance: editingQuestion.shortAnswerConfig?.tolerance ?? 0.05,
+                          unit: e.target.value,
+                        },
+                      })
+                    }
+                    placeholder="Đơn vị tính (tùy chọn, VD: gam, L, %)"
+                    className="w-full p-2 rounded-lg border border-slate-300 text-xs"
+                  />
                 </div>
               )}
 
@@ -536,7 +637,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               e.preventDefault();
               const form = e.currentTarget;
               const content = (form.elements.namedItem('content') as HTMLTextAreaElement).value;
-              const qType = (form.elements.namedItem('type') as HTMLSelectElement).value as QuestionType;
+              const qType = newQType;
               const grade = (form.elements.namedItem('grade') as HTMLSelectElement).value as ChemGrade;
               const topic = (form.elements.namedItem('topic') as HTMLSelectElement).value as ChemTopic;
               const level = (form.elements.namedItem('level') as HTMLSelectElement).value as CognitiveLevel;
@@ -546,6 +647,13 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               const optD = (form.elements.namedItem('optD') as HTMLInputElement)?.value || '';
               const correctOpt = (form.elements.namedItem('correctOpt') as HTMLSelectElement)?.value || 'A';
               const explanation = (form.elements.namedItem('explanation') as HTMLTextAreaElement)?.value || '';
+
+              const shortAnswersList = newShortAnswer
+                .split(';')
+                .map((s) => s.trim())
+                .filter(Boolean);
+              const firstNum = Number((shortAnswersList[0] || '').replace(',', '.'));
+              const isShortNum = shortAnswersList.length > 0 && !Number.isNaN(firstNum);
 
               const newQ: Question = {
                 id: `q_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -562,6 +670,14 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                   { id: 'D', text: optD, isCorrect: correctOpt === 'D' },
                 ] : undefined,
                 correctOptionId: qType === 'part1_single_choice' ? correctOpt : undefined,
+                statements: qType === 'part2_true_false' ? newStatements.map((s) => ({ ...s })) : undefined,
+                shortAnswerConfig: qType === 'part3_short_answer' ? {
+                  acceptableAnswers: shortAnswersList,
+                  isNumeric: isShortNum,
+                  numericValue: isShortNum ? firstNum : undefined,
+                  tolerance: 0.05,
+                  ...(newShortUnit.trim() ? { unit: newShortUnit.trim() } : {}),
+                } : undefined,
                 explanation,
                 authorId: 'teacher_curr',
                 createdAt: new Date().toISOString(),
@@ -571,6 +687,15 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
               onAddQuestion(newQ);
               setIsAddModalOpen(false);
+              setNewQType('part1_single_choice');
+              setNewStatements([
+                { id: 'a', statement: '', correctAnswer: true },
+                { id: 'b', statement: '', correctAnswer: false },
+                { id: 'c', statement: '', correctAnswer: true },
+                { id: 'd', statement: '', correctAnswer: false },
+              ]);
+              setNewShortAnswer('');
+              setNewShortUnit('');
               showToast('Đã thêm câu hỏi vào Ngân hàng!');
             }} className="p-6 overflow-y-auto flex-1 space-y-4 text-xs">
               <div className="grid grid-cols-3 gap-3">
@@ -606,7 +731,12 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Dạng câu hỏi</label>
-                <select name="type" className="w-full p-2 rounded-xl border border-slate-300">
+                <select
+                  name="type"
+                  value={newQType}
+                  onChange={(e) => setNewQType(e.target.value as QuestionType)}
+                  className="w-full p-2 rounded-xl border border-slate-300"
+                >
                   <option value="part1_single_choice">Phần I: Trắc nghiệm 4 lựa chọn (A, B, C, D)</option>
                   <option value="part2_true_false">Phần II: Đúng - Sai 4 ý</option>
                   <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
@@ -624,24 +754,84 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 />
               </div>
 
-              <div className="space-y-2">
-                <label className="block font-bold text-slate-700">Các phương án A, B, C, D:</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input name="optA" placeholder="Phương án A" className="p-2 rounded-lg border border-slate-300" />
-                  <input name="optB" placeholder="Phương án B" className="p-2 rounded-lg border border-slate-300" />
-                  <input name="optC" placeholder="Phương án C" className="p-2 rounded-lg border border-slate-300" />
-                  <input name="optD" placeholder="Phương án D" className="p-2 rounded-lg border border-slate-300" />
+              {newQType === 'part1_single_choice' && (
+                <div className="space-y-2">
+                  <label className="block font-bold text-slate-700">Các phương án A, B, C, D:</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <input name="optA" placeholder="Phương án A" className="p-2 rounded-lg border border-slate-300" />
+                    <input name="optB" placeholder="Phương án B" className="p-2 rounded-lg border border-slate-300" />
+                    <input name="optC" placeholder="Phương án C" className="p-2 rounded-lg border border-slate-300" />
+                    <input name="optD" placeholder="Phương án D" className="p-2 rounded-lg border border-slate-300" />
+                  </div>
+                  <div className="flex items-center gap-2 pt-1">
+                    <span className="font-bold text-slate-700">Đáp án đúng:</span>
+                    <select name="correctOpt" className="p-1.5 rounded-lg border border-slate-300 font-bold">
+                      <option value="A">A</option>
+                      <option value="B">B</option>
+                      <option value="C">C</option>
+                      <option value="D">D</option>
+                    </select>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 pt-1">
-                  <span className="font-bold text-slate-700">Đáp án đúng:</span>
-                  <select name="correctOpt" className="p-1.5 rounded-lg border border-slate-300 font-bold">
-                    <option value="A">A</option>
-                    <option value="B">B</option>
-                    <option value="C">C</option>
-                    <option value="D">D</option>
-                  </select>
+              )}
+
+              {newQType === 'part2_true_false' && (
+                <div className="space-y-2">
+                  <label className="block font-bold text-slate-700">4 mệnh đề Đúng / Sai (a, b, c, d):</label>
+                  {newStatements.map((stmt, idx) => (
+                    <div key={stmt.id} className="flex items-center gap-2">
+                      <span className="font-bold text-indigo-700 w-5">{stmt.id})</span>
+                      <input
+                        type="text"
+                        required
+                        value={stmt.statement}
+                        onChange={(e) => {
+                          const next = [...newStatements];
+                          next[idx] = { ...next[idx], statement: e.target.value };
+                          setNewStatements(next);
+                        }}
+                        placeholder={`Nội dung mệnh đề ${stmt.id})`}
+                        className="flex-1 p-2 rounded-lg border border-slate-300"
+                      />
+                      <select
+                        value={stmt.correctAnswer ? 'true' : 'false'}
+                        onChange={(e) => {
+                          const next = [...newStatements];
+                          next[idx] = { ...next[idx], correctAnswer: e.target.value === 'true' };
+                          setNewStatements(next);
+                        }}
+                        className="p-2 rounded-lg border border-slate-300 font-bold"
+                      >
+                        <option value="true">Đúng</option>
+                        <option value="false">Sai</option>
+                      </select>
+                    </div>
+                  ))}
                 </div>
-              </div>
+              )}
+
+              {newQType === 'part3_short_answer' && (
+                <div className="space-y-2">
+                  <label className="block font-bold text-slate-700">
+                    Đáp án chấp nhận (cách nhau bởi dấu chấm phẩy `;`):
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newShortAnswer}
+                    onChange={(e) => setNewShortAnswer(e.target.value)}
+                    placeholder="Ví dụ: 6,72; 6.72 hoặc -46"
+                    className="w-full p-2 rounded-lg border border-slate-300 font-mono"
+                  />
+                  <input
+                    type="text"
+                    value={newShortUnit}
+                    onChange={(e) => setNewShortUnit(e.target.value)}
+                    placeholder="Đơn vị (tùy chọn, VD: L, gam, %)"
+                    className="w-full p-2 rounded-lg border border-slate-300"
+                  />
+                </div>
+              )}
 
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Hướng dẫn giải</label>

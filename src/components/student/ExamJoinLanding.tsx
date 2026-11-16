@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Clock,
   FileText,
@@ -67,6 +67,17 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   const [studentName, setStudentName] = useState(currentUser?.name || '');
   const [studentClass, setStudentClass] = useState(currentUser?.className || '12 Hóa 1');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (currentUser) {
+      setStudentName((prev) => (prev.trim() ? prev : currentUser.name || ''));
+      if (currentUser.className) {
+        setStudentClass((prev) =>
+          !prev.trim() || prev === '12 Hóa 1' ? currentUser.className || prev : prev
+        );
+      }
+    }
+  }, [currentUser]);
 
   // Password gate state
   const [examPassword, setExamPassword] = useState('');
