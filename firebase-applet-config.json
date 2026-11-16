@@ -1,12 +1,12 @@
 {
-  "projectId": "agile-booster-w8p5g",
-  "appId": "1:181596922979:web:bf63dd49b292c4467ec456",
-  "apiKey": "AIzaSyCuy_uGhM7OzfmtLkfr-Po2U3Os2AGQN3g",
-  "authDomain": "agile-booster-w8p5g.firebaseapp.com",
+  "projectId": "hqtest-online",
+  "appId": "1:719628828058:web:91c97db3b80cc3b9e00e23",
+  "apiKey": "AIzaSyCARMWY9w2hXb9NLQ7TbizVmQa0aNXe0yQ",
+  "authDomain": "hqtest-online.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e",
-  "storageBucket": "agile-booster-w8p5g.firebasestorage.app",
-  "messagingSenderId": "181596922979",
+  "storageBucket": "hqtest-online.firebasestorage.app",
+  "messagingSenderId": "719628828058",
   "measurementId": "",
-  "oAuthClientId": "181596922979-l7aiikml2cr1eifoma9rhq8g7iboaurm.apps.googleusercontent.com",
+  "oAuthClientId": "719628828058-o6fjbo4q9cc8t27pscun425vkp8oeh2t.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

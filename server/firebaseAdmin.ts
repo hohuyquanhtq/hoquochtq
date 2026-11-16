@@ -9,7 +9,7 @@ import {
 import { getAuth, type Auth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore, type Firestore } from 'firebase-admin/firestore';
 
-export const EXPECTED_FIREBASE_PROJECT_ID = 'agile-booster-w8p5g';
+export const EXPECTED_FIREBASE_PROJECT_ID = 'hqtest-online';
 export const EXPECTED_FIRESTORE_DATABASE_ID =
   'ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e';
 
@@ -114,7 +114,7 @@ export function formatFirebaseAdminErrorMessage(
     case 'CONFIG_MISSING':
       return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ Vercel.';
     case 'CONFIG_PARSE_ERROR':
-      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON, thiếu trường bắt buộc (type, project_id, private_key_id, private_key, client_email, client_id), type != service_account hoặc project_id không khớp agile-booster-w8p5g.';
+      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON, thiếu trường bắt buộc (type, project_id, private_key_id, private_key, client_email, client_id), type != service_account hoặc project_id không khớp hqtest-online.';
     case 'PRIVATE_KEY_ERROR':
       return 'Trường private_key trong FIREBASE_SERVICE_ACCOUNT_JSON không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
     case 'ADMIN_INIT_ERROR':
