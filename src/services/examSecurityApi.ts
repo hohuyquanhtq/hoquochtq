@@ -98,16 +98,30 @@ export async function configureExamSecurityOnServer(
       },
       body: JSON.stringify(params),
     });
-    const data = (await res.json().catch(() => ({}))) as {
+    const rawText = await res.text().catch(() => '');
+    let data: {
       ok?: boolean;
       error?: string;
       code?: string;
+      stage?: string;
       passwordUpdatedAt?: string | null;
-    };
+    } = {};
+    if (rawText) {
+      try {
+        data = JSON.parse(rawText) as typeof data;
+      } catch {
+        data = {};
+      }
+    }
     if (!res.ok || !data.ok) {
+      const fallbackMsg =
+        res.status === 500 && !data.error
+          ? 'Lỗi máy chủ Vercel (HTTP 500) khi khởi chạy API bảo mật đề thi. Vui lòng kiểm tra /api/health/firebase-admin và Vercel Function Logs.'
+          : `Lỗi cấu hình bảo mật đề thi (${res.status}).`;
+      const codeSuffix = data.code ? ` [${data.code}]` : '';
       return {
         ok: false,
-        error: data.error || `Lỗi cấu hình bảo mật đề thi (${res.status}).`,
+        error: `${data.error || fallbackMsg}${data.error && data.code ? codeSuffix : ''}`,
         code: data.code,
       };
     }

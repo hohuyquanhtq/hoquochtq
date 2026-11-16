@@ -30,8 +30,22 @@ async function startServer() {
         });
         res.status(out.status).json(out.body);
       } catch (err) {
-        const msg = err instanceof Error ? err.message : 'Internal server error';
-        res.status(500).json({ error: msg });
+        const rawMsg = err instanceof Error ? err.message : 'Internal server error';
+        const errorType = err instanceof Error ? err.name || 'Error' : typeof err;
+        console.error(
+          JSON.stringify({
+            scope: 'HQTest_API',
+            api: req.originalUrl || req.url,
+            stage: 'express_wrapper_catch',
+            errorType,
+            errorCode: 'INTERNAL_SERVER_ERROR',
+            message: rawMsg.slice(0, 400),
+          })
+        );
+        res.status(500).json({
+          error: `Lỗi máy chủ (${errorType}): vui lòng kiểm tra /api/health/firebase-admin.`,
+          code: 'INTERNAL_SERVER_ERROR',
+        });
       }
     };
 

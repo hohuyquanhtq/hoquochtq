@@ -92,6 +92,44 @@ export function formatFirebaseAdminErrorMessage(errorCode: FirebaseAdminErrorCod
   }
 }
 
+export function sanitizeSensitiveLogText(raw: string): string {
+  if (!raw) return '';
+  return raw
+    .replace(/-----BEGIN[^-]*PRIVATE KEY-----[\s\S]*?-----END[^-]*PRIVATE KEY-----/gi, '[REDACTED_PRIVATE_KEY]')
+    .replace(/scrypt\$\d+\$\d+\$\d+\$[a-f0-9]+\$[a-f0-9]+/gi, '[REDACTED_PASSWORD_HASH]')
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}\b/g, '[REDACTED_TOKEN]')
+    .replace(/Bearer\s+[^\s"']+/gi, 'Bearer [REDACTED]')
+    .replace(/"private_key"\s*:\s*"[^"]*"/gi, '"private_key":"[REDACTED]"')
+    .slice(0, 500);
+}
+
+export function logFirebaseAdminEvent(params: {
+  api: string;
+  stage: string;
+  errorType: string;
+  errorCode: string | null;
+  message: string;
+  firestoreStatus?: 'not_attempted' | 'connected' | 'permission_denied' | 'not_found' | 'write_failed' | 'read_failed' | 'ok';
+}): void {
+  const state = cachedInitResult;
+  console.error(
+    JSON.stringify({
+      scope: 'HQTest_API',
+      api: params.api,
+      stage: params.stage,
+      errorType: params.errorType,
+      errorCode: params.errorCode,
+      message: sanitizeSensitiveLogText(params.message),
+      adminInitialized: Boolean(state?.initialized),
+      projectIdMatched: Boolean(state?.projectIdMatched),
+      databaseIdMatched: Boolean(state?.databaseIdMatched),
+      environmentVariablePresent: Boolean((process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim()),
+      adminErrorCode: state?.errorCode ?? null,
+      firestoreStatus: params.firestoreStatus ?? 'not_attempted',
+    })
+  );
+}
+
 export function classifyFirestoreError(err: unknown): FirebaseAdminErrorCode {
   const code =
     err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : '';

@@ -16,6 +16,8 @@ import {
   classifyFirestoreError,
   formatFirebaseAdminErrorMessage,
   getFirebaseAdminState,
+  logFirebaseAdminEvent,
+  sanitizeSensitiveLogText,
   type FirebaseAdminErrorCode,
 } from './firebaseAdmin.ts';
 import {
@@ -532,16 +534,33 @@ function resolveAdminDiagnostic(store: ExamSecurityStore): ExamAdminDiagnostic {
 function mapBackendFailureToResponse(
   err: unknown,
   store: ExamSecurityStore,
-  extraBody: Record<string, unknown> = {}
+  context: {
+    api: string;
+    stage: string;
+    firestoreStatus?: 'not_attempted' | 'permission_denied' | 'not_found' | 'write_failed' | 'read_failed';
+    extraBody?: Record<string, unknown>;
+  }
 ): ApiResponse {
-  const rawMsg = err instanceof Error ? err.message : '';
+  const extraBody = context.extraBody || {};
+  const rawMsg = err instanceof Error ? err.message : String(err);
+  const errorType = err instanceof Error ? err.name || 'Error' : typeof err;
+
   if (rawMsg === 'SERVER_CREDENTIALS_MISSING') {
     const diag = resolveAdminDiagnostic(store);
     const errorCode = diag.errorCode || 'MISSING_ENV_VAR';
+    logFirebaseAdminEvent({
+      api: context.api,
+      stage: context.stage,
+      errorType: 'AdminSdkNotReady',
+      errorCode,
+      message: diag.message,
+      firestoreStatus: 'not_attempted',
+    });
     return {
       status: 503,
       body: {
         ...extraBody,
+        stage: context.stage,
         code: errorCode,
         error: diag.message,
         ...('message' in extraBody ? { message: diag.message } : {}),
@@ -552,10 +571,30 @@ function mapBackendFailureToResponse(
   const fsCode = classifyFirestoreError(err);
   const friendly = formatFirebaseAdminErrorMessage(fsCode);
   const status = fsCode === 'FIRESTORE_PERMISSION_DENIED' ? 403 : 503;
+  const firestoreStatus =
+    context.firestoreStatus ||
+    (fsCode === 'FIRESTORE_PERMISSION_DENIED'
+      ? 'permission_denied'
+      : fsCode === 'FIRESTORE_NOT_FOUND'
+      ? 'not_found'
+      : context.stage.includes('write') || context.stage.includes('save')
+      ? 'write_failed'
+      : 'read_failed');
+
+  logFirebaseAdminEvent({
+    api: context.api,
+    stage: context.stage,
+    errorType,
+    errorCode: fsCode,
+    message: `${friendly} (${sanitizeSensitiveLogText(rawMsg)})`,
+    firestoreStatus,
+  });
+
   return {
     status,
     body: {
       ...extraBody,
+      stage: context.stage,
       code: fsCode,
       error: friendly,
       ...('message' in extraBody ? { message: friendly } : {}),
@@ -569,250 +608,352 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
    * Authenticated teacher owner (or admin) configures exam password & floor-score answer settings.
    */
   async function handleConfigureExamSecurity(req: ApiRequest): Promise<ApiResponse> {
+    const apiName = 'POST /api/exams/security/configure';
+    let stage = 'method_check';
+
     if (req.method !== 'POST') {
       return { status: 405, body: { error: 'Phương thức không hợp lệ.' } };
     }
 
-    const bearer = extractBearerToken(req);
-    const caller = await store.verifyIdToken(bearer);
-    if (!caller) {
-      return { status: 401, body: { error: 'Vui lòng đăng nhập tài khoản giáo viên hợp lệ.' } };
-    }
-
-    const body = (req.body || {}) as Record<string, unknown>;
-    const examCode = normalizeExamCodeServer(String(body.examCode || ''));
-    const examId = String(body.examId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
-
-    if (!validateSafeDocCode(examCode) || !examId) {
-      return { status: 400, body: { error: 'Mã đề thi hoặc ID đề thi không hợp lệ.' } };
-    }
-
-    let roleInfo: { role?: string; status?: string; isAdmin: boolean };
-    let existingSecret: ExamSecretRecord | null = null;
-    let existingStatus: Record<string, unknown> | null = null;
-    let existingMaster: Record<string, unknown> | null = null;
-
     try {
-      roleInfo = await store.getUserRoleInfo(caller.uid, bearer);
-      const isTeacher = roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
-      if (!isTeacher) {
+      stage = 'auth_verify_id_token';
+      const bearer = extractBearerToken(req);
+      const caller = await store.verifyIdToken(bearer);
+      if (!caller) {
+        logFirebaseAdminEvent({
+          api: apiName,
+          stage,
+          errorType: 'AuthError',
+          errorCode: 'UNAUTHENTICATED',
+          message: 'Missing or invalid Firebase ID Token',
+        });
         return {
-          status: 403,
-          body: { error: 'Chỉ tài khoản giáo viên đang hoạt động hoặc quản trị viên mới có quyền cấu hình bảo mật đề thi.' },
-        };
-      }
-
-      if (store.hasAdminAccess()) {
-        existingSecret = await store.getExamSecret(examCode);
-      }
-      existingStatus = await store.getExamStatus(examCode, bearer);
-      existingMaster = await store.getMasterExam(examId, bearer);
-    } catch (err) {
-      return mapBackendFailureToResponse(err, store);
-    }
-
-    const existingOwner = String(
-      existingSecret?.ownerId || existingMaster?.ownerId || existingStatus?.ownerId || caller.uid
-    );
-
-    if (!roleInfo.isAdmin && existingOwner !== caller.uid) {
-      return { status: 403, body: { error: 'Bạn không phải chủ sở hữu của đề thi này.' } };
-    }
-
-    const requiresPassword = Boolean(body.requiresPassword);
-    const passwordAction = String(
-      body.passwordAction || (requiresPassword ? 'set' : 'clear')
-    ) as 'set' | 'keep' | 'clear';
-    const rawPassword = typeof body.password === 'string' ? body.password : '';
-
-    // Validate answer review parameters
-    const allowAnswerReview =
-      typeof body.allowAnswerReview === 'boolean' ? body.allowAnswerReview : true;
-    const rawMinScore = Number(body.answerReviewMinScore ?? 8.0);
-    if (!Number.isFinite(rawMinScore) || rawMinScore < 0 || rawMinScore > 10) {
-      return {
-        status: 400,
-        body: { error: 'Điểm sàn xem đáp án phải nằm trong khoảng từ 0.0 đến 10.0 điểm.' },
-      };
-    }
-    const answerReviewMinScore = Math.round(rawMinScore * 100) / 100;
-
-    let answerReviewEnabledAt: string | null = null;
-    if (typeof body.answerReviewEnabledAt === 'string' && body.answerReviewEnabledAt.trim()) {
-      const parsedMs = Date.parse(body.answerReviewEnabledAt.trim());
-      if (!Number.isFinite(parsedMs)) {
-        return { status: 400, body: { error: 'Thời điểm mở xem đáp án không hợp lệ.' } };
-      }
-      answerReviewEnabledAt = new Date(parsedMs).toISOString();
-    }
-
-    const nowIso = new Date().toISOString();
-    let finalPasswordHash: string | null = existingSecret?.passwordHash || null;
-    let finalPasswordUpdatedAt: string | null = existingSecret?.passwordUpdatedAt || null;
-
-    if (!requiresPassword || passwordAction === 'clear') {
-      finalPasswordHash = null;
-      finalPasswordUpdatedAt = nowIso;
-    } else if (passwordAction === 'set') {
-      if (rawPassword.length < 6) {
-        return {
-          status: 400,
-          body: { error: 'Mật khẩu đề thi phải có ít nhất 6 ký tự.' },
-        };
-      }
-      finalPasswordHash = hashExamPassword(rawPassword);
-      finalPasswordUpdatedAt = nowIso;
-    } else if (passwordAction === 'keep') {
-      if (!finalPasswordHash && store.hasAdminAccess()) {
-        return {
-          status: 400,
-          body: { error: 'Đề thi chưa có mật khẩu trước đó. Vui lòng nhập mật khẩu mới (tối thiểu 6 ký tự).' },
-        };
-      }
-    }
-
-    // Build question order & answerMap either from payload or existing records
-    const payloadAnswerMap =
-      body.answerMap && typeof body.answerMap === 'object'
-        ? (body.answerMap as Record<string, ServerAnswerKeyEntry>)
-        : undefined;
-    const payloadQuestions = Array.isArray(body.questions)
-      ? (body.questions as Array<{ id: string; type: Question['type']; statementIds?: string[] }>)
-      : undefined;
-
-    const finalQuestions =
-      payloadQuestions && payloadQuestions.length > 0
-        ? payloadQuestions
-        : existingSecret?.questions ||
-          (Array.isArray(existingMaster?.questions)
-            ? (existingMaster.questions as Question[]).map((q) => ({
-                id: q.id,
-                type: q.type,
-                ...(Array.isArray(q.statements) ? { statementIds: q.statements.map((s) => s.id) } : {}),
-              }))
-            : []);
-
-    const finalAnswerMap =
-      payloadAnswerMap && Object.keys(payloadAnswerMap).length > 0
-        ? payloadAnswerMap
-        : existingSecret?.answerMap || {};
-
-    const finalRules =
-      (body.rules && typeof body.rules === 'object' ? (body.rules as ExamRuleScore) : undefined) ||
-      existingSecret?.rules ||
-      (existingMaster?.rules as ExamRuleScore) || {
-        part1ScorePerQuestion: 0.25,
-        part2GradingModel: 'standard_moet',
-        part3ScorePerQuestion: 0.25,
-        totalTargetScore: 10.0,
-      };
-
-    const isPublished =
-      typeof body.isPublished === 'boolean'
-        ? body.isPublished
-        : existingSecret?.isPublished ?? Boolean(existingMaster?.isPublished ?? true);
-    const showScoreAfterSubmit =
-      typeof body.showScoreAfterSubmit === 'boolean'
-        ? body.showScoreAfterSubmit
-        : existingSecret?.showScoreAfterSubmit ?? Boolean(existingMaster?.showScoreAfterSubmit ?? true);
-    const showSolutionsAfterSubmit =
-      typeof body.showSolutionsAfterSubmit === 'boolean'
-        ? body.showSolutionsAfterSubmit
-        : existingSecret?.showSolutionsAfterSubmit ?? Boolean(existingMaster?.showSolutionsAfterSubmit ?? true);
-    const maxAttempts =
-      typeof body.maxAttempts === 'number'
-        ? Math.max(0, Math.min(1000, body.maxAttempts))
-        : existingSecret?.maxAttempts ?? Number(existingMaster?.maxAttempts ?? 1);
-
-    const secretRecord: ExamSecretRecord = {
-      examCode,
-      examId,
-      ownerId: existingOwner,
-      requiresPassword,
-      passwordHash: finalPasswordHash,
-      passwordUpdatedAt: finalPasswordUpdatedAt,
-      allowAnswerReview,
-      answerReviewMinScore,
-      answerReviewEnabledAt,
-      showScoreAfterSubmit,
-      showAnswersAfterSubmit: allowAnswerReview,
-      showSolutionsAfterSubmit,
-      isPublished,
-      openAt:
-        typeof body.openAt === 'string'
-          ? body.openAt
-          : existingSecret?.openAt ?? (existingMaster?.openAt as string | null) ?? null,
-      closeAt:
-        typeof body.closeAt === 'string'
-          ? body.closeAt
-          : existingSecret?.closeAt ?? (existingMaster?.closeAt as string | null) ?? null,
-      maxAttempts,
-      rules: finalRules,
-      questions: finalQuestions,
-      answerMap: finalAnswerMap,
-      updatedAt: nowIso,
-    };
-
-    try {
-      if (
-        !store.hasAdminAccess() &&
-        requiresPassword &&
-        passwordAction === 'keep' &&
-        store.patchExamSecretFields
-      ) {
-        const patchPayload: Record<string, unknown> = {
-          requiresPassword,
-          allowAnswerReview,
-          answerReviewMinScore,
-          answerReviewEnabledAt,
-          showScoreAfterSubmit,
-          showAnswersAfterSubmit: allowAnswerReview,
-          showSolutionsAfterSubmit,
-          isPublished,
-          maxAttempts,
-          rules: finalRules,
-          ...(finalQuestions.length > 0 ? { questions: finalQuestions } : {}),
-          ...(Object.keys(finalAnswerMap).length > 0 ? { answerMap: finalAnswerMap } : {}),
-          updatedAt: nowIso,
-        };
-        await store.patchExamSecretFields(examCode, patchPayload, bearer);
-      } else {
-        await store.saveExamSecret(examCode, secretRecord, bearer);
-      }
-      if (body.patchMetadataDocs !== false) {
-        await store.patchExamMetadataDocs({
-          examCode,
-          examId,
-          bearerToken: bearer,
-          fields: {
-            requiresPassword,
-            passwordUpdatedAt: finalPasswordUpdatedAt,
-            allowAnswerReview,
-            answerReviewMinScore,
-            answerReviewEnabledAt,
-            showScoreAfterSubmit,
-            showSolutionsAfterSubmit,
-            isPublished,
-            updatedAt: nowIso,
+          status: 401,
+          body: {
+            stage,
+            code: 'UNAUTHENTICATED',
+            error: 'Vui lòng đăng nhập tài khoản giáo viên hợp lệ.',
           },
+        };
+      }
+
+      stage = 'validate_payload';
+      const body = (req.body || {}) as Record<string, unknown>;
+      const examCode = normalizeExamCodeServer(String(body.examCode || ''));
+      const examId = String(body.examId || '').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      if (!validateSafeDocCode(examCode) || !examId) {
+        return {
+          status: 400,
+          body: { stage, error: 'Mã đề thi hoặc ID đề thi không hợp lệ.' },
+        };
+      }
+
+      const requiresPassword = Boolean(body.requiresPassword);
+      const passwordAction = String(
+        body.passwordAction || (requiresPassword ? 'set' : 'clear')
+      ) as 'set' | 'keep' | 'clear';
+      const rawPassword = typeof body.password === 'string' ? body.password : '';
+
+      stage = 'admin_sdk_check';
+      if (!store.hasAdminAccess()) {
+        const diag = resolveAdminDiagnostic(store);
+        if (requiresPassword || (diag.errorCode && diag.errorCode !== 'MISSING_ENV_VAR')) {
+          logFirebaseAdminEvent({
+            api: apiName,
+            stage,
+            errorType: 'AdminSdkNotReady',
+            errorCode: diag.errorCode,
+            message: diag.message,
+            firestoreStatus: 'not_attempted',
+          });
+          return {
+            status: 503,
+            body: {
+              stage,
+              code: diag.errorCode,
+              error: diag.message,
+            },
+          };
+        }
+      }
+
+      stage = 'role_and_ownership_check';
+      let roleInfo: { role?: string; status?: string; isAdmin: boolean };
+      let existingSecret: ExamSecretRecord | null = null;
+      let existingStatus: Record<string, unknown> | null = null;
+      let existingMaster: Record<string, unknown> | null = null;
+
+      try {
+        roleInfo = await store.getUserRoleInfo(caller.uid, bearer);
+        const isTeacher =
+          roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
+        if (!isTeacher) {
+          logFirebaseAdminEvent({
+            api: apiName,
+            stage,
+            errorType: 'AuthorizationError',
+            errorCode: 'FORBIDDEN_ROLE',
+            message: 'Caller does not have active teacher or admin role',
+            firestoreStatus: 'ok',
+          });
+          return {
+            status: 403,
+            body: {
+              stage,
+              code: 'FORBIDDEN_ROLE',
+              error:
+                'Chỉ tài khoản giáo viên đang hoạt động hoặc quản trị viên mới có quyền cấu hình bảo mật đề thi.',
+            },
+          };
+        }
+
+        if (store.hasAdminAccess()) {
+          existingSecret = await store.getExamSecret(examCode);
+        }
+        existingStatus = await store.getExamStatus(examCode, bearer);
+        existingMaster = await store.getMasterExam(examId, bearer);
+      } catch (err) {
+        return mapBackendFailureToResponse(err, store, {
+          api: apiName,
+          stage,
+          firestoreStatus: 'read_failed',
         });
       }
-    } catch (err) {
-      return mapBackendFailureToResponse(err, store);
-    }
 
-    return {
-      status: 200,
-      body: {
-        ok: true,
+      const existingOwner = String(
+        existingSecret?.ownerId || existingMaster?.ownerId || existingStatus?.ownerId || caller.uid
+      );
+
+      if (!roleInfo.isAdmin && existingOwner !== caller.uid) {
+        return { status: 403, body: { stage, error: 'Bạn không phải chủ sở hữu của đề thi này.' } };
+      }
+
+      stage = 'validate_answer_review_policy';
+      const allowAnswerReview =
+        typeof body.allowAnswerReview === 'boolean' ? body.allowAnswerReview : true;
+      const rawMinScore = Number(body.answerReviewMinScore ?? 8.0);
+      if (!Number.isFinite(rawMinScore) || rawMinScore < 0 || rawMinScore > 10) {
+        return {
+          status: 400,
+          body: {
+            stage,
+            error: 'Điểm sàn xem đáp án phải nằm trong khoảng từ 0.0 đến 10.0 điểm.',
+          },
+        };
+      }
+      const answerReviewMinScore = Math.round(rawMinScore * 100) / 100;
+
+      let answerReviewEnabledAt: string | null = null;
+      if (typeof body.answerReviewEnabledAt === 'string' && body.answerReviewEnabledAt.trim()) {
+        const parsedMs = Date.parse(body.answerReviewEnabledAt.trim());
+        if (!Number.isFinite(parsedMs)) {
+          return {
+            status: 400,
+            body: { stage, error: 'Thời điểm mở xem đáp án không hợp lệ.' },
+          };
+        }
+        answerReviewEnabledAt = new Date(parsedMs).toISOString();
+      }
+
+      stage = 'hash_password';
+      const nowIso = new Date().toISOString();
+      let finalPasswordHash: string | null = existingSecret?.passwordHash || null;
+      let finalPasswordUpdatedAt: string | null = existingSecret?.passwordUpdatedAt || null;
+
+      if (!requiresPassword || passwordAction === 'clear') {
+        finalPasswordHash = null;
+        finalPasswordUpdatedAt = nowIso;
+      } else if (passwordAction === 'set') {
+        if (rawPassword.length < 6) {
+          return {
+            status: 400,
+            body: { stage, error: 'Mật khẩu đề thi phải có ít nhất 6 ký tự.' },
+          };
+        }
+        finalPasswordHash = hashExamPassword(rawPassword);
+        finalPasswordUpdatedAt = nowIso;
+      } else if (passwordAction === 'keep') {
+        if (!finalPasswordHash && store.hasAdminAccess()) {
+          return {
+            status: 400,
+            body: {
+              stage,
+              error: 'Đề thi chưa có mật khẩu trước đó. Vui lòng nhập mật khẩu mới (tối thiểu 6 ký tự).',
+            },
+          };
+        }
+      }
+
+      stage = 'prepare_exam_secret_record';
+      const payloadAnswerMap =
+        body.answerMap && typeof body.answerMap === 'object'
+          ? (body.answerMap as Record<string, ServerAnswerKeyEntry>)
+          : undefined;
+      const payloadQuestions = Array.isArray(body.questions)
+        ? (body.questions as Array<{ id: string; type: Question['type']; statementIds?: string[] }>).filter(
+            (q) => q && typeof q === 'object' && typeof q.id === 'string'
+          )
+        : undefined;
+
+      const finalQuestions =
+        payloadQuestions && payloadQuestions.length > 0
+          ? payloadQuestions
+          : existingSecret?.questions ||
+            (Array.isArray(existingMaster?.questions)
+              ? (existingMaster.questions as Question[]).map((q) => ({
+                  id: q.id,
+                  type: q.type,
+                  ...(Array.isArray(q.statements) ? { statementIds: q.statements.map((s) => s.id) } : {}),
+                }))
+              : []);
+
+      const finalAnswerMap =
+        payloadAnswerMap && Object.keys(payloadAnswerMap).length > 0
+          ? payloadAnswerMap
+          : existingSecret?.answerMap || {};
+
+      const finalRules =
+        (body.rules && typeof body.rules === 'object' ? (body.rules as ExamRuleScore) : undefined) ||
+        existingSecret?.rules ||
+        (existingMaster?.rules as ExamRuleScore) || {
+          part1ScorePerQuestion: 0.25,
+          part2GradingModel: 'standard_moet',
+          part3ScorePerQuestion: 0.25,
+          totalTargetScore: 10.0,
+        };
+
+      const isPublished =
+        typeof body.isPublished === 'boolean'
+          ? body.isPublished
+          : existingSecret?.isPublished ?? Boolean(existingMaster?.isPublished ?? true);
+      const showScoreAfterSubmit =
+        typeof body.showScoreAfterSubmit === 'boolean'
+          ? body.showScoreAfterSubmit
+          : existingSecret?.showScoreAfterSubmit ?? Boolean(existingMaster?.showScoreAfterSubmit ?? true);
+      const showSolutionsAfterSubmit =
+        typeof body.showSolutionsAfterSubmit === 'boolean'
+          ? body.showSolutionsAfterSubmit
+          : existingSecret?.showSolutionsAfterSubmit ?? Boolean(existingMaster?.showSolutionsAfterSubmit ?? true);
+      const maxAttempts =
+        typeof body.maxAttempts === 'number'
+          ? Math.max(0, Math.min(1000, body.maxAttempts))
+          : existingSecret?.maxAttempts ?? Number(existingMaster?.maxAttempts ?? 1);
+
+      const secretRecord: ExamSecretRecord = {
         examCode,
+        examId,
+        ownerId: existingOwner,
         requiresPassword,
+        passwordHash: finalPasswordHash,
         passwordUpdatedAt: finalPasswordUpdatedAt,
         allowAnswerReview,
         answerReviewMinScore,
         answerReviewEnabledAt,
-      },
-    };
+        showScoreAfterSubmit,
+        showAnswersAfterSubmit: allowAnswerReview,
+        showSolutionsAfterSubmit,
+        isPublished,
+        openAt:
+          typeof body.openAt === 'string'
+            ? body.openAt
+            : existingSecret?.openAt ?? (existingMaster?.openAt as string | null) ?? null,
+        closeAt:
+          typeof body.closeAt === 'string'
+            ? body.closeAt
+            : existingSecret?.closeAt ?? (existingMaster?.closeAt as string | null) ?? null,
+        maxAttempts,
+        rules: finalRules,
+        questions: finalQuestions,
+        answerMap: finalAnswerMap,
+        updatedAt: nowIso,
+      };
+
+      try {
+        stage = 'firestore_write_exam_secret';
+        if (
+          !store.hasAdminAccess() &&
+          requiresPassword &&
+          passwordAction === 'keep' &&
+          store.patchExamSecretFields
+        ) {
+          const patchPayload: Record<string, unknown> = {
+            requiresPassword,
+            allowAnswerReview,
+            answerReviewMinScore,
+            answerReviewEnabledAt,
+            showScoreAfterSubmit,
+            showAnswersAfterSubmit: allowAnswerReview,
+            showSolutionsAfterSubmit,
+            isPublished,
+            maxAttempts,
+            rules: finalRules,
+            ...(finalQuestions.length > 0 ? { questions: finalQuestions } : {}),
+            ...(Object.keys(finalAnswerMap).length > 0 ? { answerMap: finalAnswerMap } : {}),
+            updatedAt: nowIso,
+          };
+          await store.patchExamSecretFields(examCode, patchPayload, bearer);
+        } else {
+          await store.saveExamSecret(examCode, secretRecord, bearer);
+        }
+        if (body.patchMetadataDocs !== false) {
+          stage = 'firestore_patch_metadata';
+          await store.patchExamMetadataDocs({
+            examCode,
+            examId,
+            bearerToken: bearer,
+            fields: {
+              requiresPassword,
+              passwordUpdatedAt: finalPasswordUpdatedAt,
+              allowAnswerReview,
+              answerReviewMinScore,
+              answerReviewEnabledAt,
+              showScoreAfterSubmit,
+              showSolutionsAfterSubmit,
+              isPublished,
+              updatedAt: nowIso,
+            },
+          });
+        }
+      } catch (err) {
+        return mapBackendFailureToResponse(err, store, {
+          api: apiName,
+          stage,
+          firestoreStatus: 'write_failed',
+        });
+      }
+
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          examCode,
+          requiresPassword,
+          passwordUpdatedAt: finalPasswordUpdatedAt,
+          allowAnswerReview,
+          answerReviewMinScore,
+          answerReviewEnabledAt,
+        },
+      };
+    } catch (err) {
+      const errorType = err instanceof Error ? err.name || 'Error' : typeof err;
+      const safeMsg = sanitizeSensitiveLogText(err instanceof Error ? err.message : String(err));
+      logFirebaseAdminEvent({
+        api: apiName,
+        stage,
+        errorType,
+        errorCode: 'INTERNAL_CONFIGURE_ERROR',
+        message: safeMsg,
+      });
+      return {
+        status: 500,
+        body: {
+          stage,
+          code: 'INTERNAL_CONFIGURE_ERROR',
+          error: `Lỗi cấu hình bảo mật ở bước "${stage}": ${safeMsg || 'Lỗi không xác định'}`,
+        },
+      };
+    }
   }
 
   /**
@@ -839,9 +980,17 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
 
     if (!store.hasAdminAccess()) {
       const diag = resolveAdminDiagnostic(store);
+      logFirebaseAdminEvent({
+        api: 'POST /api/exams/verify-password',
+        stage: 'admin_sdk_check',
+        errorType: 'AdminSdkNotReady',
+        errorCode: diag.errorCode,
+        message: diag.message,
+      });
       return {
         status: 503,
         body: {
+          stage: 'admin_sdk_check',
           error: diag.message,
           code: diag.errorCode,
         },
@@ -986,7 +1135,10 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         },
       };
     } catch (err) {
-      return mapBackendFailureToResponse(err, store);
+      return mapBackendFailureToResponse(err, store, {
+        api: 'POST /api/exams/verify-password',
+        stage: 'firestore_verify_password',
+      });
     }
   }
 
@@ -1010,11 +1162,19 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
 
     if (!store.hasAdminAccess()) {
       const diag = resolveAdminDiagnostic(store);
+      logFirebaseAdminEvent({
+        api: 'POST /api/exams/access-questions',
+        stage: 'admin_sdk_check',
+        errorType: 'AdminSdkNotReady',
+        errorCode: diag.errorCode,
+        message: diag.message,
+      });
       return {
         status: 503,
         body: {
           authorized: false,
           status: 'server_unavailable',
+          stage: 'admin_sdk_check',
           code: diag.errorCode,
           error: diag.message,
         },
@@ -1094,8 +1254,13 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       };
     } catch (err) {
       return mapBackendFailureToResponse(err, store, {
-        authorized: false,
-        status: 'server_unavailable',
+        api: 'POST /api/exams/access-questions',
+        stage: 'firestore_access_questions',
+        firestoreStatus: 'read_failed',
+        extraBody: {
+          authorized: false,
+          status: 'server_unavailable',
+        },
       });
     }
   }
@@ -1112,9 +1277,17 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
 
     if (!store.hasAdminAccess()) {
       const diag = resolveAdminDiagnostic(store);
+      logFirebaseAdminEvent({
+        api: 'POST /api/exams/submit-and-grade',
+        stage: 'admin_sdk_check',
+        errorType: 'AdminSdkNotReady',
+        errorCode: diag.errorCode,
+        message: diag.message,
+      });
       return {
         status: 503,
         body: {
+          stage: 'admin_sdk_check',
           error: diag.message,
           code: diag.errorCode,
         },
@@ -1284,7 +1457,10 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         },
       };
     } catch (err) {
-      return mapBackendFailureToResponse(err, store);
+      return mapBackendFailureToResponse(err, store, {
+        api: 'POST /api/exams/submit-and-grade',
+        stage: 'firestore_submit_and_grade',
+      });
     }
   }
 
@@ -1313,11 +1489,19 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
 
     if (!store.hasAdminAccess()) {
       const diag = resolveAdminDiagnostic(store);
+      logFirebaseAdminEvent({
+        api: 'POST /api/exams/request-answer-review',
+        stage: 'admin_sdk_check',
+        errorType: 'AdminSdkNotReady',
+        errorCode: diag.errorCode,
+        message: diag.message,
+      });
       return {
         status: 503,
         body: {
           allowed: false,
           reason: 'server_unavailable',
+          stage: 'admin_sdk_check',
           code: diag.errorCode,
           error: diag.message,
           message: diag.message,
@@ -1454,9 +1638,14 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       };
     } catch (err) {
       return mapBackendFailureToResponse(err, store, {
-        allowed: false,
-        reason: 'server_unavailable',
-        message: '',
+        api: 'POST /api/exams/request-answer-review',
+        stage: 'firestore_request_answer_review',
+        firestoreStatus: 'read_failed',
+        extraBody: {
+          allowed: false,
+          reason: 'server_unavailable',
+          message: '',
+        },
       });
     }
   }
