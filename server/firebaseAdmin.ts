@@ -13,6 +13,9 @@ export const EXPECTED_FIREBASE_PROJECT_ID = 'agile-booster-w8p5g';
 export const EXPECTED_FIRESTORE_DATABASE_ID =
   'ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e';
 
+export const SERVICE_ACCOUNT_ENV_VAR = 'FIREBASE_SERVICE_ACCOUNT_JSON' as const;
+export type ServiceAccountEnvVarName = typeof SERVICE_ACCOUNT_ENV_VAR;
+
 export type FirebaseAdminErrorCode =
   | 'CONFIG_MISSING'
   | 'CONFIG_PARSE_ERROR'
@@ -29,6 +32,7 @@ export type FirebaseAdminErrorCode =
 export interface FirebaseAdminInitResult {
   initialized: boolean;
   environmentVariablePresent: boolean;
+  activeEnvVar: ServiceAccountEnvVarName | null;
   projectIdMatched: boolean;
   databaseIdMatched: boolean;
   errorCode: FirebaseAdminErrorCode | null;
@@ -44,6 +48,7 @@ export interface FirebaseAdminHealthStatus {
   firestoreConnected: boolean;
   databaseIdMatched: boolean;
   environmentVariablePresent: boolean;
+  activeEnvVar: ServiceAccountEnvVarName | null;
   errorCode: FirebaseAdminErrorCode | null;
   errorStage: string | null;
   timestamp: string;
@@ -51,6 +56,7 @@ export interface FirebaseAdminHealthStatus {
 }
 
 interface RawServiceAccountPayload {
+  type?: unknown;
   project_id?: unknown;
   client_email?: unknown;
   private_key?: unknown;
@@ -58,6 +64,28 @@ interface RawServiceAccountPayload {
 
 let cachedEnvFingerprint: string | null = null;
 let cachedInitResult: FirebaseAdminInitResult | null = null;
+
+/**
+ * Resolves the active Service Account JSON string strictly from
+ * process.env.FIREBASE_SERVICE_ACCOUNT_JSON.
+ */
+export function resolveServiceAccountEnvSource(): {
+  envVarName: ServiceAccountEnvVarName | null;
+  rawValue: string;
+} {
+  const rawValue = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
+  if (rawValue.length > 0) {
+    return {
+      envVarName: SERVICE_ACCOUNT_ENV_VAR,
+      rawValue,
+    };
+  }
+
+  return {
+    envVarName: null,
+    rawValue: '',
+  };
+}
 
 /**
  * Normalizes private_key PEM newlines safely:
@@ -84,7 +112,7 @@ export function formatFirebaseAdminErrorMessage(
     case 'CONFIG_MISSING':
       return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ Vercel.';
     case 'CONFIG_PARSE_ERROR':
-      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON hoặc thiếu project_id / client_email / project_id không khớp agile-booster-w8p5g.';
+      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON, thiếu trường bắt buộc (type, project_id, client_email, private_key), type != service_account hoặc project_id không khớp agile-booster-w8p5g.';
     case 'PRIVATE_KEY_ERROR':
       return 'Trường private_key trong FIREBASE_SERVICE_ACCOUNT_JSON không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
     case 'ADMIN_INIT_ERROR':
@@ -127,6 +155,7 @@ export function logFirebaseAdminEvent(params: {
   firestoreStatus?: 'not_attempted' | 'connected' | 'permission_denied' | 'not_found' | 'write_failed' | 'read_failed' | 'ok';
 }): void {
   const state = cachedInitResult;
+  const envSource = resolveServiceAccountEnvSource();
   console.error(
     JSON.stringify({
       scope: 'HQTest_API',
@@ -139,7 +168,8 @@ export function logFirebaseAdminEvent(params: {
       adminInitialized: Boolean(state?.initialized),
       projectIdMatched: Boolean(state?.projectIdMatched),
       databaseIdMatched: Boolean(state?.databaseIdMatched),
-      environmentVariablePresent: Boolean((process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim()),
+      environmentVariablePresent: envSource.envVarName !== null,
+      activeEnvVar: envSource.envVarName,
       adminErrorCode: state?.errorCode ?? null,
       firestoreStatus: params.firestoreStatus ?? 'not_attempted',
     })
@@ -156,9 +186,13 @@ export function classifyFirestoreError(err: unknown): FirebaseAdminErrorCode {
 
   if (
     code === '7' ||
+    code === '16' ||
+    status === 401 ||
     status === 403 ||
     upper.includes('PERMISSION_DENIED') ||
     upper.includes('PERMISSION-DENIED') ||
+    upper.includes('UNAUTHENTICATED') ||
+    upper.includes('INVALID_GRANT') ||
     upper.includes('INSUFFICIENT PERMISSIONS')
   ) {
     return 'DATABASE_PERMISSION_ERROR';
@@ -166,7 +200,10 @@ export function classifyFirestoreError(err: unknown): FirebaseAdminErrorCode {
   return 'DATABASE_ERROR';
 }
 
-function parseServiceAccountJson(rawValue: string): {
+function parseServiceAccountJson(
+  rawValue: string,
+  envVarName: ServiceAccountEnvVarName
+): {
   parsed?: { projectId: string; clientEmail: string; privateKey: string };
   errorCode?: FirebaseAdminErrorCode;
   errorDetail?: string;
@@ -180,40 +217,49 @@ function parseServiceAccountJson(rawValue: string): {
   } catch {
     return {
       errorCode: 'CONFIG_PARSE_ERROR',
-      errorDetail: 'Biến FIREBASE_SERVICE_ACCOUNT_JSON không phải chuỗi JSON hợp lệ (lỗi parse JSON).',
+      errorDetail: `Biến ${envVarName} không phải chuỗi JSON hợp lệ (lỗi JSON.parse).`,
     };
   }
 
   if (!decoded || typeof decoded !== 'object' || Array.isArray(decoded)) {
     return {
       errorCode: 'CONFIG_PARSE_ERROR',
-      errorDetail: 'Nội dung FIREBASE_SERVICE_ACCOUNT_JSON phải là một JSON object Service Account.',
+      errorDetail: `Nội dung ${envVarName} phải là một JSON object Service Account hợp lệ.`,
     };
   }
 
   const obj = decoded as RawServiceAccountPayload;
+  const saType = typeof obj.type === 'string' ? obj.type.trim() : '';
   const projectId = typeof obj.project_id === 'string' ? obj.project_id.trim() : '';
   const clientEmail = typeof obj.client_email === 'string' ? obj.client_email.trim() : '';
   const rawPrivateKey = typeof obj.private_key === 'string' ? obj.private_key : '';
 
-  if (!projectId || !clientEmail) {
+  if (!saType || !projectId || !clientEmail || !rawPrivateKey.trim()) {
+    const missingFields = [
+      !saType ? 'type' : '',
+      !projectId ? 'project_id' : '',
+      !clientEmail ? 'client_email' : '',
+      !rawPrivateKey.trim() ? 'private_key' : '',
+    ].filter(Boolean);
+    const onlyPrivateKeyMissing =
+      missingFields.length === 1 && missingFields[0] === 'private_key';
+    return {
+      errorCode: onlyPrivateKeyMissing ? 'PRIVATE_KEY_ERROR' : 'CONFIG_PARSE_ERROR',
+      errorDetail: `${envVarName} thiếu trường bắt buộc: ${missingFields.join(', ')}.`,
+    };
+  }
+
+  if (saType !== 'service_account') {
     return {
       errorCode: 'CONFIG_PARSE_ERROR',
-      errorDetail: 'FIREBASE_SERVICE_ACCOUNT_JSON thiếu trường bắt buộc (project_id hoặc client_email).',
+      errorDetail: `Trường "type" trong ${envVarName} phải là "service_account".`,
     };
   }
 
   if (projectId !== EXPECTED_FIREBASE_PROJECT_ID) {
     return {
       errorCode: 'CONFIG_PARSE_ERROR',
-      errorDetail: `project_id trong Service Account không khớp với dự án Firebase ${EXPECTED_FIREBASE_PROJECT_ID}.`,
-    };
-  }
-
-  if (!rawPrivateKey.trim()) {
-    return {
-      errorCode: 'PRIVATE_KEY_ERROR',
-      errorDetail: 'FIREBASE_SERVICE_ACCOUNT_JSON thiếu trường private_key.',
+      errorDetail: `project_id ("${projectId}") trong ${envVarName} không khớp với dự án Firebase thực tế "${EXPECTED_FIREBASE_PROJECT_ID}". Vui lòng sử dụng đúng Service Account JSON của dự án ${EXPECTED_FIREBASE_PROJECT_ID}.`,
     };
   }
 
@@ -224,7 +270,7 @@ function parseServiceAccountJson(rawValue: string): {
   ) {
     return {
       errorCode: 'PRIVATE_KEY_ERROR',
-      errorDetail: 'Trường private_key không đúng định dạng PEM hợp lệ.',
+      errorDetail: `Trường private_key trong ${envVarName} không đúng định dạng PEM hợp lệ.`,
     };
   }
 
@@ -233,7 +279,7 @@ function parseServiceAccountJson(rawValue: string): {
   } catch {
     return {
       errorCode: 'PRIVATE_KEY_ERROR',
-      errorDetail: 'Không thể giải mã private_key (kiểm tra ký tự xuống dòng \\n trong JSON).',
+      errorDetail: `Không thể giải mã private_key trong ${envVarName} (kiểm tra ký tự xuống dòng \\n trong JSON).`,
     };
   }
 
@@ -248,18 +294,19 @@ function parseServiceAccountJson(rawValue: string): {
 
 /**
  * Initializes Firebase Admin SDK once in serverless/Node runtime strictly from
- * process.env.FIREBASE_SERVICE_ACCOUNT_JSON and binds Firestore to
+ * process.env.FIREBASE_SERVICE_ACCOUNT_JSON and binds Firestore strictly to
  * EXPECTED_FIRESTORE_DATABASE_ID.
  */
 export function getFirebaseAdminState(): FirebaseAdminInitResult {
-  const rawEnv = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
-  const environmentVariablePresent = rawEnv.length > 0;
+  const { envVarName, rawValue } = resolveServiceAccountEnvSource();
+  const environmentVariablePresent = envVarName !== null && rawValue.length > 0;
 
-  if (!environmentVariablePresent) {
+  if (!environmentVariablePresent || !envVarName) {
     cachedEnvFingerprint = '';
     cachedInitResult = {
       initialized: false,
       environmentVariablePresent: false,
+      activeEnvVar: null,
       projectIdMatched: false,
       databaseIdMatched: false,
       errorCode: 'CONFIG_MISSING',
@@ -271,16 +318,18 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
     return cachedInitResult;
   }
 
-  if (cachedInitResult && cachedEnvFingerprint === rawEnv && cachedInitResult.initialized) {
+  const fingerprint = `${envVarName}:${rawValue}`;
+  if (cachedInitResult && cachedEnvFingerprint === fingerprint && cachedInitResult.initialized) {
     return cachedInitResult;
   }
 
-  const { parsed, errorCode, errorDetail } = parseServiceAccountJson(rawEnv);
+  const { parsed, errorCode, errorDetail } = parseServiceAccountJson(rawValue, envVarName);
   if (!parsed || errorCode) {
-    cachedEnvFingerprint = rawEnv;
+    cachedEnvFingerprint = fingerprint;
     cachedInitResult = {
       initialized: false,
       environmentVariablePresent: true,
+      activeEnvVar: envVarName,
       projectIdMatched: errorCode === 'PRIVATE_KEY_ERROR',
       databaseIdMatched: false,
       errorCode: errorCode || 'CONFIG_PARSE_ERROR',
@@ -316,10 +365,11 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
     const databaseIdMatched = resolvedDbId === EXPECTED_FIRESTORE_DATABASE_ID;
 
     if (!projectIdMatched || !databaseIdMatched) {
-      cachedEnvFingerprint = rawEnv;
+      cachedEnvFingerprint = fingerprint;
       cachedInitResult = {
         initialized: false,
         environmentVariablePresent: true,
+        activeEnvVar: envVarName,
         projectIdMatched,
         databaseIdMatched,
         errorCode: 'ADMIN_INIT_ERROR',
@@ -333,10 +383,11 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
       return cachedInitResult;
     }
 
-    cachedEnvFingerprint = rawEnv;
+    cachedEnvFingerprint = fingerprint;
     cachedInitResult = {
       initialized: true,
       environmentVariablePresent: true,
+      activeEnvVar: envVarName,
       projectIdMatched,
       databaseIdMatched,
       errorCode: null,
@@ -365,10 +416,11 @@ export function getFirebaseAdminState(): FirebaseAdminInitResult {
       message: err instanceof Error ? err.message : 'Firebase Admin initialization failed',
       firestoreStatus: 'not_attempted',
     });
-    cachedEnvFingerprint = rawEnv;
+    cachedEnvFingerprint = fingerprint;
     cachedInitResult = {
       initialized: false,
       environmentVariablePresent: true,
+      activeEnvVar: envVarName,
       projectIdMatched: true,
       databaseIdMatched: false,
       errorCode: classified,
@@ -417,6 +469,7 @@ export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthSta
       firestoreConnected: false,
       databaseIdMatched: false,
       environmentVariablePresent: state.environmentVariablePresent,
+      activeEnvVar: state.activeEnvVar,
       errorCode,
       errorStage: 'admin_sdk_init',
       timestamp,
@@ -432,6 +485,7 @@ export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthSta
       firestoreConnected: true,
       databaseIdMatched: state.databaseIdMatched,
       environmentVariablePresent: true,
+      activeEnvVar: state.activeEnvVar,
       errorCode: null,
       errorStage: null,
       timestamp,
@@ -453,6 +507,7 @@ export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthSta
       firestoreConnected: false,
       databaseIdMatched: state.databaseIdMatched,
       environmentVariablePresent: true,
+      activeEnvVar: state.activeEnvVar,
       errorCode,
       errorStage: 'firestore_connectivity_check',
       timestamp,

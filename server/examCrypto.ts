@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { resolveServiceAccountEnvSource } from './firebaseAdmin.ts';
 
 const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
@@ -63,7 +64,7 @@ export function getServerSigningSecret(): string {
   if (configured.length >= 16) {
     return configured;
   }
-  const saRaw = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
+  const saRaw = resolveServiceAccountEnvSource().rawValue;
   if (saRaw) {
     return crypto.createHash('sha256').update(`hqtest_token_key:${saRaw}`).digest('hex');
   }
