@@ -3,6 +3,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createExamApiHandlers } from './server/examApiHandlers.ts';
+import { createPublicExamLinkHandlers } from './server/publicExamLinkHandler.ts';
 import { handleSetAdminClaims } from './server/adminClaimsHandler.ts';
 import { checkFirebaseAdminHealth } from './server/firebaseAdmin.ts';
 import { hasServiceAccountConfigured, resolveServerFirebaseConfig } from './server/firebaseServerAuth.ts';
@@ -16,6 +17,7 @@ async function startServer() {
   app.use(express.json({ limit: '4mb' }));
 
   const handlers = createExamApiHandlers();
+  const publicLinkHandlers = createPublicExamLinkHandlers();
 
   const wrapExpress =
     (fn: (req: { method?: string; headers: express.Request['headers']; body?: unknown; ip?: string }) => Promise<{ status: number; body: Record<string, unknown> }>) =>
@@ -86,6 +88,8 @@ async function startServer() {
   app.post('/api/exams/access-questions', wrapExpress(handlers.handleAccessExamQuestions));
   app.post('/api/exams/submit-and-grade', wrapExpress(handlers.handleSubmitAndGradeExam));
   app.post('/api/exams/request-answer-review', wrapExpress(handlers.handleRequestAnswerReview));
+  app.post('/api/exams/allocate-public-code', wrapExpress(publicLinkHandlers.handleAllocatePublicCode));
+  app.post('/api/exams/sync-link-status', wrapExpress(publicLinkHandlers.handleSyncPublicExamLinkStatus));
 
   if (!isProduction) {
     const { createServer: createViteServer } = await import('vite');

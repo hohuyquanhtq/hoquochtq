@@ -22,20 +22,23 @@ import {
 import { Exam } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
 import {
-  getExamDirectUrl,
+  getExamShortUrl,
   getPublicDomain,
   isPreviewOrLocalOrigin,
+  isValidSixDigitPublicCode,
   normalizeExamCode,
   getSavedProductionDomainOverride,
   setSavedProductionDomainOverride,
 } from '../../utils/urlHelper';
 import { auth, syncExamToFirestore } from '../../services/firebase';
+import { allocateExamPublicCodeOnServer } from '../../services/examSecurityApi';
 
 interface ExamShareModalProps {
   isOpen: boolean;
   exam: Exam | null;
   onClose: () => void;
   onTogglePublish?: (examId: string) => void;
+  onExamUpdated?: (updatedExam: Exam) => void;
 }
 
 export const ExamShareModal: React.FC<ExamShareModalProps> = ({
@@ -43,6 +46,7 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   exam,
   onClose,
   onTogglePublish,
+  onExamUpdated,
 }) => {
   const [copiedLink, setCopiedLink] = useState(false);
   const [copiedCode, setCopiedCode] = useState(false);
@@ -52,6 +56,9 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   const [domainTick, setDomainTick] = useState(0);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [cloudSynced, setCloudSynced] = useState(false);
+  const [localPublicCode, setLocalPublicCode] = useState<string>('');
+  const [isAllocatingCode, setIsAllocatingCode] = useState(false);
+  const [allocationError, setAllocationError] = useState<string | null>(null);
   
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
   const [qrSvgString, setQrSvgString] = useState<string>('');
@@ -61,29 +68,78 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const printableRef = useRef<HTMLDivElement>(null);
 
-  // Clean exam code and build unified canonical Production URL (?examCode=...)
+  // Clean internal examCode and 6-digit publicCode
   const examCode = normalizeExamCode(exam?.code || 'HQ50');
+  const resolvedPublicCode = isValidSixDigitPublicCode(exam?.publicCode)
+    ? exam!.publicCode!.trim()
+    : isValidSixDigitPublicCode(localPublicCode)
+    ? localPublicCode
+    : '';
+  const displayShareCode = resolvedPublicCode || examCode;
   const activeDomain = getPublicDomain();
   const isPreviewDomain = isPreviewOrLocalOrigin(activeDomain);
-  const directLink = getExamDirectUrl(examCode);
+  const directLink = getExamShortUrl({
+    publicCode: resolvedPublicCode || undefined,
+    code: examCode,
+  });
   void domainTick;
 
   const totalQuestionsCount = exam ? (exam.totalQuestions || exam.questions?.length || 0) : 0;
 
-  // Auto-sync to Firestore if teacher is already signed in
+  // Auto-sync to Firestore & ensure 6-digit publicCode exists if opened on a legacy exam
   useEffect(() => {
     if (!isOpen || !exam) return;
+    let cancelled = false;
     setDomainInput(getSavedProductionDomainOverride());
-    if (auth.currentUser) {
-      setIsSyncingCloud(true);
-      syncExamToFirestore(exam)
-        .then((res) => setCloudSynced(res.synced))
-        .catch(() => setCloudSynced(false))
-        .finally(() => setIsSyncingCloud(false));
+    setAllocationError(null);
+
+    if (isValidSixDigitPublicCode(exam.publicCode)) {
+      setLocalPublicCode(exam.publicCode.trim());
     } else {
-      setCloudSynced(false);
+      setLocalPublicCode('');
     }
-  }, [isOpen, exam]);
+
+    const ensureCloudAndPublicCode = async () => {
+      if (!auth.currentUser) {
+        if (!cancelled) setCloudSynced(false);
+        return;
+      }
+
+      let activeExam = exam;
+      if (!isValidSixDigitPublicCode(exam.publicCode)) {
+        if (!cancelled) setIsAllocatingCode(true);
+        const alloc = await allocateExamPublicCodeOnServer({
+          examId: exam.id,
+          examCode: exam.code,
+          isPublished: exam.isPublished,
+        });
+        if (!cancelled) setIsAllocatingCode(false);
+        if (alloc.ok && alloc.publicCode) {
+          if (!cancelled) setLocalPublicCode(alloc.publicCode);
+          activeExam = { ...exam, publicCode: alloc.publicCode };
+          onExamUpdated?.(activeExam);
+        } else if (!cancelled) {
+          setAllocationError(alloc.error || 'Chưa thể cấp mã đường dẫn 6 chữ số.');
+        }
+      }
+
+      if (!cancelled) setIsSyncingCloud(true);
+      try {
+        const res = await syncExamToFirestore(activeExam);
+        if (!cancelled) setCloudSynced(res.synced);
+      } catch {
+        if (!cancelled) setCloudSynced(false);
+      } finally {
+        if (!cancelled) setIsSyncingCloud(false);
+      }
+    };
+
+    void ensureCloudAndPublicCode();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, exam?.id, exam?.publicCode]);
 
   // Generate QR Code with multiple methods (SVG + Canvas + DataURL) using unified directLink
   useEffect(() => {
@@ -217,11 +273,11 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
 
       if (type === 'link') {
         setCopiedLink(true);
-        setNotificationMsg({ type: 'success', text: 'Đã sao chép liên kết vào clipboard!' });
+        setNotificationMsg({ type: 'success', text: 'Đã sao chép đường dẫn bài thi vào clipboard!' });
         setTimeout(() => setCopiedLink(false), 3000);
       } else if (type === 'code') {
         setCopiedCode(true);
-        setNotificationMsg({ type: 'success', text: `Đã sao chép mã bài thi "${examCode}"!` });
+        setNotificationMsg({ type: 'success', text: `Đã sao chép mã truy cập "${displayShareCode}"!` });
         setTimeout(() => setCopiedCode(false), 3000);
       } else {
         setCopiedAnnouncement(true);
@@ -240,14 +296,14 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
     return `THÔNG BÁO THI TRỰC TUYẾN - ${APP_CONFIG.APP_NAME}
 
 📖 Bài thi: ${exam.title}
-🔑 Mã bài thi: ${examCode}
+🔑 Mã truy cập 6 chữ số: ${displayShareCode}
 🌐 Link vào thi trực tiếp: ${directLink}
 ⏱ Thời gian làm bài: ${exam.durationMinutes} phút
 📝 Số lượng câu hỏi: ${totalQuestionsCount} câu
 🎯 Thang điểm: ${exam.totalScore || 10.0} điểm
 👨‍🏫 Giáo viên ra đề: ${exam.authorName || APP_CONFIG.APP_AUTHOR}
 
-Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng dụng và nhập mã "${examCode}" để làm bài thi.`;
+Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc quét mã QR để vào làm bài thi.`;
   };
 
   // Web Share API handler
@@ -283,11 +339,11 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
 
     const link = document.createElement('a');
     link.href = dataUrl;
-    link.download = `HQTest_QR_${examCode}.png`;
+    link.download = `HQTest_QR_${displayShareCode}.png`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    setNotificationMsg({ type: 'success', text: `Đã tải xuống file mã QR: HQTest_QR_${examCode}.png` });
+    setNotificationMsg({ type: 'success', text: `Đã tải xuống file mã QR: HQTest_QR_${displayShareCode}.png` });
     setTimeout(() => setNotificationMsg(null), 3000);
   };
 
@@ -333,10 +389,10 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
 
     ctx.fillStyle = '#475569';
     ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('MÃ BÀI THI:', 450, 245);
+    ctx.fillText('MÃ TRUY CẬP 6 SỐ:', 450, 245);
     ctx.fillStyle = '#1d4ed8';
     ctx.font = '900 36px monospace';
-    ctx.fillText(examCode, 450, 282);
+    ctx.fillText(displayShareCode, 450, 282);
 
     // Draw QR Code
     const qrImage = new Image();
@@ -406,10 +462,10 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-200 flex items-center gap-1">
                   <Sparkles className="w-3.5 h-3.5" />
-                  Chia Sẻ Bài Thi &amp; Mã QR Học Sinh
+                  Chia Sẻ Bài Thi &amp; Link Ngắn 6 Chữ Số
                 </span>
                 <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-white/20 text-white rounded-md">
-                  Mã: {examCode}
+                  {resolvedPublicCode ? `/${resolvedPublicCode}` : `Mã: ${examCode}`}
                 </span>
               </div>
               <h2 className="text-base font-extrabold text-white line-clamp-1 mt-0.5">
@@ -476,20 +532,23 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      MÃ THAM GIA BÀI THI
+                      {resolvedPublicCode ? 'MÃ TRUY CẬP 6 CHỮ SỐ' : 'MÃ BÀI THI'}
                     </span>
                     <div className="flex items-center gap-2.5 mt-0.5">
-                      <span className="text-3xl font-black font-mono text-blue-700 tracking-wider">
-                        {examCode}
+                      <span className="text-3xl font-black font-mono text-blue-700 tracking-widest">
+                        {isAllocatingCode ? '••••••' : displayShareCode}
                       </span>
                       <button
-                        onClick={() => copyToClipboard(examCode, 'code')}
+                        onClick={() => copyToClipboard(displayShareCode, 'code')}
                         className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 transition-colors"
-                        title="Sao chép mã bài thi"
+                        title="Sao chép mã truy cập"
                       >
                         {copiedCode ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
                       </button>
                     </div>
+                    <span className="text-[11px] text-slate-500 mt-0.5 block">
+                      Mã nội bộ quản lý đề: <span className="font-mono font-semibold">{examCode}</span>
+                    </span>
                   </div>
 
                   {/* Real-time Status Badge */}
@@ -603,10 +662,19 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                   </div>
                 )}
 
+                {allocationError && (
+                  <div className="p-3 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <span>{allocationError}</span>
+                    </div>
+                  </div>
+                )}
+
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <LinkIcon className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Đường dẫn truy cập trực tiếp bài thi (Không cần nhập mã)</span>
+                    <span>Đường dẫn làm bài rút gọn (6 chữ số)</span>
                   </label>
                   <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
                     isPreviewDomain
@@ -617,37 +685,51 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                   </span>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="p-3.5 rounded-2xl bg-blue-50/70 border border-blue-200 space-y-3">
                   <input
                     type="text"
                     readOnly
                     value={directLink}
-                    className="flex-1 p-2.5 rounded-xl border border-slate-300 bg-slate-50 text-xs font-mono text-slate-900 select-all focus:outline-none focus:ring-2 focus:ring-blue-500 font-medium"
+                    className="w-full p-3 rounded-xl border border-blue-200 bg-white text-sm font-mono text-slate-900 select-all focus:outline-none focus:ring-2 focus:ring-blue-500 font-bold"
                   />
-                  <button
-                    onClick={() => copyToClipboard(directLink, 'link')}
-                    className={`px-4 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 shadow-xs ${
-                      copiedLink
-                        ? 'bg-emerald-600 text-white shadow-emerald-500/20'
-                        : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20'
-                    }`}
-                  >
-                    {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                    <span>{copiedLink ? 'Đã sao chép liên kết!' : 'Sao chép liên kết'}</span>
-                  </button>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => copyToClipboard(directLink, 'link')}
+                      className={`px-4 py-3 rounded-xl text-xs font-extrabold uppercase tracking-wide transition-all flex items-center justify-center gap-2 shadow-sm ${
+                        copiedLink
+                          ? 'bg-emerald-600 text-white shadow-emerald-500/20'
+                          : 'bg-blue-600 hover:bg-blue-700 text-white shadow-blue-500/20'
+                      }`}
+                    >
+                      {copiedLink ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                      <span>{copiedLink ? 'ĐÃ SAO CHÉP LINK' : 'SAO CHÉP LINK'}</span>
+                    </button>
+
+                    <a
+                      href={directLink}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="px-4 py-3 rounded-xl bg-white hover:bg-slate-50 border border-blue-300 text-blue-700 text-xs font-extrabold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors shadow-2xs"
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>MỞ LINK</span>
+                    </a>
+
+                    <button
+                      type="button"
+                      onClick={handleDownloadQrPng}
+                      className="px-4 py-3 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-extrabold uppercase tracking-wide flex items-center justify-center gap-2 transition-colors shadow-2xs"
+                    >
+                      <Download className="w-4 h-4 text-blue-300" />
+                      <span>TẢI MÃ QR</span>
+                    </button>
+                  </div>
                 </div>
 
-                <div className="flex items-center justify-between text-[11px] text-slate-500">
-                  <span>Học sinh mở link này trên điện thoại hoặc máy tính để vào thẳng phòng thi.</span>
-                  <a
-                    href={directLink}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-blue-600 hover:text-blue-800 font-bold flex items-center gap-1 hover:underline"
-                  >
-                    <span>Mở thử bài thi</span>
-                    <ExternalLink className="w-3 h-3" />
-                  </a>
+                <div className="text-[11px] text-slate-500">
+                  <span>Học sinh mở link ngắn này trên điện thoại hoặc máy tính để vào thẳng phòng thi mà không lộ mã đề nội bộ.</span>
                 </div>
               </div>
 
@@ -681,7 +763,7 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                   {/* Caption underneath QR (Requirement 3C) */}
                   <div className="mt-2 pt-2 border-t border-slate-100">
                     <span className="text-[11px] font-mono font-bold text-slate-900 block">
-                      MÃ ĐỀ: {examCode}
+                      MÃ TRUY CẬP: {displayShareCode}
                     </span>
                     <span className="text-[10px] text-slate-500 block truncate max-w-[176px]">
                       {exam.title}
@@ -807,10 +889,10 @@ Hướng dẫn: Học sinh nhấp vào đường link trên hoặc mở ứng d�
                   </h3>
                   <div className="mt-2 inline-block bg-slate-100 border border-slate-300 rounded-xl px-5 py-2">
                     <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">
-                      MÃ THAM GIA:
+                      MÃ TRUY CẬP BÀI THI:
                     </span>
                     <span className="text-2xl font-black font-mono tracking-widest text-blue-700">
-                      {examCode}
+                      {displayShareCode}
                     </span>
                   </div>
                 </div>

@@ -193,6 +193,7 @@ export interface Exam {
   id: string;
   title: string;
   code: string;                 // Mã đề tham gia online, VD: "CHEM12A", "HSG2024"
+  publicCode?: string;          // Mã truy cập đường dẫn ngắn 6 chữ số (lưu dạng string giữ số 0 ở đầu)
   folderId?: string;
   grade: ChemGrade;
   topic?: ChemTopic;

@@ -22,7 +22,11 @@ import {
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Exam, Question, StudentSubmission } from '../types';
-import { normalizeExamCode, normalizeExamCodeCompact } from '../utils/urlHelper';
+import {
+  isValidSixDigitPublicCode,
+  normalizeExamCode,
+  normalizeExamCodeCompact,
+} from '../utils/urlHelper';
 
 function cleanEnvStr(val: unknown): string {
   return typeof val === 'string' ? val.trim() : '';
@@ -269,6 +273,7 @@ export function sanitizeExamForStudent(exam: Exam): Exam {
     id: exam?.id || '',
     title: (exam?.title || 'Bài kiểm tra HQTest').slice(0, 300),
     code: normalizeExamCode(exam?.code || ''),
+    ...(isValidSixDigitPublicCode(exam?.publicCode) ? { publicCode: exam.publicCode.trim() } : {}),
     grade: exam?.grade || '12',
     ...(exam?.topic ? { topic: exam.topic } : {}),
     durationMinutes: exam?.durationMinutes || 45,
@@ -458,9 +463,11 @@ export async function syncExamToFirestore(
   const batch = writeBatch(db);
 
   // 1. Private master exam
+  const validPublicCode = isValidSixDigitPublicCode(exam.publicCode) ? exam.publicCode.trim() : undefined;
   const masterPayload = stripUndefinedDeep({
     id: safeId,
     code: normalizedCode,
+    ...(validPublicCode ? { publicCode: validPublicCode } : {}),
     title: exam.title.slice(0, 300),
     grade: exam.grade,
     ...(exam.topic ? { topic: exam.topic } : {}),
@@ -507,6 +514,7 @@ export async function syncExamToFirestore(
   // 2. Public exam availability metadata (no questions, no answers, no password hashes)
   const statusPayload = stripUndefinedDeep({
     examCode: normalizedCode,
+    ...(validPublicCode ? { publicCode: validPublicCode } : {}),
     examId: safeId,
     title: masterPayload.title,
     grade: masterPayload.grade,
@@ -535,6 +543,7 @@ export async function syncExamToFirestore(
     ...exam,
     id: safeId,
     code: normalizedCode,
+    ...(validPublicCode ? { publicCode: validPublicCode } : {}),
     requiresPassword: resolvedRequiresPassword,
     passwordUpdatedAt: resolvedPasswordUpdatedAt,
     allowAnswerReview: resolvedAllowAnswerReview,
@@ -705,6 +714,7 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
 
       const statusData = statusSnap.data() as {
         examCode?: string;
+        publicCode?: string;
         examId?: string;
         title?: string;
         grade?: Exam['grade'];
@@ -733,6 +743,9 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
       const placeholderExam: Exam = {
         id: statusData.examId || code,
         code: recordExamCode,
+        ...(isValidSixDigitPublicCode(statusData.publicCode)
+          ? { publicCode: statusData.publicCode.trim() }
+          : {}),
         title: statusData.title || `Bài thi ${recordExamCode}`,
         grade: statusData.grade || '12',
         durationMinutes: statusData.durationMinutes || 45,
@@ -865,6 +878,87 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
   }
 
   return { status: 'not_found' };
+}
+
+export async function fetchPublicExamByPublicCode(
+  rawPublicCode: string
+): Promise<CloudExamLookupResult> {
+  if (firebaseInitError) {
+    return {
+      status: 'firebase_not_initialized',
+      message: `Dịch vụ Firestore chưa khởi tạo thành công (${firebaseInitError}). Vui lòng kiểm tra cấu hình hoặc tải lại trang.`,
+    };
+  }
+
+  const cleanPublicCode = (rawPublicCode || '').trim();
+  if (!isValidSixDigitPublicCode(cleanPublicCode)) {
+    return {
+      status: 'not_found',
+      message: 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại',
+    };
+  }
+
+  try {
+    const linkSnap = await getDoc(doc(db, 'examLinks', cleanPublicCode));
+    if (!linkSnap.exists()) {
+      return {
+        status: 'not_found',
+        message: 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại',
+      };
+    }
+
+    const linkData = linkSnap.data() as {
+      examId?: string;
+      examCode?: string;
+      ownerId?: string;
+      isActive?: boolean;
+    };
+
+    if (linkData.isActive === false) {
+      return {
+        status: 'not_published',
+        ownerId: linkData.ownerId,
+        message: 'Đề thi hiện không còn khả dụng',
+      };
+    }
+
+    const targetExamCode = normalizeExamCode(linkData.examCode || '');
+    if (!targetExamCode) {
+      return {
+        status: 'not_found',
+        message: 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại',
+      };
+    }
+
+    const res = await fetchPublicExamFromFirestore(targetExamCode);
+    if (res.status === 'not_found') {
+      return {
+        status: 'not_found',
+        message: 'Đề thi đã bị xóa hoặc không còn khả dụng.',
+      };
+    }
+
+    if (res.status === 'not_published') {
+      return {
+        ...res,
+        exam: res.exam ? { ...res.exam, publicCode: cleanPublicCode } : undefined,
+        status: 'not_published',
+        message: 'Đề thi hiện không còn khả dụng',
+      };
+    }
+
+    return {
+      ...res,
+      exam: res.exam ? { ...res.exam, publicCode: cleanPublicCode } : undefined,
+    };
+  } catch (error) {
+    console.warn('Cloud exam lookup error for publicCode', cleanPublicCode, error);
+    const classified = classifyFirestoreError(error);
+    return {
+      status: classified.status,
+      message: classified.message,
+    };
+  }
 }
 
 export async function fetchAllowedAnswerKeysAfterSubmit(

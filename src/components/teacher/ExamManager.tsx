@@ -19,16 +19,21 @@ import {
   Lock,
   Unlock,
   ShieldCheck,
-  Award
+  Award,
+  Link as LinkIcon,
+  ExternalLink
 } from 'lucide-react';
 import { ExamShareModal } from '../common/ExamShareModal';
 import { ExamSecurityModal } from './ExamSecurityModal';
 import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
+import { getExamShortUrl, isValidSixDigitPublicCode } from '../../utils/urlHelper';
 
 interface ExamManagerProps {
   exams: Exam[];
   submissions: StudentSubmission[];
   mode?: 'all' | 'online';
+  autoOpenShareExamId?: string | null;
+  onClearAutoOpenShare?: () => void;
   onCreateNew: () => void;
   onOpenResults: (examId: string) => void;
   onTakeExamAsPreview: (exam: Exam) => void;
@@ -42,6 +47,8 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   exams,
   submissions,
   mode = 'all',
+  autoOpenShareExamId,
+  onClearAutoOpenShare,
   onCreateNew,
   onOpenResults,
   onTakeExamAsPreview,
@@ -51,6 +58,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   onShareExam,
 }) => {
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
+  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
   const [activeSecurityExam, setActiveSecurityExam] = useState<Exam | null>(null);
   const [publishFilter, setPublishFilter] = useState<'all' | 'published' | 'closed'>(
@@ -61,10 +69,26 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
     setPublishFilter(mode === 'online' ? 'published' : 'all');
   }, [mode]);
 
+  useEffect(() => {
+    if (!autoOpenShareExamId) return;
+    const target = exams.find((e) => e.id === autoOpenShareExamId);
+    if (target) {
+      setActiveShareExam(target);
+      onClearAutoOpenShare?.();
+    }
+  }, [autoOpenShareExamId, exams, onClearAutoOpenShare]);
+
   const handleCopyCode = (code: string) => {
     navigator.clipboard?.writeText(code);
     setCopiedCode(code);
     setTimeout(() => setCopiedCode(null), 2500);
+  };
+
+  const handleCopyShortLink = (exam: Exam) => {
+    const url = getExamShortUrl(exam);
+    navigator.clipboard?.writeText(url);
+    setCopiedLinkId(exam.id);
+    setTimeout(() => setCopiedLinkId(null), 2500);
   };
 
   const publishedCount = exams.filter((e) => e.isPublished).length;
@@ -238,6 +262,25 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
                     {exam.title}
                   </h3>
 
+                  {isValidSixDigitPublicCode(exam.publicCode) && (
+                    <div className="flex items-center gap-2 flex-wrap text-xs">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 font-mono font-bold">
+                        <LinkIcon className="w-3.5 h-3.5 text-teal-600" />
+                        <span>{getExamShortUrl(exam)}</span>
+                      </span>
+                      <a
+                        href={getExamShortUrl(exam)}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold hover:underline"
+                        title="Mở link làm bài trong tab mới"
+                      >
+                        <span>Mở link</span>
+                        <ExternalLink className="w-3 h-3" />
+                      </a>
+                    </div>
+                  )}
+
                   <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
                     <span>⏱ {exam.durationMinutes} phút</span>
                     <span>📝 {exam.questions.length} câu hỏi</span>
@@ -260,7 +303,27 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
 
                 {/* Right: Actions */}
                 <div className="flex items-center gap-2 flex-wrap self-end lg:self-center shrink-0">
-                  {/* Copy Code Button */}
+                  {/* Copy Short Link Button */}
+                  <button
+                    onClick={() => handleCopyShortLink(exam)}
+                    className="px-3 py-2 rounded-xl border border-teal-200 bg-teal-50/80 hover:bg-teal-100 text-teal-800 text-xs font-bold transition-colors flex items-center gap-1.5"
+                    title="Sao chép link rút gọn 6 chữ số để gửi học sinh"
+                  >
+                    {copiedLinkId === exam.id ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <LinkIcon className="w-4 h-4" />
+                    )}
+                    <span>
+                      {copiedLinkId === exam.id
+                        ? 'Đã chép link!'
+                        : isValidSixDigitPublicCode(exam.publicCode)
+                        ? `Sao chép /${exam.publicCode}`
+                        : 'Sao chép link'}
+                    </span>
+                  </button>
+
+                  {/* Copy Internal Code Button */}
                   <button
                     onClick={() => handleCopyCode(exam.code)}
                     className="px-3 py-2 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors flex items-center gap-1.5"
@@ -336,6 +399,9 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
         exam={activeShareExam ? (exams.find(e => e.id === activeShareExam.id) || activeShareExam) : null}
         onClose={() => setActiveShareExam(null)}
         onTogglePublish={onTogglePublish}
+        onExamUpdated={(updatedExam) => {
+          onExamUpdated?.(updatedExam);
+        }}
       />
 
       {/* Security & Floor-Score Config Modal */}

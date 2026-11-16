@@ -75,6 +75,10 @@ service cloud.firestore {
       return code is string && code.size() >= 2 && code.size() <= 32 && code.matches('^[A-Z0-9\\-]+$');
     }
 
+    function isValidPublicCode(code) {
+      return code is string && code.size() == 6 && code.matches('^[0-9]{6}$');
+    }
+
     // 3. Entity Validation Blueprints
     function isValidUserProfile(data) {
       return data.keys().hasAll([
@@ -262,7 +266,7 @@ service cloud.firestore {
           'authorName', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'code', 'title', 'grade', 'topic', 'folderId',
+          'id', 'code', 'publicCode', 'title', 'grade', 'topic', 'folderId',
           'durationMinutes', 'totalQuestions', 'totalScore', 'questions', 'rules',
           'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
           'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
@@ -274,6 +278,7 @@ service cloud.firestore {
         ])
         && isValidId(data.id)
         && isValidExamCode(data.code)
+        && (!('publicCode' in data) || isValidPublicCode(data.publicCode))
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
         && data.grade in ['10', '11', '12', 'chuyen_hsg']
         && (!('topic' in data) || (data.topic is string && data.topic.size() <= 64))
@@ -316,13 +321,14 @@ service cloud.firestore {
           'ownerId', 'updatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
-          'examCode', 'examId', 'title', 'grade', 'durationMinutes',
+          'examCode', 'publicCode', 'examId', 'title', 'grade', 'durationMinutes',
           'totalQuestions', 'totalScore', 'isPublished', 'openAt', 'closeAt',
           'requiresPassword', 'allowAnswerReview', 'answerReviewMinScore',
           'answerReviewEnabledAt', 'showScoreAfterSubmit', 'showSolutionsAfterSubmit',
           'maxAttempts', 'authorName', 'ownerId', 'updatedAt', 'serverUpdatedAt'
         ])
         && isValidExamCode(data.examCode)
+        && (!('publicCode' in data) || isValidPublicCode(data.publicCode))
         && isValidId(data.examId)
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
         && data.grade in ['10', '11', '12', 'chuyen_hsg']
@@ -353,7 +359,7 @@ service cloud.firestore {
           'authorName', 'ownerId', 'updatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'code', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
+          'id', 'code', 'publicCode', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
           'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
           'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
           'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
@@ -363,6 +369,7 @@ service cloud.firestore {
         ])
         && isValidId(data.id)
         && isValidExamCode(data.code)
+        && (!('publicCode' in data) || isValidPublicCode(data.publicCode))
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
         && data.grade in ['10', '11', '12', 'chuyen_hsg']
         && (!('topic' in data) || (data.topic is string && data.topic.size() <= 64))
@@ -780,7 +787,7 @@ service cloud.firestore {
             && isOwner(existing().ownerId)
             && incoming().ownerId == existing().ownerId
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'code', 'title', 'grade', 'topic', 'folderId', 'durationMinutes',
+              'code', 'publicCode', 'title', 'grade', 'topic', 'folderId', 'durationMinutes',
               'totalQuestions', 'totalScore', 'questions', 'rules',
               'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
               'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
@@ -790,7 +797,7 @@ service cloud.firestore {
               'authorName', 'updatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'ownerId', 'authorId', 'code', 'title', 'grade', 'topic', 'folderId',
+            'ownerId', 'authorId', 'code', 'publicCode', 'title', 'grade', 'topic', 'folderId',
             'durationMinutes', 'totalQuestions', 'totalScore', 'questions', 'rules',
             'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
             'maxAttempts', 'showScoreAfterSubmit', 'showAnswersAfterSubmit',
@@ -822,14 +829,14 @@ service cloud.firestore {
             && isOwner(existing().ownerId)
             && incoming().ownerId == existing().ownerId
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'examId', 'title', 'grade', 'durationMinutes', 'totalQuestions',
+              'examId', 'publicCode', 'title', 'grade', 'durationMinutes', 'totalQuestions',
               'totalScore', 'isPublished', 'openAt', 'closeAt',
               'requiresPassword', 'allowAnswerReview', 'answerReviewMinScore',
               'answerReviewEnabledAt', 'showScoreAfterSubmit', 'showSolutionsAfterSubmit',
               'maxAttempts', 'authorName', 'updatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'ownerId', 'examId', 'title', 'grade', 'durationMinutes', 'totalQuestions',
+            'ownerId', 'examId', 'publicCode', 'title', 'grade', 'durationMinutes', 'totalQuestions',
             'totalScore', 'isPublished', 'openAt', 'closeAt',
             'requiresPassword', 'allowAnswerReview', 'answerReviewMinScore',
             'answerReviewEnabledAt', 'showScoreAfterSubmit', 'showSolutionsAfterSubmit',
@@ -866,7 +873,7 @@ service cloud.firestore {
             && isOwner(existing().ownerId)
             && incoming().ownerId == existing().ownerId
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'id', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
+              'id', 'publicCode', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
               'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
               'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
               'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
@@ -875,7 +882,7 @@ service cloud.firestore {
               'authorName', 'updatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'ownerId', 'id', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
+            'ownerId', 'id', 'publicCode', 'title', 'grade', 'topic', 'durationMinutes', 'totalQuestions',
             'totalScore', 'questions', 'rules', 'shuffleQuestions', 'shuffleOptions',
             'isPublished', 'openAt', 'closeAt', 'maxAttempts', 'showScoreAfterSubmit',
             'showAnswersAfterSubmit', 'showSolutionsAfterSubmit', 'allowReviewLater',
@@ -887,6 +894,12 @@ service cloud.firestore {
       allow delete: if isValidId(examCode) && (
         (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
       );
+    }
+
+    match /examLinks/{publicCode} {
+      // Public single-doc lookup by exact 6-digit code. Never allow list or client writes.
+      allow get: if isValidPublicCode(publicCode);
+      allow list, create, update, delete: if false;
     }
 
     match /examKeys/{examCode} {

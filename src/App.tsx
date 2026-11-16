@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   User,
   UserRole,
@@ -25,7 +25,9 @@ import { SystemDesignModal } from './components/docs/SystemDesignModal';
 import { UserGuideView } from './components/docs/UserGuideView';
 import { APP_CONFIG } from './constants/brand';
 import {
-  extractExamCodeFromLocation,
+  extractExamEntryFromLocation,
+  ExamUrlEntry,
+  isValidSixDigitPublicCode,
   normalizeExamCode,
 } from './utils/urlHelper';
 import {
@@ -37,6 +39,8 @@ import {
 import {
   submitAndGradeExamOnServer,
   evaluateLocalAnswerReviewPolicy,
+  allocateExamPublicCodeOnServer,
+  syncExamLinkStatusOnServer,
 } from './services/examSecurityApi';
 import {
   fetchTeacherWorkspaceFromFirestore,
@@ -97,23 +101,25 @@ export default function App() {
     logout,
   } = useAuth();
 
-  const [initialDirectCode] = useState<string | null>(() => {
+  const [initialDirectEntry] = useState<ExamUrlEntry | null>(() => {
     if (typeof window === 'undefined') return null;
     try {
-      return extractExamCodeFromLocation(window.location);
+      return extractExamEntryFromLocation(window.location);
     } catch {
       return null;
     }
   });
 
-  // Guest direct-link exam access (/c/:code or ?examCode=...)
-  const [guestExamMode, setGuestExamMode] = useState<boolean>(() => Boolean(initialDirectCode));
+  // Guest direct-link exam access (/583921, /c/:code, or ?examCode=...)
+  const [guestExamMode, setGuestExamMode] = useState<boolean>(() => Boolean(initialDirectEntry));
   const [activeTab, setActiveTab] = useState<string>(() =>
-    initialDirectCode ? 'exam_landing' : 'dashboard'
+    initialDirectEntry ? 'exam_landing' : 'dashboard'
   );
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isSystemDocsOpen, setIsSystemDocsOpen] = useState(false);
+  const [autoOpenShareExamId, setAutoOpenShareExamId] = useState<string | null>(null);
+  const backfillingUidRef = useRef<string | null>(null);
 
   // Scoped Workspace State (Strict UID isolation)
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -135,7 +141,7 @@ export default function App() {
   const [reviewExamOverride, setReviewExamOverride] = useState<Exam | undefined>(undefined);
   const [reviewAnswerCheck, setReviewAnswerCheck] = useState<ExamAnswerReviewCheck | null>(null);
   const [reviewIsTeacherPreview, setReviewIsTeacherPreview] = useState<boolean>(false);
-  const [pendingExamCodeAfterAuth, setPendingExamCodeAfterAuth] = useState<string | null>(null);
+  const [pendingExamEntryAfterAuth, setPendingExamEntryAfterAuth] = useState<ExamUrlEntry | null>(null);
   const [selectedExamIdForResults, setSelectedExamIdForResults] = useState<string | null>(null);
 
   // Preload questions for ExamCreator
@@ -147,10 +153,17 @@ export default function App() {
   const [directJoinExam, setDirectJoinExam] = useState<Exam | null>(null);
   const [directJoinOwnerId, setDirectJoinOwnerId] = useState<string | undefined>(undefined);
   const [directJoinCode, setDirectJoinCode] = useState<string>(() =>
-    initialDirectCode ? normalizeExamCode(initialDirectCode) : ''
+    initialDirectEntry
+      ? initialDirectEntry.kind === 'examCode'
+        ? normalizeExamCode(initialDirectEntry.value)
+        : initialDirectEntry.value
+      : ''
+  );
+  const [directJoinEntryKind, setDirectJoinEntryKind] = useState<ExamUrlEntry['kind']>(() =>
+    initialDirectEntry ? initialDirectEntry.kind : 'examCode'
   );
   const [directJoinStatus, setDirectJoinStatus] = useState<ExamLandingStatus>(() =>
-    initialDirectCode ? 'loading' : 'found'
+    initialDirectEntry ? 'loading' : 'found'
   );
   const [directJoinMessage, setDirectJoinMessage] = useState<string | undefined>(undefined);
 
@@ -193,6 +206,45 @@ export default function App() {
         StorageService.saveFolders(ws.folders, uid);
         StorageService.saveExams(ws.exams, uid);
         StorageService.saveSubmissions(ws.submissions, uid);
+
+        // One-time background backfill: permanently assign a unique 6-digit publicCode to legacy exams
+        const missingPublicCodes = ws.exams.filter((ex) => !isValidSixDigitPublicCode(ex.publicCode));
+        if (missingPublicCodes.length > 0 && backfillingUidRef.current !== uid) {
+          backfillingUidRef.current = uid;
+          void (async () => {
+            try {
+              const allocatedMap = new Map<string, string>();
+              for (const legacyExam of missingPublicCodes) {
+                const res = await allocateExamPublicCodeOnServer({
+                  examId: legacyExam.id,
+                  examCode: legacyExam.code,
+                  isPublished: legacyExam.isPublished,
+                });
+                if (res.ok && res.publicCode) {
+                  allocatedMap.set(legacyExam.id, res.publicCode);
+                }
+              }
+              if (allocatedMap.size > 0) {
+                setExams((prev) => {
+                  const next = prev.map((item) => {
+                    const assigned = allocatedMap.get(item.id);
+                    return assigned && !isValidSixDigitPublicCode(item.publicCode)
+                      ? { ...item, publicCode: assigned }
+                      : item;
+                  });
+                  StorageService.saveExams(next, uid);
+                  return next;
+                });
+              }
+            } catch (err) {
+              console.warn('[HQTest] Backfill 6-digit publicCode notice:', err);
+            } finally {
+              if (backfillingUidRef.current === uid) {
+                backfillingUidRef.current = null;
+              }
+            }
+          })();
+        }
       } else if (user.role === 'student') {
         const sws = await fetchStudentWorkspaceFromFirestore(uid);
         setEnrollments(sws.enrollments);
@@ -210,7 +262,7 @@ export default function App() {
   useEffect(() => {
     if (authState === 'authenticated' && userProfile) {
       void hydrateAuthenticatedWorkspace(userProfile);
-      if (pendingExamCodeAfterAuth) return;
+      if (pendingExamEntryAfterAuth) return;
       setActiveTab((prev) => {
         if (guestExamMode || prev === 'exam_landing' || prev === 'take_exam' || prev === 'review_submission') {
           return prev;
@@ -220,7 +272,7 @@ export default function App() {
     } else if (authState === 'unauthenticated' || authState === 'locked' || authState === 'rejected' || authState === 'pending_approval') {
       resetWorkspaceMemoryState();
     }
-  }, [authState, userProfile, hydrateAuthenticatedWorkspace, resetWorkspaceMemoryState, guestExamMode, pendingExamCodeAfterAuth]);
+  }, [authState, userProfile, hydrateAuthenticatedWorkspace, resetWorkspaceMemoryState, guestExamMode, pendingExamEntryAfterAuth]);
 
   const reloadDataFromStorage = useCallback(() => {
     if (!activeUid) return;
@@ -230,57 +282,69 @@ export default function App() {
     setSubmissions(StorageService.getSubmissions(undefined, activeUid));
   }, [activeUid]);
 
-  const resolveDirectExamByCode = useCallback(async (rawCode: string) => {
-    const clean = normalizeExamCode(rawCode);
-    if (!clean) return;
+  const resolveDirectExamByCode = useCallback(
+    async (rawValue: string, kind: ExamUrlEntry['kind'] = 'examCode') => {
+      const clean = kind === 'examCode' ? normalizeExamCode(rawValue) : rawValue.trim();
+      if (!clean) return;
 
-    if (typeof window !== 'undefined') {
-      try {
-        const expected = `/?examCode=${encodeURIComponent(clean)}`;
-        if (window.location.search !== `?examCode=${encodeURIComponent(clean)}`) {
-          window.history.replaceState({}, '', expected);
+      if (typeof window !== 'undefined') {
+        try {
+          if (kind === 'publicCode') {
+            const expectedPath = `/${clean}`;
+            if (window.location.pathname !== expectedPath || window.location.search) {
+              window.history.replaceState({}, '', expectedPath);
+            }
+          } else if (kind === 'examCode') {
+            const expected = `/?examCode=${encodeURIComponent(clean)}`;
+            if (window.location.search !== `?examCode=${encodeURIComponent(clean)}`) {
+              window.history.replaceState({}, '', expected);
+            }
+          }
+          // For 'invalidPublicUrl', keep the invalid pathname visible as-is
+        } catch {
+          // Ignore history restrictions
         }
-      } catch {
-        // Ignore history restrictions
       }
-    }
 
-    setGuestExamMode(true);
-    setDirectJoinCode(clean);
-    setDirectJoinExam(null);
-    setDirectJoinOwnerId(undefined);
-    setDirectJoinStatus('loading');
-    setDirectJoinMessage(undefined);
-    setActiveTab('exam_landing');
-
-    try {
-      const res = await StorageService.checkExamStatusAsync(clean);
-      setDirectJoinStatus(res.status);
-      setDirectJoinMessage(res.message);
-      setDirectJoinExam(res.exam || null);
-      setDirectJoinOwnerId(res.ownerId);
-    } catch (err) {
-      console.error('[HQTest] Lỗi tải thông tin bài thi:', err);
-      setDirectJoinStatus('unexpected_error');
-      setDirectJoinMessage('Đã xảy ra lỗi không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.');
+      setGuestExamMode(true);
+      setDirectJoinEntryKind(kind);
+      setDirectJoinCode(clean);
       setDirectJoinExam(null);
       setDirectJoinOwnerId(undefined);
-    }
-  }, []);
+      setDirectJoinStatus('loading');
+      setDirectJoinMessage(undefined);
+      setActiveTab('exam_landing');
+
+      try {
+        const res = await StorageService.checkExamStatusAsync(clean, kind);
+        setDirectJoinStatus(res.status);
+        setDirectJoinMessage(res.message);
+        setDirectJoinExam(res.exam || null);
+        setDirectJoinOwnerId(res.ownerId);
+      } catch (err) {
+        console.error('[HQTest] Lỗi tải thông tin bài thi:', err);
+        setDirectJoinStatus('unexpected_error');
+        setDirectJoinMessage('Đã xảy ra lỗi không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.');
+        setDirectJoinExam(null);
+        setDirectJoinOwnerId(undefined);
+      }
+    },
+    []
+  );
 
   useEffect(() => {
-    if (authState === 'authenticated' && userProfile && pendingExamCodeAfterAuth) {
-      const codeToResume = pendingExamCodeAfterAuth;
-      setPendingExamCodeAfterAuth(null);
-      void resolveDirectExamByCode(codeToResume);
+    if (authState === 'authenticated' && userProfile && pendingExamEntryAfterAuth) {
+      const entryToResume = pendingExamEntryAfterAuth;
+      setPendingExamEntryAfterAuth(null);
+      void resolveDirectExamByCode(entryToResume.value, entryToResume.kind);
     }
-  }, [authState, userProfile, pendingExamCodeAfterAuth, resolveDirectExamByCode]);
+  }, [authState, userProfile, pendingExamEntryAfterAuth, resolveDirectExamByCode]);
 
   const resolveDirectExamFromUrl = useCallback(async () => {
     if (typeof window === 'undefined') return;
-    const targetCode = extractExamCodeFromLocation(window.location);
-    if (!targetCode) return;
-    await resolveDirectExamByCode(targetCode);
+    const entry = extractExamEntryFromLocation(window.location);
+    if (!entry) return;
+    await resolveDirectExamByCode(entry.value, entry.kind);
   }, [resolveDirectExamByCode]);
 
   // URL Routing, QR Scan Detection & Cross-Tab Storage Sync
@@ -289,12 +353,13 @@ export default function App() {
       reloadDataFromStorage();
     };
     const handleRouteChange = () => {
-      const code = extractExamCodeFromLocation(window.location);
-      if (code) {
+      const entry = extractExamEntryFromLocation(window.location);
+      if (entry) {
         void resolveDirectExamFromUrl();
       } else {
         setDirectJoinExam(null);
         setDirectJoinCode('');
+        setDirectJoinEntryKind('examCode');
         setGuestExamMode(false);
         setActiveTab((prev) =>
           prev === 'exam_landing'
@@ -400,6 +465,7 @@ export default function App() {
     void syncExamToFirestore(scopedExam, activeUid).catch((err) => {
       console.warn('[HQTest] Could not sync saved exam to Firestore:', err);
     });
+    setAutoOpenShareExamId(scopedExam.id);
     setActiveTab('exam_manager');
   };
 
@@ -428,6 +494,15 @@ export default function App() {
       void syncExamToFirestore(toggled, activeUid).catch((err) => {
         console.warn('Could not sync publish toggle to Firestore:', err);
       });
+      void syncExamLinkStatusOnServer({
+        action: 'set_active',
+        examId: toggled.id,
+        examCode: toggled.code,
+        publicCode: toggled.publicCode,
+        isActive: toggled.isPublished,
+      }).catch((err) => {
+        console.warn('Could not sync examLinks active status:', err);
+      });
     }
   };
 
@@ -441,6 +516,14 @@ export default function App() {
     if (target) {
       void deleteExamFromFirestore(target).catch((err) => {
         console.warn('Could not delete exam from Firestore:', err);
+      });
+      void syncExamLinkStatusOnServer({
+        action: 'delete',
+        examId: target.id,
+        examCode: target.code,
+        publicCode: target.publicCode,
+      }).catch((err) => {
+        console.warn('Could not sync examLinks deletion:', err);
       });
     }
   };
@@ -567,11 +650,24 @@ export default function App() {
     setActiveStudentName(name);
     setActiveStudentClass(cls);
 
-    if (typeof window !== 'undefined' && exam.code) {
+    if (typeof window !== 'undefined') {
       try {
-        const normalized = normalizeExamCode(exam.code);
-        const nextUrl = `/?examCode=${encodeURIComponent(normalized)}`;
-        window.history.replaceState({}, '', nextUrl);
+        const currentEntry = extractExamEntryFromLocation(window.location);
+        if (isValidSixDigitPublicCode(exam.publicCode)) {
+          const shortPath = `/${exam.publicCode.trim()}`;
+          if (window.location.pathname !== shortPath || window.location.search) {
+            window.history.replaceState({}, '', shortPath);
+          }
+        } else if (currentEntry?.kind === 'publicCode') {
+          const shortPath = `/${currentEntry.value}`;
+          if (window.location.pathname !== shortPath || window.location.search) {
+            window.history.replaceState({}, '', shortPath);
+          }
+        } else if (exam.code) {
+          const normalized = normalizeExamCode(exam.code);
+          const nextUrl = `/?examCode=${encodeURIComponent(normalized)}`;
+          window.history.replaceState({}, '', nextUrl);
+        }
       } catch {
         // Ignore history restriction
       }
@@ -789,7 +885,10 @@ export default function App() {
       <ErrorBoundary fallbackTitle="Không thể khởi tạo cổng đăng nhập" onResetToHome={() => window.location.reload()}>
         <AuthPortal
           onQuickExamCodeLookup={(code) => {
-            void resolveDirectExamByCode(code);
+            void resolveDirectExamByCode(
+              code,
+              isValidSixDigitPublicCode(code) ? 'publicCode' : 'examCode'
+            );
           }}
         />
       </ErrorBoundary>
@@ -901,6 +1000,7 @@ export default function App() {
         <ExamJoinLanding
           exam={directJoinExam}
           examCode={directJoinCode}
+          entryKind={directJoinEntryKind}
           status={directJoinStatus}
           statusMessage={directJoinMessage}
           currentUser={userProfile}
@@ -913,14 +1013,19 @@ export default function App() {
             setDirectJoinMessage(undefined);
           }}
           onRequestLoginForProtectedExam={() => {
-            const code = directJoinCode || extractExamCodeFromLocation(window.location);
-            if (code) {
-              setPendingExamCodeAfterAuth(normalizeExamCode(code));
+            const entry = extractExamEntryFromLocation(window.location);
+            if (entry && entry.kind !== 'invalidPublicUrl') {
+              setPendingExamEntryAfterAuth(entry);
+            } else if (directJoinCode) {
+              setPendingExamEntryAfterAuth({
+                value: directJoinCode,
+                kind: directJoinEntryKind,
+              });
             }
             setGuestExamMode(false);
             setActiveTab('dashboard');
           }}
-          onRetryLookup={() => void resolveDirectExamByCode(directJoinCode)}
+          onRetryLookup={() => void resolveDirectExamByCode(directJoinCode, directJoinEntryKind)}
           onBackToHome={() => {
             if (isAuthenticatedSession && userProfile) {
               resetToRoleHome();
@@ -1102,6 +1207,8 @@ export default function App() {
                 exams={exams}
                 submissions={submissions}
                 mode={activeTab === 'online_exams' ? 'online' : 'all'}
+                autoOpenShareExamId={autoOpenShareExamId}
+                onClearAutoOpenShare={() => setAutoOpenShareExamId(null)}
                 onCreateNew={() => {
                   setCreatorInitialQuestions([]);
                   setCreatorInitialTitle('Đề thi Hóa học mới');
@@ -1214,7 +1321,12 @@ export default function App() {
               assignedExams={assignedExams}
               onJoinClassByCode={handleJoinClassByCode}
               onStartExam={handleStartExam}
-              onOpenExamLanding={(code) => void resolveDirectExamByCode(code)}
+              onOpenExamLanding={(code) =>
+                void resolveDirectExamByCode(
+                  code,
+                  isValidSixDigitPublicCode(code) ? 'publicCode' : 'examCode'
+                )
+              }
               onReviewSubmission={handleReviewSubmission}
             />
           </ProtectedRoute>

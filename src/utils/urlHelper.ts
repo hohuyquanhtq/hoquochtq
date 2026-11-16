@@ -116,6 +116,10 @@ export function getPublicDomain(): string {
   return '';
 }
 
+export function isValidSixDigitPublicCode(value: unknown): value is string {
+  return typeof value === 'string' && /^\d{6}$/.test(value.trim());
+}
+
 /**
  * Canonical exam code normalization:
  * Preserves uppercase alphanumeric characters and hyphens cleanly so codes like
@@ -135,7 +139,27 @@ export function normalizeExamCodeCompact(rawCode: string): string {
 }
 
 /**
- * Returns the canonical share URL prioritized for Vercel + GitHub production:
+ * Returns the canonical 6-digit short link: https://<PRODUCTION_DOMAIN>/<6_DIGITS>
+ * Falls back to legacy ?examCode= only when an exam has not yet been assigned a 6-digit publicCode.
+ */
+export function getExamShortUrl(examOrCode: { publicCode?: string; code?: string } | string): string {
+  const domain = getPublicDomain();
+  if (typeof examOrCode === 'string') {
+    const trimmed = examOrCode.trim();
+    if (isValidSixDigitPublicCode(trimmed)) {
+      return domain ? `${domain}/${trimmed}` : `/${trimmed}`;
+    }
+    return getExamDirectUrl(trimmed);
+  }
+  const pub = typeof examOrCode?.publicCode === 'string' ? examOrCode.publicCode.trim() : '';
+  if (isValidSixDigitPublicCode(pub)) {
+    return domain ? `${domain}/${pub}` : `/${pub}`;
+  }
+  return getExamDirectUrl(examOrCode?.code || '');
+}
+
+/**
+ * Returns the legacy canonical share URL:
  * https://<PRODUCTION_DOMAIN>/?examCode=<EXAM_CODE>
  */
 export function getExamDirectUrl(examCode: string): string {
@@ -175,25 +199,41 @@ function safeDecodeURIComponent(value: string): string {
   }
 }
 
+export interface ExamUrlEntry {
+  kind: 'publicCode' | 'examCode' | 'invalidPublicUrl';
+  value: string;
+}
+
 /**
- * Extracts exam code from query params (?examCode=, ?c=, ?exam=, ?code=),
- * SPA paths (/c/:code, /exam/:code), or hash routes (#/c/:code).
+ * Extracts either a 6-digit public link entry (/{6_digits}), a legacy examCode entry
+ * (?examCode=, /c/:code, /exam/:code, #/c/:code), or flags an invalid short URL path.
  */
-export function extractExamCodeFromLocation(locationLike?: {
+export function extractExamEntryFromLocation(locationLike?: {
   pathname?: string;
   search?: string;
   hash?: string;
-}): string | null {
+}): ExamUrlEntry | null {
   const loc = locationLike || (typeof window !== 'undefined' ? window.location : undefined);
   if (!loc) return null;
 
-  const pathname = loc.pathname || '';
+  const pathname = (loc.pathname || '').trim();
   const search = loc.search || '';
   const hash = loc.hash || '';
 
+  // 1. Primary 6-digit short path: /{6_digits} (preserves leading zeros, e.g. /004821)
+  if (pathname) {
+    const sixDigitMatch = pathname.match(/^\/(\d{6})\/?$/);
+    if (sixDigitMatch && sixDigitMatch[1]) {
+      return {
+        kind: 'publicCode',
+        value: sixDigitMatch[1],
+      };
+    }
+  }
+
   let targetCode: string | null = null;
 
-  // 1. Query string (?examCode=, ?c=, ?exam=, ?code=)
+  // 2. Legacy Query string (?examCode=, ?c=, ?exam=, ?code=)
   if (search) {
     try {
       const searchParams = new URLSearchParams(search);
@@ -207,7 +247,7 @@ export function extractExamCodeFromLocation(locationLike?: {
     }
   }
 
-  // 2. Path routing (/c/:code or /exam/:code)
+  // 3. Legacy Path routing (/c/:code or /exam/:code)
   if (!targetCode && pathname) {
     const pathMatch = pathname.match(/^\/(?:c|exam)\/([^/?#]+)/i);
     if (pathMatch && pathMatch[1]) {
@@ -215,7 +255,7 @@ export function extractExamCodeFromLocation(locationLike?: {
     }
   }
 
-  // 3. Hash routing (#/c/:code, #/exam/:code, or #?examCode=)
+  // 4. Legacy Hash routing (#/c/:code, #/exam/:code, or #?examCode=)
   if (!targetCode && hash) {
     const hashMatch =
       hash.match(/^#\/?(?:c|exam)\/([^/?#]+)/i) ||
@@ -225,7 +265,47 @@ export function extractExamCodeFromLocation(locationLike?: {
     }
   }
 
-  if (!targetCode || !targetCode.trim()) return null;
-  const normalized = normalizeExamCode(targetCode);
-  return normalized || null;
+  if (targetCode && targetCode.trim()) {
+    const normalized = normalizeExamCode(targetCode);
+    if (normalized) {
+      return {
+        kind: 'examCode',
+        value: normalized,
+      };
+    }
+  }
+
+  // 5. Invalid non-root path detection (e.g. /12345, /1234567, /58ab21, /unknown)
+  if (
+    pathname &&
+    pathname !== '/' &&
+    pathname !== '/index.html' &&
+    !pathname.startsWith('/api/') &&
+    !pathname.startsWith('/assets/') &&
+    !pathname.startsWith('/__') &&
+    !/\.[a-zA-Z0-9]{1,8}$/.test(pathname)
+  ) {
+    const cleanInvalid = safeDecodeURIComponent(pathname.replace(/^\/+|\/+$/g, ''));
+    if (cleanInvalid) {
+      return {
+        kind: 'invalidPublicUrl',
+        value: cleanInvalid,
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Legacy-compatible helper returning normalized exam code or 6-digit publicCode when valid.
+ */
+export function extractExamCodeFromLocation(locationLike?: {
+  pathname?: string;
+  search?: string;
+  hash?: string;
+}): string | null {
+  const entry = extractExamEntryFromLocation(locationLike);
+  if (!entry || entry.kind === 'invalidPublicUrl') return null;
+  return entry.value;
 }

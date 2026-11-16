@@ -149,6 +149,7 @@
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 300 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
         "topic": { "type": "string", "maxLength": 64 },
@@ -192,6 +193,7 @@
       "type": "object",
       "properties": {
         "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
         "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 300 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
@@ -225,6 +227,7 @@
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 300 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
         "topic": { "type": "string", "maxLength": 64 },
@@ -329,6 +332,21 @@
         "role": { "type": "string", "enum": ["admin"] }
       },
       "required": ["uid", "role"]
+    },
+    "ExamLink": {
+      "title": "ExamLink",
+      "description": "Server-allocated unique 6-digit numeric short link mapping to an internal exam.",
+      "type": "object",
+      "properties": {
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["publicCode", "examId", "examCode", "ownerId", "isActive", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -371,6 +389,10 @@
     "/publicExams/{examCode}": {
       "schema": { "$ref": "#/entities/PublicExam" },
       "description": "Sanitized published exam questions readable via single-doc get by exam code."
+    },
+    "/examLinks/{publicCode}": {
+      "schema": { "$ref": "#/entities/ExamLink" },
+      "description": "Server-managed 6-digit public link lookup docs (single-doc get only; zero client list or write)."
     },
     "/examKeys/{examCode}": {
       "schema": { "$ref": "#/entities/ExamAnswerKey" },

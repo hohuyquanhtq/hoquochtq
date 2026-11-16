@@ -1,7 +1,16 @@
 import { User, Question, Exam, Folder, StudentSubmission } from '../types';
 import { parseExamContent, SAMPLE_CHEMISTRY_EXAMS } from '../utils/docxParser';
-import { normalizeExamCode, normalizeExamCodeCompact } from '../utils/urlHelper';
-import { fetchPublicExamFromFirestore, sanitizeExamForStudent, CloudExamLookupStatus } from './firebase';
+import {
+  isValidSixDigitPublicCode,
+  normalizeExamCode,
+  normalizeExamCodeCompact,
+} from '../utils/urlHelper';
+import {
+  fetchPublicExamByPublicCode,
+  fetchPublicExamFromFirestore,
+  sanitizeExamForStudent,
+  CloudExamLookupStatus,
+} from './firebase';
 
 const STORAGE_KEYS = {
   CURRENT_USER: 'chemtest_current_user',
@@ -751,11 +760,25 @@ export const StorageService = {
     return DEFAULT_EXAMS.find((e) => e.id === id);
   },
 
+  getExamByPublicCode(rawPublicCode: string, uid?: string): Exam | undefined {
+    const clean = (rawPublicCode || '').trim();
+    if (!isValidSixDigitPublicCode(clean)) return undefined;
+    const matchByPublicCode = (list: Exam[]) =>
+      list.find((e) => (e.publicCode || '').trim() === clean);
+    return (
+      matchByPublicCode(this.getExams(uid)) ||
+      matchByPublicCode(readJsonArray<Exam>(STORAGE_KEYS.EXAMS) || []) ||
+      matchByPublicCode(DEFAULT_EXAMS)
+    );
+  },
+
   /**
    * Look up exam in active workspace, legacy unowned local cache, or built-in sample exams.
    */
   getExamByCode(rawCode: string, uid?: string): Exam | undefined {
     if (!rawCode || !rawCode.trim()) return undefined;
+    const byPublic = this.getExamByPublicCode(rawCode, uid);
+    if (byPublic) return byPublic;
     const normalized = normalizeExamCode(rawCode);
     const compact = normalizeExamCodeCompact(rawCode);
 
@@ -831,15 +854,29 @@ export const StorageService = {
    * Cross-device student-safe exam lookup: checks Firestore cloud projection first
    * (with stripped answers/solutions), then falls back to built-in/local exams (also sanitized).
    */
-  async checkExamStatusAsync(rawCode: string): Promise<{
+  async checkExamStatusAsync(
+    rawCode: string,
+    kind: 'publicCode' | 'examCode' | 'invalidPublicUrl' = 'examCode'
+  ): Promise<{
     exam?: Exam;
     ownerId?: string;
     source: 'cloud' | 'local';
     status: CloudExamLookupStatus;
     message?: string;
   }> {
+    if (kind === 'invalidPublicUrl') {
+      return {
+        source: 'cloud',
+        status: 'not_found',
+        message: 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại',
+      };
+    }
+
     try {
-      const cloudResult = await fetchPublicExamFromFirestore(rawCode);
+      const cloudResult =
+        kind === 'publicCode'
+          ? await fetchPublicExamByPublicCode(rawCode)
+          : await fetchPublicExamFromFirestore(rawCode);
 
       if (
         cloudResult.status === 'found' ||
@@ -855,6 +892,40 @@ export const StorageService = {
           source: 'cloud',
           status: cloudResult.status,
           message: cloudResult.message,
+        };
+      }
+
+      if (kind === 'publicCode') {
+        const localByPub = this.getExamByPublicCode(rawCode);
+        if (localByPub) {
+          const localStatus = this.checkExamStatus(localByPub.code);
+          return {
+            exam: localStatus.exam ? sanitizeExamForStudent(localStatus.exam) : undefined,
+            source: 'local',
+            status: localStatus.status === 'not_published' ? 'not_published' : localStatus.status,
+            message:
+              localStatus.status === 'not_published'
+                ? 'Đề thi hiện không còn khả dụng'
+                : localStatus.message,
+          };
+        }
+
+        if (
+          cloudResult.status === 'network_error' ||
+          cloudResult.status === 'firebase_not_initialized' ||
+          cloudResult.status === 'unexpected_error'
+        ) {
+          return {
+            source: 'cloud',
+            status: cloudResult.status,
+            message: cloudResult.message,
+          };
+        }
+
+        return {
+          source: 'cloud',
+          status: 'not_found',
+          message: cloudResult.message || 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại',
         };
       }
 

@@ -463,6 +463,120 @@ export async function requestAnswerReviewOnServer(examCode: string): Promise<
   }
 }
 
+export async function allocateExamPublicCodeOnServer(params: {
+  examId: string;
+  examCode: string;
+  isPublished?: boolean;
+  existingPublicCode?: string | null;
+}): Promise<{
+  ok: boolean;
+  publicCode?: string;
+  alreadyExisted?: boolean;
+  error?: string;
+  code?: string;
+}> {
+  const headers = await getIdTokenHeader();
+  if (!headers.Authorization) {
+    return {
+      ok: false,
+      code: 'AUTH_ERROR',
+      error: '[AUTH_ERROR] Cần đăng nhập tài khoản giáo viên để cấp mã đường dẫn 6 chữ số.',
+    };
+  }
+
+  try {
+    const res = await fetch('/api/exams/allocate-public-code', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify({
+        examId: params.examId,
+        examCode: normalizeExamCode(params.examCode),
+        isPublished: params.isPublished !== false,
+        ...(params.existingPublicCode ? { existingPublicCode: params.existingPublicCode } : {}),
+      }),
+    });
+
+    const { data, isHtml } = await parseApiResponsePayload(res);
+    if (res.status === 404 || res.status === 405 || isHtml) {
+      return {
+        ok: false,
+        code: 'API_ROUTE_ERROR',
+        error: `[API_ROUTE_ERROR] Không gọi được API /api/exams/allocate-public-code (HTTP ${res.status}).`,
+      };
+    }
+
+    const publicCode = typeof data.publicCode === 'string' ? data.publicCode.trim() : '';
+    if (!res.ok || !data.ok || !/^\d{6}$/.test(publicCode)) {
+      return {
+        ok: false,
+        code: typeof data.code === 'string' ? data.code : 'EXAM_SAVE_ERROR',
+        error:
+          typeof data.error === 'string' && data.error
+            ? data.error
+            : `Không thể cấp mã đường dẫn 6 chữ số cho đề thi (HTTP ${res.status}).`,
+      };
+    }
+
+    return {
+      ok: true,
+      publicCode,
+      alreadyExisted: Boolean(data.alreadyExisted),
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: 'API_ROUTE_ERROR',
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Không thể kết nối máy chủ để cấp mã đường dẫn 6 chữ số.',
+    };
+  }
+}
+
+export async function syncExamLinkStatusOnServer(params: {
+  action: 'set_active' | 'delete';
+  examId: string;
+  examCode: string;
+  publicCode?: string | null;
+  isActive?: boolean;
+}): Promise<{ ok: boolean; error?: string }> {
+  const headers = await getIdTokenHeader();
+  if (!headers.Authorization) {
+    return { ok: false, error: 'Chưa đăng nhập.' };
+  }
+
+  try {
+    const res = await fetch('/api/exams/sync-link-status', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify({
+        action: params.action,
+        examId: params.examId,
+        examCode: normalizeExamCode(params.examCode),
+        ...(params.publicCode ? { publicCode: params.publicCode } : {}),
+        isActive: Boolean(params.isActive),
+      }),
+    });
+    const { data } = await parseApiResponsePayload(res);
+    return {
+      ok: Boolean(res.ok && data.ok),
+      error: typeof data.error === 'string' ? data.error : undefined,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
 export function getEffectiveAnswerReviewConfig(exam?: Partial<Exam> | null): {
   allowAnswerReview: boolean;
   answerReviewMinScore: number;

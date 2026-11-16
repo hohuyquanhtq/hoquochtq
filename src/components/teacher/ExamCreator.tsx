@@ -28,7 +28,10 @@ import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
 import { normalizeExamCode } from '../../utils/urlHelper';
 import { auth, extractAnswerKeyMap, syncExamToFirestore } from '../../services/firebase';
-import { configureExamSecurityOnServer } from '../../services/examSecurityApi';
+import {
+  allocateExamPublicCodeOnServer,
+  configureExamSecurityOnServer,
+} from '../../services/examSecurityApi';
 
 interface ExamCreatorProps {
   initialTitle?: string;
@@ -158,9 +161,12 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
   const [createdExamForShare, setCreatedExamForShare] = useState<Exam | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const pendingDraftRef = useRef<{ examId: string; code: string; inputCodeSnapshot: string } | null>(
-    null
-  );
+  const pendingDraftRef = useRef<{
+    examId: string;
+    code: string;
+    publicCode?: string;
+    inputCodeSnapshot: string;
+  } | null>(null);
 
   const handleRemoveQuestion = (id: string) => {
     setQuestions(questions.filter(q => q.id !== id));
@@ -307,57 +313,77 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
     setIsSavingExam(true);
     try {
-      let passwordUpdatedAt: string | null = baseExam.passwordUpdatedAt ?? null;
-      if (auth.currentUser) {
-        const secRes = await configureExamSecurityOnServer({
-          examCode: cleanCode,
-          examId,
-          requiresPassword,
-          passwordAction: requiresPassword ? 'set' : 'clear',
-          ...(requiresPassword ? { password: examPassword } : {}),
-          allowAnswerReview,
-          answerReviewMinScore: cleanMinScore,
-          answerReviewEnabledAt: enabledAtIso,
-          showScoreAfterSubmit,
-          showSolutionsAfterSubmit,
-          isPublished: true,
-          maxAttempts,
-          rules: baseExam.rules,
-          questions: questions.map((q) => ({
-            id: q.id,
-            type: q.type,
-            ...(Array.isArray(q.statements) ? { statementIds: q.statements.map((s) => s.id) } : {}),
-          })),
-          answerMap: extractAnswerKeyMap(baseExam),
-          patchMetadataDocs: false,
-        });
-
-        if (!secRes.ok) {
-          if (requiresPassword) {
-            setFormError(
-              secRes.error ||
-                'Không thể lưu cấu hình mật khẩu đề thi lên máy chủ. Vui lòng kiểm tra kết nối và thử lại!'
-            );
-            return;
-          }
-          console.warn('Background server security setup warning:', secRes.error);
-        } else if (secRes.passwordUpdatedAt !== undefined) {
-          passwordUpdatedAt = secRes.passwordUpdatedAt;
-        }
-      } else if (requiresPassword) {
-        setFormError('Bạn cần đăng nhập tài khoản Giáo viên để bảo vệ đề thi bằng mật khẩu!');
+      if (!auth.currentUser) {
+        setFormError(
+          'Bạn cần đăng nhập tài khoản Giáo viên để tạo đề thi và cấp đường dẫn 6 chữ số.'
+        );
         return;
+      }
+
+      const allocRes = await allocateExamPublicCodeOnServer({
+        examId,
+        examCode: cleanCode,
+        isPublished: true,
+        existingPublicCode: pendingDraftRef.current?.publicCode ?? null,
+      });
+      if (!allocRes.ok || !allocRes.publicCode) {
+        setFormError(
+          allocRes.error ||
+            'Không thể cấp mã đường dẫn 6 chữ số duy nhất từ máy chủ. Vui lòng thử lại!'
+        );
+        return;
+      }
+
+      const allocatedPublicCode = allocRes.publicCode;
+      if (pendingDraftRef.current) {
+        pendingDraftRef.current.publicCode = allocatedPublicCode;
+      }
+
+      let passwordUpdatedAt: string | null = baseExam.passwordUpdatedAt ?? null;
+      const secRes = await configureExamSecurityOnServer({
+        examCode: cleanCode,
+        examId,
+        requiresPassword,
+        passwordAction: requiresPassword ? 'set' : 'clear',
+        ...(requiresPassword ? { password: examPassword } : {}),
+        allowAnswerReview,
+        answerReviewMinScore: cleanMinScore,
+        answerReviewEnabledAt: enabledAtIso,
+        showScoreAfterSubmit,
+        showSolutionsAfterSubmit,
+        isPublished: true,
+        maxAttempts,
+        rules: baseExam.rules,
+        questions: questions.map((q) => ({
+          id: q.id,
+          type: q.type,
+          ...(Array.isArray(q.statements) ? { statementIds: q.statements.map((s) => s.id) } : {}),
+        })),
+        answerMap: extractAnswerKeyMap(baseExam),
+        patchMetadataDocs: false,
+      });
+
+      if (!secRes.ok) {
+        if (requiresPassword) {
+          setFormError(
+            secRes.error ||
+              'Không thể lưu cấu hình mật khẩu đề thi lên máy chủ. Vui lòng kiểm tra kết nối và thử lại!'
+          );
+          return;
+        }
+        console.warn('Background server security setup warning:', secRes.error);
+      } else if (secRes.passwordUpdatedAt !== undefined) {
+        passwordUpdatedAt = secRes.passwordUpdatedAt;
       }
 
       const newExam: Exam = {
         ...baseExam,
+        publicCode: allocatedPublicCode,
         passwordUpdatedAt: requiresPassword ? passwordUpdatedAt : null,
       };
 
       // 1. Sync exam projections to Cloud Firestore BEFORE localStorage so failed Firestore commit never leaves duplicate local drafts
-      if (auth.currentUser) {
-        await syncExamToFirestore(newExam, ownerId);
-      }
+      await syncExamToFirestore(newExam, ownerId);
 
       // 2. Guaranteed local persistence with verified readback (NEVER contains plaintext password)
       const savedSuccess = StorageService.addExam(newExam, ownerId);

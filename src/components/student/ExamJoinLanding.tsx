@@ -25,6 +25,7 @@ import {
 import { Exam, User } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
 import { verifyExamPasswordOnServer } from '../../services/examSecurityApi';
+import { isValidSixDigitPublicCode } from '../../utils/urlHelper';
 
 export type ExamLandingStatus =
   | 'loading'
@@ -42,6 +43,7 @@ export type ExamLandingStatus =
 interface ExamJoinLandingProps {
   exam: Exam | null;
   examCode?: string;
+  entryKind?: 'publicCode' | 'examCode' | 'invalidPublicUrl';
   status?: ExamLandingStatus;
   statusMessage?: string;
   currentUser?: User | null;
@@ -55,6 +57,7 @@ interface ExamJoinLandingProps {
 export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   exam,
   examCode,
+  entryKind = 'examCode',
   status = 'found',
   statusMessage,
   currentUser,
@@ -64,6 +67,16 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   onRetryLookup,
   onBackToHome,
 }) => {
+  const isSixDigitEntry = entryKind === 'publicCode' || entryKind === 'invalidPublicUrl';
+  const publicBadgeCode =
+    isValidSixDigitPublicCode(exam?.publicCode)
+      ? exam!.publicCode!.trim()
+      : isValidSixDigitPublicCode(examCode)
+      ? examCode!.trim()
+      : '';
+  const visibleBadgeCode = isSixDigitEntry
+    ? publicBadgeCode
+    : exam?.code || examCode || '';
   const [studentName, setStudentName] = useState(currentUser?.name || '');
   const [studentClass, setStudentClass] = useState(currentUser?.className || '12 Hóa 1');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -148,7 +161,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
                   {APP_CONFIG.APP_NAME} • PHÒNG THI CÓ MẬT KHẨU
                 </span>
                 <h1 className="text-lg sm:text-xl font-extrabold text-white mt-0.5">
-                  {exam.title || `Bài thi ${exam.code || examCode || ''}`}
+                  {exam.title || `Bài thi ${visibleBadgeCode}`}
                 </h1>
                 <p className="text-xs text-amber-100 mt-0.5">
                   Giáo viên: <strong className="text-white">{exam.authorName || 'Giáo viên'}</strong>
@@ -156,10 +169,12 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               </div>
             </div>
 
-            <div className="bg-white/15 border border-white/25 px-3.5 py-2 rounded-xl text-center shrink-0">
-              <span className="text-[10px] font-bold text-amber-100 block">MÃ ĐỀ</span>
-              <span className="font-mono font-black text-base text-white">{exam.code || examCode}</span>
-            </div>
+            {visibleBadgeCode && (
+              <div className="bg-white/15 border border-white/25 px-3.5 py-2 rounded-xl text-center shrink-0">
+                <span className="text-[10px] font-bold text-amber-100 block">MÃ BÀI THI</span>
+                <span className="font-mono font-black text-base text-white">{visibleBadgeCode}</span>
+              </div>
+            )}
           </div>
 
           <div className="p-6 sm:p-8 space-y-5">
@@ -261,7 +276,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
     const isUnauthorized = status === 'unauthorized';
     const isNetwork = status === 'network_error';
     const isUnexpected = status === 'unexpected_error' || status === 'firebase_not_initialized';
-    const displayCode = exam?.code || examCode || 'N/A';
+    const displayCode = visibleBadgeCode || (isSixDigitEntry ? '' : examCode || 'N/A');
 
     const titleText =
       status === 'not_published'
@@ -278,10 +293,14 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
         ? 'Firestore chưa khởi tạo'
         : status === 'unexpected_error'
         ? 'Lỗi hệ thống'
+        : isSixDigitEntry
+        ? 'Đường dẫn đề thi không hợp lệ'
         : 'Không tìm thấy mã bài thi';
 
     const defaultDetail =
-      status === 'unauthorized'
+      status === 'not_published'
+        ? 'Đề thi hiện không còn khả dụng'
+        : status === 'unauthorized'
         ? 'Bạn không có quyền truy cập phòng thi này hoặc bài thi chưa được mở công khai.'
         : status === 'network_error'
         ? 'Không thể kết nối tới máy chủ để tải dữ liệu bài thi. Vui lòng kiểm tra kết nối mạng và thử lại.'
@@ -289,6 +308,8 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
         ? 'Dịch vụ cơ sở dữ liệu Firestore chưa được khởi tạo sẵn sàng. Vui lòng kiểm tra cấu hình hoặc tải lại trang.'
         : status === 'unexpected_error'
         ? 'Hệ thống gặp sự cố không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.'
+        : isSixDigitEntry
+        ? 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại'
         : `Không tìm thấy bài thi với mã "${displayCode}".`;
 
     return (
@@ -330,7 +351,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               </div>
             </div>
 
-            {displayCode !== 'N/A' && (
+            {displayCode && displayCode !== 'N/A' && (
               <div className="bg-white/10 border border-white/20 px-3.5 py-2 rounded-xl text-center shrink-0">
                 <span className="text-[10px] font-bold text-slate-300 block">MÃ ĐỀ</span>
                 <span className="font-mono font-black text-base text-white">{displayCode}</span>
@@ -440,7 +461,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div>
               <h1 className="text-2xl md:text-3xl font-black text-white tracking-tight">
-                {exam.title || `Bài thi ${exam.code || examCode || ''}`}
+                {exam.title || `Bài thi ${visibleBadgeCode || ''}`}
               </h1>
               <p className="text-xs text-blue-200 mt-1">
                 Giáo viên ra đề: <strong className="text-white">{exam.authorName || 'Giáo viên'}</strong> • {APP_CONFIG.APP_SCHOOL}
@@ -452,7 +473,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
                 MÃ BÀI THI
               </span>
               <span className="text-2xl font-black font-mono tracking-widest text-white">
-                {exam.code || examCode || 'N/A'}
+                {visibleBadgeCode || 'N/A'}
               </span>
             </div>
           </div>
@@ -471,9 +492,9 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
             <div className="p-4 bg-amber-50 border border-amber-300 text-amber-900 rounded-2xl flex items-center gap-3 text-xs font-semibold">
               <AlertCircle className="w-5 h-5 text-amber-600 shrink-0" />
               <div>
-                <p className="font-bold">Phòng thi đang tạm khóa hoặc chưa mở</p>
+                <p className="font-bold">Đề thi hiện không còn khả dụng</p>
                 <p className="text-amber-700 mt-0.5">
-                  Giáo viên chưa mở phòng thi cho mã &ldquo;{exam.code}&rdquo;. Vui lòng liên hệ giáo viên để biết thời gian mở phòng!
+                  Giáo viên chưa mở hoặc đã tạm khóa phòng thi này. Vui lòng liên hệ giáo viên để biết thời gian mở phòng!
                 </p>
               </div>
             </div>
@@ -485,7 +506,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
               <div>
                 <p className="font-bold">Đề thi chưa có câu hỏi</p>
                 <p className="text-rose-700 mt-0.5">
-                  Dữ liệu câu hỏi của mã &ldquo;{exam.code}&rdquo; hiện đang trống. Vui lòng báo lại cho giáo viên để cập nhật đề thi.
+                  Dữ liệu câu hỏi của bài thi này hiện đang trống. Vui lòng báo lại cho giáo viên để cập nhật đề thi.
                 </p>
               </div>
             </div>
