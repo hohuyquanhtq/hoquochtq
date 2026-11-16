@@ -58,8 +58,10 @@ export interface FirebaseAdminHealthStatus {
 interface RawServiceAccountPayload {
   type?: unknown;
   project_id?: unknown;
-  client_email?: unknown;
+  private_key_id?: unknown;
   private_key?: unknown;
+  client_email?: unknown;
+  client_id?: unknown;
 }
 
 let cachedEnvFingerprint: string | null = null;
@@ -112,7 +114,7 @@ export function formatFirebaseAdminErrorMessage(
     case 'CONFIG_MISSING':
       return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ Vercel.';
     case 'CONFIG_PARSE_ERROR':
-      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON, thiếu trường bắt buộc (type, project_id, client_email, private_key), type != service_account hoặc project_id không khớp agile-booster-w8p5g.';
+      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON, thiếu trường bắt buộc (type, project_id, private_key_id, private_key, client_email, client_id), type != service_account hoặc project_id không khớp agile-booster-w8p5g.';
     case 'PRIVATE_KEY_ERROR':
       return 'Trường private_key trong FIREBASE_SERVICE_ACCOUNT_JSON không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
     case 'ADMIN_INIT_ERROR':
@@ -231,15 +233,26 @@ function parseServiceAccountJson(
   const obj = decoded as RawServiceAccountPayload;
   const saType = typeof obj.type === 'string' ? obj.type.trim() : '';
   const projectId = typeof obj.project_id === 'string' ? obj.project_id.trim() : '';
-  const clientEmail = typeof obj.client_email === 'string' ? obj.client_email.trim() : '';
+  const privateKeyId = typeof obj.private_key_id === 'string' ? obj.private_key_id.trim() : '';
   const rawPrivateKey = typeof obj.private_key === 'string' ? obj.private_key : '';
+  const clientEmail = typeof obj.client_email === 'string' ? obj.client_email.trim() : '';
+  const clientId = typeof obj.client_id === 'string' ? obj.client_id.trim() : '';
 
-  if (!saType || !projectId || !clientEmail || !rawPrivateKey.trim()) {
+  if (
+    !saType ||
+    !projectId ||
+    !privateKeyId ||
+    !rawPrivateKey.trim() ||
+    !clientEmail ||
+    !clientId
+  ) {
     const missingFields = [
       !saType ? 'type' : '',
       !projectId ? 'project_id' : '',
-      !clientEmail ? 'client_email' : '',
+      !privateKeyId ? 'private_key_id' : '',
       !rawPrivateKey.trim() ? 'private_key' : '',
+      !clientEmail ? 'client_email' : '',
+      !clientId ? 'client_id' : '',
     ].filter(Boolean);
     const onlyPrivateKeyMissing =
       missingFields.length === 1 && missingFields[0] === 'private_key';
@@ -259,7 +272,7 @@ function parseServiceAccountJson(
   if (projectId !== EXPECTED_FIREBASE_PROJECT_ID) {
     return {
       errorCode: 'CONFIG_PARSE_ERROR',
-      errorDetail: `project_id ("${projectId}") trong ${envVarName} không khớp với dự án Firebase thực tế "${EXPECTED_FIREBASE_PROJECT_ID}". Vui lòng sử dụng đúng Service Account JSON của dự án ${EXPECTED_FIREBASE_PROJECT_ID}.`,
+      errorDetail: `project_id ("${projectId}") trong ${envVarName} không khớp với dự án Firebase thực tế "${EXPECTED_FIREBASE_PROJECT_ID}". Hãy tải toàn bộ Service Account JSON mới từ Firebase Console của dự án "${EXPECTED_FIREBASE_PROJECT_ID}", cập nhật lại biến ${envVarName} trên Vercel và Redeploy.`,
     };
   }
 
