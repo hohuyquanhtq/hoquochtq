@@ -13,6 +13,12 @@ import {
   verifyExamPassword,
 } from './examCrypto.ts';
 import {
+  classifyFirestoreError,
+  formatFirebaseAdminErrorMessage,
+  getFirebaseAdminState,
+  type FirebaseAdminErrorCode,
+} from './firebaseAdmin.ts';
+import {
   hasServiceAccountConfigured,
   verifyFirebaseIdToken,
   type VerifiedFirebaseIdToken,
@@ -83,8 +89,15 @@ export interface ExamAccessGrantRecord {
   expiresAt: string;
 }
 
+export interface ExamAdminDiagnostic {
+  ready: boolean;
+  errorCode: FirebaseAdminErrorCode | null;
+  message: string;
+}
+
 export interface ExamSecurityStore {
   hasAdminAccess(): boolean;
+  getAdminDiagnostic?(): ExamAdminDiagnostic;
   verifyIdToken(token: string): Promise<VerifiedFirebaseIdToken | null>;
   getUserRoleInfo(
     uid: string,
@@ -138,12 +151,27 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
   return {
     hasAdminAccess: () => hasServiceAccountConfigured(),
 
+    getAdminDiagnostic() {
+      const state = getFirebaseAdminState();
+      const ready =
+        state.initialized && state.projectIdMatched && state.databaseIdMatched && state.db !== null;
+      const errorCode: FirebaseAdminErrorCode | null = ready
+        ? null
+        : state.errorCode || 'ADMIN_INIT_FAILED';
+      return {
+        ready,
+        errorCode,
+        message: formatFirebaseAdminErrorMessage(errorCode),
+      };
+    },
+
     verifyIdToken: (token) => verifyFirebaseIdToken(token),
 
     async getUserRoleInfo(uid, bearerToken) {
       let isAdmin = false;
       let role: string | undefined;
       let status: string | undefined;
+      const adminReady = hasServiceAccountConfigured();
 
       try {
         const adminDoc = await firestoreGetDoc<{ active?: boolean; role?: string; uid?: string }>(
@@ -154,8 +182,8 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
         if (adminDoc && adminDoc.active === true && adminDoc.role === 'admin') {
           isAdmin = true;
         }
-      } catch {
-        // ignore missing admin marker
+      } catch (err) {
+        if (adminReady) throw err;
       }
 
       try {
@@ -169,8 +197,8 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
             isAdmin = true;
           }
         }
-      } catch {
-        // ignore missing user doc
+      } catch (err) {
+        if (adminReady) throw err;
       }
 
       return { role, status, isAdmin };
@@ -206,17 +234,22 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
 
     async getLegacyExamBundle(examCode) {
       const [examKeys, publicExam, examStatus] = await Promise.all([
-        firestoreGetDoc<Record<string, unknown>>('examKeys', examCode).catch(() => null),
-        firestoreGetDoc<Record<string, unknown>>('publicExams', examCode).catch(() => null),
-        firestoreGetDoc<Record<string, unknown>>('examStatus', examCode).catch(() => null),
+        firestoreGetDoc<Record<string, unknown>>('examKeys', examCode),
+        firestoreGetDoc<Record<string, unknown>>('publicExams', examCode),
+        firestoreGetDoc<Record<string, unknown>>('examStatus', examCode),
       ]);
       return { examKeys, publicExam, examStatus };
     },
 
     async getExamStatus(examCode, bearerToken) {
-      return firestoreGetDoc<Record<string, unknown>>('examStatus', examCode, { bearerToken }).catch(
-        () => null
-      );
+      try {
+        return await firestoreGetDoc<Record<string, unknown>>('examStatus', examCode, {
+          bearerToken,
+        });
+      } catch (err) {
+        if (hasServiceAccountConfigured()) throw err;
+        return null;
+      }
     },
 
     async getPublicExam(examCode, bearerToken) {
@@ -224,9 +257,12 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
     },
 
     async getMasterExam(examId, bearerToken) {
-      return firestoreGetDoc<Record<string, unknown>>('exams', examId, { bearerToken }).catch(
-        () => null
-      );
+      try {
+        return await firestoreGetDoc<Record<string, unknown>>('exams', examId, { bearerToken });
+      } catch (err) {
+        if (hasServiceAccountConfigured()) throw err;
+        return null;
+      }
     },
 
     async patchExamMetadataDocs({ examCode, examId, fields, bearerToken }) {
@@ -313,7 +349,7 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
 
     async getExamAccessGrant(examCode, uid) {
       const grantId = `${examCode}_${uid}`;
-      return firestoreGetDoc<ExamAccessGrantRecord>('examAccessGrants', grantId).catch(() => null);
+      return firestoreGetDoc<ExamAccessGrantRecord>('examAccessGrants', grantId);
     },
 
     async saveExamAccessGrant(record) {
@@ -394,12 +430,7 @@ async function resolveAuthoritativeExamSecret(
   store: ExamSecurityStore,
   examCode: string
 ): Promise<ExamSecretRecord | null> {
-  const secret = await store.getExamSecret(examCode).catch((err) => {
-    if (err instanceof Error && err.message === 'SERVER_CREDENTIALS_MISSING') {
-      throw err;
-    }
-    return null;
-  });
+  const secret = await store.getExamSecret(examCode);
   if (secret) return secret;
 
   // Backward compatibility for legacy exams synced before examSecrets existed
@@ -474,6 +505,64 @@ function isGrantValidForSecret(
   return true;
 }
 
+function resolveAdminDiagnostic(store: ExamSecurityStore): ExamAdminDiagnostic {
+  if (store.hasAdminAccess()) {
+    return {
+      ready: true,
+      errorCode: null,
+      message: formatFirebaseAdminErrorMessage(null),
+    };
+  }
+  if (typeof store.getAdminDiagnostic === 'function') {
+    const diag = store.getAdminDiagnostic();
+    const errorCode = diag.errorCode || 'MISSING_ENV_VAR';
+    return {
+      ready: false,
+      errorCode,
+      message: diag.message || formatFirebaseAdminErrorMessage(errorCode),
+    };
+  }
+  return {
+    ready: false,
+    errorCode: 'MISSING_ENV_VAR',
+    message: formatFirebaseAdminErrorMessage('MISSING_ENV_VAR'),
+  };
+}
+
+function mapBackendFailureToResponse(
+  err: unknown,
+  store: ExamSecurityStore,
+  extraBody: Record<string, unknown> = {}
+): ApiResponse {
+  const rawMsg = err instanceof Error ? err.message : '';
+  if (rawMsg === 'SERVER_CREDENTIALS_MISSING') {
+    const diag = resolveAdminDiagnostic(store);
+    const errorCode = diag.errorCode || 'MISSING_ENV_VAR';
+    return {
+      status: 503,
+      body: {
+        ...extraBody,
+        code: errorCode,
+        error: diag.message,
+        ...('message' in extraBody ? { message: diag.message } : {}),
+      },
+    };
+  }
+
+  const fsCode = classifyFirestoreError(err);
+  const friendly = formatFirebaseAdminErrorMessage(fsCode);
+  const status = fsCode === 'FIRESTORE_PERMISSION_DENIED' ? 403 : 503;
+  return {
+    status,
+    body: {
+      ...extraBody,
+      code: fsCode,
+      error: friendly,
+      ...('message' in extraBody ? { message: friendly } : {}),
+    },
+  };
+}
+
 export function createExamApiHandlers(store: ExamSecurityStore = createFirestoreExamSecurityStore()) {
   /**
    * 1. POST /api/exams/security/configure
@@ -498,22 +587,30 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       return { status: 400, body: { error: 'Mã đề thi hoặc ID đề thi không hợp lệ.' } };
     }
 
-    const roleInfo = await store.getUserRoleInfo(caller.uid, bearer);
-    const isTeacher = roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
-    if (!isTeacher) {
-      return {
-        status: 403,
-        body: { error: 'Chỉ tài khoản giáo viên đang hoạt động hoặc quản trị viên mới có quyền cấu hình bảo mật đề thi.' },
-      };
+    let roleInfo: { role?: string; status?: string; isAdmin: boolean };
+    let existingSecret: ExamSecretRecord | null = null;
+    let existingStatus: Record<string, unknown> | null = null;
+    let existingMaster: Record<string, unknown> | null = null;
+
+    try {
+      roleInfo = await store.getUserRoleInfo(caller.uid, bearer);
+      const isTeacher = roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
+      if (!isTeacher) {
+        return {
+          status: 403,
+          body: { error: 'Chỉ tài khoản giáo viên đang hoạt động hoặc quản trị viên mới có quyền cấu hình bảo mật đề thi.' },
+        };
+      }
+
+      if (store.hasAdminAccess()) {
+        existingSecret = await store.getExamSecret(examCode);
+      }
+      existingStatus = await store.getExamStatus(examCode, bearer);
+      existingMaster = await store.getMasterExam(examId, bearer);
+    } catch (err) {
+      return mapBackendFailureToResponse(err, store);
     }
 
-    // Verify ownership against existing exam records if present
-    let existingSecret: ExamSecretRecord | null = null;
-    if (store.hasAdminAccess()) {
-      existingSecret = await store.getExamSecret(examCode).catch(() => null);
-    }
-    const existingStatus = await store.getExamStatus(examCode, bearer);
-    const existingMaster = await store.getMasterExam(examId, bearer);
     const existingOwner = String(
       existingSecret?.ownerId || existingMaster?.ownerId || existingStatus?.ownerId || caller.uid
     );
@@ -701,18 +798,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         });
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (msg === 'SERVER_CREDENTIALS_MISSING') {
-        return {
-          status: 503,
-          body: {
-            error:
-              'Máy chủ chưa cấu hình FIREBASE_SERVICE_ACCOUNT_JSON để lưu cấu hình bảo mật phía server.',
-            code: 'SERVER_CREDENTIALS_MISSING',
-          },
-        };
-      }
-      return { status: 500, body: { error: `Không thể lưu cấu hình bảo mật: ${msg}` } };
+      return mapBackendFailureToResponse(err, store);
     }
 
     return {
@@ -752,12 +838,12 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     }
 
     if (!store.hasAdminAccess()) {
+      const diag = resolveAdminDiagnostic(store);
       return {
         status: 503,
         body: {
-          error:
-            'Máy chủ chưa cấu hình FIREBASE_SERVICE_ACCOUNT_JSON để xác thực mật khẩu đề thi an toàn.',
-          code: 'SERVER_CREDENTIALS_MISSING',
+          error: diag.message,
+          code: diag.errorCode,
         },
       };
     }
@@ -776,128 +862,132 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       };
     }
 
-    const secret = await resolveAuthoritativeExamSecret(store, examCode);
-    if (!secret) {
-      return { status: 404, body: { error: `Không tìm thấy đề thi với mã "${examCode}".` } };
-    }
-    if (!secret.isPublished) {
-      return {
-        status: 403,
-        body: { error: 'Phòng thi hiện đang tạm đóng hoặc chưa được giáo viên mở.' },
-      };
-    }
-
-    const nowMs = Date.now();
-    const sched = isWithinExamSchedule(secret, nowMs);
-    if (!sched.ok) {
-      return { status: 403, body: { error: sched.reason || 'Ngoài thời gian mở đề thi.' } };
-    }
-
-    const attemptKey = `${examCode}_${caller.uid}`;
-    const existingAttempt = await store.getPasswordAttempt(attemptKey);
-    if (existingAttempt && existingAttempt.lockedUntilMs > nowMs) {
-      const waitSec = Math.ceil((existingAttempt.lockedUntilMs - nowMs) / 1000);
-      const mins = Math.floor(waitSec / 60);
-      const secs = waitSec % 60;
-      return {
-        status: 429,
-        body: {
-          error: `Bạn đã nhập sai mật khẩu quá số lần cho phép. Vui lòng thử lại sau ${mins} phút ${secs} giây.`,
-          code: 'PASSWORD_RATE_LIMITED',
-          retryAfterSeconds: waitSec,
-        },
-      };
-    }
-
-    if (secret.requiresPassword) {
-      if (!secret.passwordHash || !verifyExamPassword(password, secret.passwordHash)) {
-        const nextFailCount =
-          existingAttempt && existingAttempt.lockedUntilMs <= nowMs
-            ? existingAttempt.failCount + 1
-            : 1;
-        const lockedUntilMs =
-          nextFailCount >= MAX_PASSWORD_ATTEMPTS ? nowMs + LOCKOUT_DURATION_MS : 0;
-
-        await store.savePasswordAttempt(attemptKey, {
-          failCount: nextFailCount,
-          lockedUntilMs,
-          lastFailedAt: new Date(nowMs).toISOString(),
-        });
-
-        if (lockedUntilMs > 0) {
-          return {
-            status: 429,
-            body: {
-              error:
-                'Mật khẩu đề thi không chính xác. Bạn đã nhập sai 5 lần liên tiếp, vui lòng thử lại sau 5 phút.',
-              code: 'PASSWORD_RATE_LIMITED',
-              retryAfterSeconds: Math.ceil(LOCKOUT_DURATION_MS / 1000),
-            },
-          };
-        }
-
+    try {
+      const secret = await resolveAuthoritativeExamSecret(store, examCode);
+      if (!secret) {
+        return { status: 404, body: { error: `Không tìm thấy đề thi với mã "${examCode}".` } };
+      }
+      if (!secret.isPublished) {
         return {
           status: 403,
+          body: { error: 'Phòng thi hiện đang tạm đóng hoặc chưa được giáo viên mở.' },
+        };
+      }
+
+      const nowMs = Date.now();
+      const sched = isWithinExamSchedule(secret, nowMs);
+      if (!sched.ok) {
+        return { status: 403, body: { error: sched.reason || 'Ngoài thời gian mở đề thi.' } };
+      }
+
+      const attemptKey = `${examCode}_${caller.uid}`;
+      const existingAttempt = await store.getPasswordAttempt(attemptKey);
+      if (existingAttempt && existingAttempt.lockedUntilMs > nowMs) {
+        const waitSec = Math.ceil((existingAttempt.lockedUntilMs - nowMs) / 1000);
+        const mins = Math.floor(waitSec / 60);
+        const secs = waitSec % 60;
+        return {
+          status: 429,
           body: {
-            error: 'Mật khẩu đề thi không chính xác. Vui lòng kiểm tra lại.',
-            code: 'INVALID_EXAM_PASSWORD',
-            remainingAttempts: Math.max(0, MAX_PASSWORD_ATTEMPTS - nextFailCount),
+            error: `Bạn đã nhập sai mật khẩu quá số lần cho phép. Vui lòng thử lại sau ${mins} phút ${secs} giây.`,
+            code: 'PASSWORD_RATE_LIMITED',
+            retryAfterSeconds: waitSec,
           },
         };
       }
-    }
 
-    // Success -> reset failed attempts
-    await store.savePasswordAttempt(attemptKey, {
-      failCount: 0,
-      lockedUntilMs: 0,
-      lastFailedAt: '',
-    });
+      if (secret.requiresPassword) {
+        if (!secret.passwordHash || !verifyExamPassword(password, secret.passwordHash)) {
+          const nextFailCount =
+            existingAttempt && existingAttempt.lockedUntilMs <= nowMs
+              ? existingAttempt.failCount + 1
+              : 1;
+          const lockedUntilMs =
+            nextFailCount >= MAX_PASSWORD_ATTEMPTS ? nowMs + LOCKOUT_DURATION_MS : 0;
 
-    const publicExam = await store.getPublicExam(examCode);
-    if (!publicExam) {
-      return { status: 404, body: { error: 'Không tìm thấy nội dung câu hỏi của đề thi này.' } };
-    }
+          await store.savePasswordAttempt(attemptKey, {
+            failCount: nextFailCount,
+            lockedUntilMs,
+            lastFailedAt: new Date(nowMs).toISOString(),
+          });
 
-    const ttlMs = Math.max(2 * 60 * 60 * 1000, ((publicExam.durationMinutes || 45) + 90) * 60 * 1000);
-    const expiresAtMs = nowMs + ttlMs;
-    const expiresAtIso = new Date(expiresAtMs).toISOString();
-    const pwdVer = secret.passwordUpdatedAt || 'v1';
+          if (lockedUntilMs > 0) {
+            return {
+              status: 429,
+              body: {
+                error:
+                  'Mật khẩu đề thi không chính xác. Bạn đã nhập sai 5 lần liên tiếp, vui lòng thử lại sau 5 phút.',
+                code: 'PASSWORD_RATE_LIMITED',
+                retryAfterSeconds: Math.ceil(LOCKOUT_DURATION_MS / 1000),
+              },
+            };
+          }
 
-    await store.saveExamAccessGrant({
-      examCode,
-      uid: caller.uid,
-      passwordUpdatedAt: secret.passwordUpdatedAt || null,
-      grantedAt: new Date(nowMs).toISOString(),
-      expiresAt: expiresAtIso,
-    });
+          return {
+            status: 403,
+            body: {
+              error: 'Mật khẩu đề thi không chính xác. Vui lòng kiểm tra lại.',
+              code: 'INVALID_EXAM_PASSWORD',
+              remainingAttempts: Math.max(0, MAX_PASSWORD_ATTEMPTS - nextFailCount),
+            },
+          };
+        }
+      }
 
-    const accessToken = signExamAccessToken({
-      examCode,
-      uid: caller.uid,
-      pwdVer,
-      exp: Math.floor(expiresAtMs / 1000),
-    });
+      // Success -> reset failed attempts
+      await store.savePasswordAttempt(attemptKey, {
+        failCount: 0,
+        lockedUntilMs: 0,
+        lastFailedAt: '',
+      });
 
-    const safeExam: Exam = {
-      ...publicExam,
-      questions: sanitizeQuestionsForClient(publicExam.questions || []),
-      requiresPassword: Boolean(secret.requiresPassword),
-      allowAnswerReview: secret.allowAnswerReview,
-      answerReviewMinScore: secret.answerReviewMinScore,
-      answerReviewEnabledAt: secret.answerReviewEnabledAt,
-      showAnswersAfterSubmit: false,
-    };
+      const publicExam = await store.getPublicExam(examCode);
+      if (!publicExam) {
+        return { status: 404, body: { error: 'Không tìm thấy nội dung câu hỏi của đề thi này.' } };
+      }
 
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        accessToken,
+      const ttlMs = Math.max(2 * 60 * 60 * 1000, ((publicExam.durationMinutes || 45) + 90) * 60 * 1000);
+      const expiresAtMs = nowMs + ttlMs;
+      const expiresAtIso = new Date(expiresAtMs).toISOString();
+      const pwdVer = secret.passwordUpdatedAt || 'v1';
+
+      await store.saveExamAccessGrant({
+        examCode,
+        uid: caller.uid,
+        passwordUpdatedAt: secret.passwordUpdatedAt || null,
+        grantedAt: new Date(nowMs).toISOString(),
         expiresAt: expiresAtIso,
-        exam: safeExam,
-      },
-    };
+      });
+
+      const accessToken = signExamAccessToken({
+        examCode,
+        uid: caller.uid,
+        pwdVer,
+        exp: Math.floor(expiresAtMs / 1000),
+      });
+
+      const safeExam: Exam = {
+        ...publicExam,
+        questions: sanitizeQuestionsForClient(publicExam.questions || []),
+        requiresPassword: Boolean(secret.requiresPassword),
+        allowAnswerReview: secret.allowAnswerReview,
+        answerReviewMinScore: secret.answerReviewMinScore,
+        answerReviewEnabledAt: secret.answerReviewEnabledAt,
+        showAnswersAfterSubmit: false,
+      };
+
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          accessToken,
+          expiresAt: expiresAtIso,
+          exam: safeExam,
+        },
+      };
+    } catch (err) {
+      return mapBackendFailureToResponse(err, store);
+    }
   }
 
   /**
@@ -919,13 +1009,14 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     }
 
     if (!store.hasAdminAccess()) {
+      const diag = resolveAdminDiagnostic(store);
       return {
         status: 503,
         body: {
           authorized: false,
           status: 'server_unavailable',
-          code: 'SERVER_CREDENTIALS_MISSING',
-          error: 'Máy chủ chưa cấu hình FIREBASE_SERVICE_ACCOUNT_JSON.',
+          code: diag.errorCode,
+          error: diag.message,
         },
       };
     }
@@ -938,68 +1029,75 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       return { status: 400, body: { authorized: false, error: 'Mã đề thi không hợp lệ.' } };
     }
 
-    const secret = await resolveAuthoritativeExamSecret(store, examCode);
-    if (!secret) {
-      return { status: 404, body: { authorized: false, status: 'not_found', error: 'Không tìm thấy đề thi.' } };
-    }
-
-    const roleInfo = await store.getUserRoleInfo(caller.uid);
-    const isOwnerOrAdmin = roleInfo.isAdmin || secret.ownerId === caller.uid;
-
-    if (!isOwnerOrAdmin) {
-      if (!secret.isPublished) {
-        return {
-          status: 403,
-          body: { authorized: false, status: 'not_published', error: 'Phòng thi đang tạm đóng.' },
-        };
-      }
-      const sched = isWithinExamSchedule(secret, Date.now());
-      if (!sched.ok) {
-        return { status: 403, body: { authorized: false, error: sched.reason } };
+    try {
+      const secret = await resolveAuthoritativeExamSecret(store, examCode);
+      if (!secret) {
+        return { status: 404, body: { authorized: false, status: 'not_found', error: 'Không tìm thấy đề thi.' } };
       }
 
-      if (secret.requiresPassword) {
-        const nowMs = Date.now();
-        const grant = await store.getExamAccessGrant(examCode, caller.uid);
-        const tokenValid = verifyExamAccessToken(
-          accessToken,
-          examCode,
-          caller.uid,
-          secret.passwordUpdatedAt || 'v1'
-        );
-        if (!isGrantValidForSecret(grant, secret, nowMs) && !tokenValid) {
+      const roleInfo = await store.getUserRoleInfo(caller.uid);
+      const isOwnerOrAdmin = roleInfo.isAdmin || secret.ownerId === caller.uid;
+
+      if (!isOwnerOrAdmin) {
+        if (!secret.isPublished) {
           return {
             status: 403,
-            body: {
-              authorized: false,
-              status: 'password_required',
-              error: 'Vui lòng nhập mật khẩu đề thi để truy cập nội dung câu hỏi.',
-            },
+            body: { authorized: false, status: 'not_published', error: 'Phòng thi đang tạm đóng.' },
           };
         }
+        const sched = isWithinExamSchedule(secret, Date.now());
+        if (!sched.ok) {
+          return { status: 403, body: { authorized: false, error: sched.reason } };
+        }
+
+        if (secret.requiresPassword) {
+          const nowMs = Date.now();
+          const grant = await store.getExamAccessGrant(examCode, caller.uid);
+          const tokenValid = verifyExamAccessToken(
+            accessToken,
+            examCode,
+            caller.uid,
+            secret.passwordUpdatedAt || 'v1'
+          );
+          if (!isGrantValidForSecret(grant, secret, nowMs) && !tokenValid) {
+            return {
+              status: 403,
+              body: {
+                authorized: false,
+                status: 'password_required',
+                error: 'Vui lòng nhập mật khẩu đề thi để truy cập nội dung câu hỏi.',
+              },
+            };
+          }
+        }
       }
-    }
 
-    const publicExam = await store.getPublicExam(examCode);
-    if (!publicExam) {
-      return { status: 404, body: { authorized: false, status: 'not_found', error: 'Không tìm thấy đề thi.' } };
-    }
+      const publicExam = await store.getPublicExam(examCode);
+      if (!publicExam) {
+        return { status: 404, body: { authorized: false, status: 'not_found', error: 'Không tìm thấy đề thi.' } };
+      }
 
-    return {
-      status: 200,
-      body: {
-        authorized: true,
-        exam: {
-          ...publicExam,
-          questions: sanitizeQuestionsForClient(publicExam.questions || []),
-          requiresPassword: Boolean(secret.requiresPassword),
-          allowAnswerReview: secret.allowAnswerReview,
-          answerReviewMinScore: secret.answerReviewMinScore,
-          answerReviewEnabledAt: secret.answerReviewEnabledAt,
-          showAnswersAfterSubmit: false,
+      return {
+        status: 200,
+        body: {
+          authorized: true,
+          exam: {
+            ...publicExam,
+            questions: sanitizeQuestionsForClient(publicExam.questions || []),
+            requiresPassword: Boolean(secret.requiresPassword),
+            allowAnswerReview: secret.allowAnswerReview,
+            answerReviewMinScore: secret.answerReviewMinScore,
+            answerReviewEnabledAt: secret.answerReviewEnabledAt,
+            showAnswersAfterSubmit: false,
+          },
         },
-      },
-    };
+      };
+    } catch (err) {
+      return mapBackendFailureToResponse(err, store, {
+        authorized: false,
+        status: 'server_unavailable',
+      });
+    }
   }
 
   /**
@@ -1013,11 +1111,12 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     }
 
     if (!store.hasAdminAccess()) {
+      const diag = resolveAdminDiagnostic(store);
       return {
         status: 503,
         body: {
-          error: 'Máy chủ chưa cấu hình FIREBASE_SERVICE_ACCOUNT_JSON để chấm điểm bảo mật.',
-          code: 'SERVER_CREDENTIALS_MISSING',
+          error: diag.message,
+          code: diag.errorCode,
         },
       };
     }
@@ -1033,156 +1132,160 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       return { status: 400, body: { error: 'Mã đề thi không hợp lệ.' } };
     }
 
-    const secret = await resolveAuthoritativeExamSecret(store, examCode);
-    if (!secret) {
-      return { status: 404, body: { error: 'Không tìm thấy đề thi trên hệ thống.' } };
-    }
-
-    const roleInfo = caller ? await store.getUserRoleInfo(caller.uid) : { isAdmin: false };
-    const isOwnerOrAdmin = Boolean(caller && (roleInfo.isAdmin || secret.ownerId === caller.uid));
-
-    if (!isOwnerOrAdmin && !secret.isPublished) {
-      return { status: 403, body: { error: 'Phòng thi đã đóng, không thể nộp bài.' } };
-    }
-
-    if (secret.requiresPassword && !isOwnerOrAdmin) {
-      if (!caller) {
-        return { status: 401, body: { error: 'Phiên làm bài yêu cầu đăng nhập tài khoản học sinh.' } };
+    try {
+      const secret = await resolveAuthoritativeExamSecret(store, examCode);
+      if (!secret) {
+        return { status: 404, body: { error: 'Không tìm thấy đề thi trên hệ thống.' } };
       }
-      const grant = await store.getExamAccessGrant(examCode, caller.uid);
-      const tokenValid = verifyExamAccessToken(
-        accessToken,
-        examCode,
-        caller.uid,
-        secret.passwordUpdatedAt || 'v1'
-      );
-      if (!isGrantValidForSecret(grant, secret, Date.now()) && !tokenValid) {
+
+      const roleInfo = caller ? await store.getUserRoleInfo(caller.uid) : { isAdmin: false };
+      const isOwnerOrAdmin = Boolean(caller && (roleInfo.isAdmin || secret.ownerId === caller.uid));
+
+      if (!isOwnerOrAdmin && !secret.isPublished) {
+        return { status: 403, body: { error: 'Phòng thi đã đóng, không thể nộp bài.' } };
+      }
+
+      if (secret.requiresPassword && !isOwnerOrAdmin) {
+        if (!caller) {
+          return { status: 401, body: { error: 'Phiên làm bài yêu cầu đăng nhập tài khoản học sinh.' } };
+        }
+        const grant = await store.getExamAccessGrant(examCode, caller.uid);
+        const tokenValid = verifyExamAccessToken(
+          accessToken,
+          examCode,
+          caller.uid,
+          secret.passwordUpdatedAt || 'v1'
+        );
+        if (!isGrantValidForSecret(grant, secret, Date.now()) && !tokenValid) {
+          return {
+            status: 403,
+            body: { error: 'Quyền truy cập đề thi đã hết hạn hoặc chưa xác thực mật khẩu.' },
+          };
+        }
+      }
+
+      const studentId = caller?.uid || `guest_${Date.now()}`;
+      const existingSubs = caller
+        ? await store.listStudentSubmissionsForExam(examCode, caller.uid)
+        : [];
+
+      if (!isOwnerOrAdmin && secret.maxAttempts > 0 && existingSubs.length >= secret.maxAttempts) {
         return {
           status: 403,
-          body: { error: 'Quyền truy cập đề thi đã hết hạn hoặc chưa xác thực mật khẩu.' },
+          body: {
+            error: `Bạn đã dùng hết ${secret.maxAttempts} lượt làm bài cho phép của đề thi này.`,
+            code: 'MAX_ATTEMPTS_EXCEEDED',
+          },
         };
       }
-    }
 
-    const studentId = caller?.uid || `guest_${Date.now()}`;
-    const existingSubs = caller
-      ? await store.listStudentSubmissionsForExam(examCode, caller.uid)
-      : [];
+      const publicExam = await store.getPublicExam(examCode);
+      const answers =
+        body.answers && typeof body.answers === 'object'
+          ? (body.answers as Record<string, StudentAnswer>)
+          : {};
 
-    if (!isOwnerOrAdmin && secret.maxAttempts > 0 && existingSubs.length >= secret.maxAttempts) {
+      const grade = gradeAnswersOnServer({
+        questionOrder: secret.questions || [],
+        answerMap: secret.answerMap || {},
+        rules: secret.rules,
+        answers,
+      });
+
+      const nowIso = new Date().toISOString();
+      const startedAt =
+        typeof body.startedAt === 'string' && body.startedAt.trim() ? body.startedAt.trim() : nowIso;
+      const submittedAt = nowIso;
+      const startMs = Date.parse(startedAt);
+      const durationSeconds = Number.isFinite(startMs)
+        ? Math.max(1, Math.min(86400, Math.round((Date.now() - startMs) / 1000)))
+        : Math.max(1, Number(body.durationSeconds || 1));
+
+      const rawId =
+        typeof body.submissionId === 'string' && body.submissionId.trim()
+          ? body.submissionId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
+          : `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
+      const digest = signSubmissionGradeDigest({
+        submissionId: rawId,
+        examCode,
+        studentId,
+        totalScore: grade.totalScore,
+        part1Score: grade.part1Score,
+        part2Score: grade.part2Score,
+        part3Score: grade.part3Score,
+      });
+
+      const verifiedSubmission: StudentSubmission = {
+        id: rawId,
+        examId: secret.examId,
+        examTitle: String(publicExam?.title || body.examTitle || `Bài thi ${examCode}`).slice(0, 300),
+        examCode,
+        ...(typeof body.variantCode === 'string' && body.variantCode
+          ? { variantCode: body.variantCode.slice(0, 32) }
+          : {}),
+        ownerId: secret.ownerId,
+        studentId,
+        studentName: String(body.studentName || caller?.name || 'Thí sinh').slice(0, 120),
+        studentClass: String(body.studentClass || 'Tự do').slice(0, 80),
+        startedAt,
+        submittedAt,
+        durationSeconds,
+        answers,
+        part1Score: grade.part1Score,
+        part2Score: grade.part2Score,
+        part3Score: grade.part3Score,
+        totalScore: grade.totalScore,
+        maxPossibleScore: Number(publicExam?.totalScore || 10.0),
+        correctQuestionsCount: grade.correctQuestionsCount,
+        tabSwitchesCount: Math.max(0, Math.min(10000, Number(body.tabSwitchesCount || 0))),
+        status: body.status === 'timed_out' ? 'timed_out' : 'completed',
+        gradedByServer: true,
+        serverGradeDigest: digest,
+        serverGradedAt: nowIso,
+      };
+
+      await store.saveSubmission(verifiedSubmission);
+
+      // Evaluate eligibility across all valid submissions including the one just graded
+      const allSubs = [...existingSubs, verifiedSubmission];
+      const verifiedScores = allSubs.map(
+        (s) =>
+          gradeAnswersOnServer({
+            questionOrder: secret.questions || [],
+            answerMap: secret.answerMap || {},
+            rules: secret.rules,
+            answers: s.answers || {},
+          }).totalScore
+      );
+
+      const answerReviewCheck = !caller
+        ? {
+            allowed: false,
+            reason: 'unauthenticated' as const,
+            score: grade.totalScore,
+            minScore: secret.answerReviewMinScore,
+            enabledAt: secret.answerReviewEnabledAt,
+            message: 'Vui lòng đăng nhập tài khoản học sinh để kiểm tra quyền xem đáp án & lời giải.',
+          }
+        : evaluateAnswerReviewPolicy({
+            allowAnswerReview: secret.allowAnswerReview,
+            answerReviewMinScore: secret.answerReviewMinScore,
+            answerReviewEnabledAt: secret.answerReviewEnabledAt,
+            verifiedScores,
+          });
+
       return {
-        status: 403,
+        status: 200,
         body: {
-          error: `Bạn đã dùng hết ${secret.maxAttempts} lượt làm bài cho phép của đề thi này.`,
-          code: 'MAX_ATTEMPTS_EXCEEDED',
+          ok: true,
+          submission: verifiedSubmission,
+          answerReviewCheck,
         },
       };
+    } catch (err) {
+      return mapBackendFailureToResponse(err, store);
     }
-
-    const publicExam = await store.getPublicExam(examCode);
-    const answers =
-      body.answers && typeof body.answers === 'object'
-        ? (body.answers as Record<string, StudentAnswer>)
-        : {};
-
-    const grade = gradeAnswersOnServer({
-      questionOrder: secret.questions || [],
-      answerMap: secret.answerMap || {},
-      rules: secret.rules,
-      answers,
-    });
-
-    const nowIso = new Date().toISOString();
-    const startedAt =
-      typeof body.startedAt === 'string' && body.startedAt.trim() ? body.startedAt.trim() : nowIso;
-    const submittedAt = nowIso;
-    const startMs = Date.parse(startedAt);
-    const durationSeconds = Number.isFinite(startMs)
-      ? Math.max(1, Math.min(86400, Math.round((Date.now() - startMs) / 1000)))
-      : Math.max(1, Number(body.durationSeconds || 1));
-
-    const rawId =
-      typeof body.submissionId === 'string' && body.submissionId.trim()
-        ? body.submissionId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
-        : `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
-
-    const digest = signSubmissionGradeDigest({
-      submissionId: rawId,
-      examCode,
-      studentId,
-      totalScore: grade.totalScore,
-      part1Score: grade.part1Score,
-      part2Score: grade.part2Score,
-      part3Score: grade.part3Score,
-    });
-
-    const verifiedSubmission: StudentSubmission = {
-      id: rawId,
-      examId: secret.examId,
-      examTitle: String(publicExam?.title || body.examTitle || `Bài thi ${examCode}`).slice(0, 300),
-      examCode,
-      ...(typeof body.variantCode === 'string' && body.variantCode
-        ? { variantCode: body.variantCode.slice(0, 32) }
-        : {}),
-      ownerId: secret.ownerId,
-      studentId,
-      studentName: String(body.studentName || caller?.name || 'Thí sinh').slice(0, 120),
-      studentClass: String(body.studentClass || 'Tự do').slice(0, 80),
-      startedAt,
-      submittedAt,
-      durationSeconds,
-      answers,
-      part1Score: grade.part1Score,
-      part2Score: grade.part2Score,
-      part3Score: grade.part3Score,
-      totalScore: grade.totalScore,
-      maxPossibleScore: Number(publicExam?.totalScore || 10.0),
-      correctQuestionsCount: grade.correctQuestionsCount,
-      tabSwitchesCount: Math.max(0, Math.min(10000, Number(body.tabSwitchesCount || 0))),
-      status: body.status === 'timed_out' ? 'timed_out' : 'completed',
-      gradedByServer: true,
-      serverGradeDigest: digest,
-      serverGradedAt: nowIso,
-    };
-
-    await store.saveSubmission(verifiedSubmission);
-
-    // Evaluate eligibility across all valid submissions including the one just graded
-    const allSubs = [...existingSubs, verifiedSubmission];
-    const verifiedScores = allSubs.map(
-      (s) =>
-        gradeAnswersOnServer({
-          questionOrder: secret.questions || [],
-          answerMap: secret.answerMap || {},
-          rules: secret.rules,
-          answers: s.answers || {},
-        }).totalScore
-    );
-
-    const answerReviewCheck = !caller
-      ? {
-          allowed: false,
-          reason: 'unauthenticated' as const,
-          score: grade.totalScore,
-          minScore: secret.answerReviewMinScore,
-          enabledAt: secret.answerReviewEnabledAt,
-          message: 'Vui lòng đăng nhập tài khoản học sinh để kiểm tra quyền xem đáp án & lời giải.',
-        }
-      : evaluateAnswerReviewPolicy({
-          allowAnswerReview: secret.allowAnswerReview,
-          answerReviewMinScore: secret.answerReviewMinScore,
-          answerReviewEnabledAt: secret.answerReviewEnabledAt,
-          verifiedScores,
-        });
-
-    return {
-      status: 200,
-      body: {
-        ok: true,
-        submission: verifiedSubmission,
-        answerReviewCheck,
-      },
-    };
   }
 
   /**
@@ -1209,13 +1312,15 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     }
 
     if (!store.hasAdminAccess()) {
+      const diag = resolveAdminDiagnostic(store);
       return {
         status: 503,
         body: {
           allowed: false,
           reason: 'server_unavailable',
-          code: 'SERVER_CREDENTIALS_MISSING',
-          message: 'Máy chủ chưa cấu hình FIREBASE_SERVICE_ACCOUNT_JSON để kiểm tra điều kiện xem đáp án.',
+          code: diag.errorCode,
+          error: diag.message,
+          message: diag.message,
         },
       };
     }
@@ -1228,24 +1333,109 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       return { status: 400, body: { allowed: false, message: 'Mã bài thi không hợp lệ.' } };
     }
 
-    const secret = await resolveAuthoritativeExamSecret(store, examCode);
-    if (!secret) {
-      return { status: 404, body: { allowed: false, message: 'Không tìm thấy đề thi.' } };
-    }
+    try {
+      const secret = await resolveAuthoritativeExamSecret(store, examCode);
+      if (!secret) {
+        return { status: 404, body: { allowed: false, message: 'Không tìm thấy đề thi.' } };
+      }
 
-    const roleInfo = await store.getUserRoleInfo(caller.uid);
-    const isOwnerOrAdmin = roleInfo.isAdmin || secret.ownerId === caller.uid;
+      const roleInfo = await store.getUserRoleInfo(caller.uid);
+      const isOwnerOrAdmin = roleInfo.isAdmin || secret.ownerId === caller.uid;
 
-    // Owner teacher / admin can always inspect keys of their own exam
-    if (isOwnerOrAdmin) {
+      // Owner teacher / admin can always inspect keys of their own exam
+      if (isOwnerOrAdmin) {
+        const publicExam = await store.getPublicExam(examCode).catch(() => null);
+        return {
+          status: 200,
+          body: {
+            allowed: true,
+            reason: 'allowed',
+            score: 10,
+            minScore: secret.answerReviewMinScore,
+            showSolutionsAfterSubmit: secret.showSolutionsAfterSubmit,
+            answerMap: sanitizeAnswerMapForReview(secret.answerMap, secret.showSolutionsAfterSubmit),
+            ...(publicExam
+              ? {
+                  exam: {
+                    ...publicExam,
+                    questions: sanitizeQuestionsForClient(publicExam.questions || []),
+                    requiresPassword: Boolean(secret.requiresPassword),
+                    allowAnswerReview: secret.allowAnswerReview,
+                    answerReviewMinScore: secret.answerReviewMinScore,
+                    answerReviewEnabledAt: secret.answerReviewEnabledAt,
+                  },
+                }
+              : {}),
+          },
+        };
+      }
+
+      // If exam is password protected, verify active grant or token
+      if (secret.requiresPassword) {
+        const grant = await store.getExamAccessGrant(examCode, caller.uid);
+        const tokenValid = verifyExamAccessToken(
+          accessToken,
+          examCode,
+          caller.uid,
+          secret.passwordUpdatedAt || 'v1'
+        );
+        if (!isGrantValidForSecret(grant, secret, Date.now()) && !tokenValid) {
+          return {
+            status: 403,
+            body: {
+              allowed: false,
+              reason: 'access_denied',
+              message: 'Bạn chưa có quyền truy cập đề thi bảo mật này.',
+            },
+          };
+        }
+      }
+
+      const submissions = await store.listStudentSubmissionsForExam(examCode, caller.uid);
+      const validSubmissions = submissions.filter(
+        (s) => s && s.studentId === caller.uid && (s.status === 'completed' || s.status === 'timed_out')
+      );
+
+      // CRITICAL: Re-compute each submission's true score from answers + server answerMap.
+      // Never trust client-supplied or tampered score fields!
+      const verifiedScores = validSubmissions.map(
+        (s) =>
+          gradeAnswersOnServer({
+            questionOrder: secret.questions || [],
+            answerMap: secret.answerMap || {},
+            rules: secret.rules,
+            answers: s.answers || {},
+          }).totalScore
+      );
+
+      const check = evaluateAnswerReviewPolicy({
+        allowAnswerReview: secret.allowAnswerReview,
+        answerReviewMinScore: secret.answerReviewMinScore,
+        answerReviewEnabledAt: secret.answerReviewEnabledAt,
+        verifiedScores,
+      });
+
+      if (!check.allowed) {
+        return {
+          status: 403,
+          body: { ...check },
+        };
+      }
+
+      await store.saveAnswerReviewAccess({
+        examCode,
+        uid: caller.uid,
+        score: check.score ?? 0,
+        minScore: check.minScore ?? secret.answerReviewMinScore,
+        grantedAt: new Date().toISOString(),
+      });
+
       const publicExam = await store.getPublicExam(examCode).catch(() => null);
+
       return {
         status: 200,
         body: {
-          allowed: true,
-          reason: 'allowed',
-          score: 10,
-          minScore: secret.answerReviewMinScore,
+          ...check,
           showSolutionsAfterSubmit: secret.showSolutionsAfterSubmit,
           answerMap: sanitizeAnswerMapForReview(secret.answerMap, secret.showSolutionsAfterSubmit),
           ...(publicExam
@@ -1262,90 +1452,13 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
             : {}),
         },
       };
+    } catch (err) {
+      return mapBackendFailureToResponse(err, store, {
+        allowed: false,
+        reason: 'server_unavailable',
+        message: '',
+      });
     }
-
-    // If exam is password protected, verify active grant or token
-    if (secret.requiresPassword) {
-      const grant = await store.getExamAccessGrant(examCode, caller.uid);
-      const tokenValid = verifyExamAccessToken(
-        accessToken,
-        examCode,
-        caller.uid,
-        secret.passwordUpdatedAt || 'v1'
-      );
-      if (!isGrantValidForSecret(grant, secret, Date.now()) && !tokenValid) {
-        return {
-          status: 403,
-          body: {
-            allowed: false,
-            reason: 'access_denied',
-            message: 'Bạn chưa có quyền truy cập đề thi bảo mật này.',
-          },
-        };
-      }
-    }
-
-    const submissions = await store.listStudentSubmissionsForExam(examCode, caller.uid);
-    const validSubmissions = submissions.filter(
-      (s) => s && s.studentId === caller.uid && (s.status === 'completed' || s.status === 'timed_out')
-    );
-
-    // CRITICAL: Re-compute each submission's true score from answers + server answerMap.
-    // Never trust client-supplied or tampered score fields!
-    const verifiedScores = validSubmissions.map(
-      (s) =>
-        gradeAnswersOnServer({
-          questionOrder: secret.questions || [],
-          answerMap: secret.answerMap || {},
-          rules: secret.rules,
-          answers: s.answers || {},
-        }).totalScore
-    );
-
-    const check = evaluateAnswerReviewPolicy({
-      allowAnswerReview: secret.allowAnswerReview,
-      answerReviewMinScore: secret.answerReviewMinScore,
-      answerReviewEnabledAt: secret.answerReviewEnabledAt,
-      verifiedScores,
-    });
-
-    if (!check.allowed) {
-      return {
-        status: 403,
-        body: { ...check },
-      };
-    }
-
-    await store.saveAnswerReviewAccess({
-      examCode,
-      uid: caller.uid,
-      score: check.score ?? 0,
-      minScore: check.minScore ?? secret.answerReviewMinScore,
-      grantedAt: new Date().toISOString(),
-    });
-
-    const publicExam = await store.getPublicExam(examCode).catch(() => null);
-
-    return {
-      status: 200,
-      body: {
-        ...check,
-        showSolutionsAfterSubmit: secret.showSolutionsAfterSubmit,
-        answerMap: sanitizeAnswerMapForReview(secret.answerMap, secret.showSolutionsAfterSubmit),
-        ...(publicExam
-          ? {
-              exam: {
-                ...publicExam,
-                questions: sanitizeQuestionsForClient(publicExam.questions || []),
-                requiresPassword: Boolean(secret.requiresPassword),
-                allowAnswerReview: secret.allowAnswerReview,
-                answerReviewMinScore: secret.answerReviewMinScore,
-                answerReviewEnabledAt: secret.answerReviewEnabledAt,
-              },
-            }
-          : {}),
-      },
-    };
   }
 
   return {
