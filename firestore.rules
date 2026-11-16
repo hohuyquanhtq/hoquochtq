@@ -32,20 +32,28 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
     }
 
+    function hasAdminCustomClaim() {
+      return isSignedIn()
+        && request.auth.token.admin == true
+        && request.auth.token.role == 'admin';
+    }
+
     function hasActiveAdminMarker() {
       return isSignedIn()
         && request.auth.token.email_verified == true
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.uid == request.auth.uid
+        && (!('uid' in get(/databases/$(database)/documents/admins/$(request.auth.uid)).data)
+          || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.uid == request.auth.uid)
         && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email is string
         && request.auth.token.email is string
         && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email.lower() == request.auth.token.email.lower()
         && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin'
-        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
+        && (get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isActive == true
+          || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true);
     }
 
     function isAdmin() {
-      return hasActiveAdminMarker();
+      return hasAdminCustomClaim() || hasActiveAdminMarker();
     }
 
     function isActiveTeacher() {

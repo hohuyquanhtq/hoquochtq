@@ -176,12 +176,12 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
       const adminReady = hasServiceAccountConfigured();
 
       try {
-        const adminDoc = await firestoreGetDoc<{ active?: boolean; role?: string; uid?: string }>(
+        const adminDoc = await firestoreGetDoc<{ isActive?: boolean; active?: boolean; role?: string; uid?: string }>(
           'admins',
           uid,
           { bearerToken }
         );
-        if (adminDoc && adminDoc.active === true && adminDoc.role === 'admin') {
+        if (adminDoc && (adminDoc.isActive === true || adminDoc.active === true) && adminDoc.role === 'admin') {
           isAdmin = true;
         }
       } catch (err) {

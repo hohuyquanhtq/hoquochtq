@@ -89,8 +89,10 @@ export default function App() {
   const {
     authState,
     userProfile,
+    isAdminClaimVerified,
     postSyncNotice,
     clearPostSyncNotice,
+    refreshProfile,
     setLocalUpdatedProfile,
     logout,
   } = useAuth();
@@ -1008,15 +1010,33 @@ export default function App() {
             {renderWorkspaceSubNav()}
 
             {userProfile.role === 'admin' && (activeTab === 'admin_dashboard' || activeTab === 'admin_users') && (
-              <AdminDashboard
-                currentUser={userProfile}
-                questions={questions}
-                exams={exams}
-                submissions={submissions}
-                folders={folders}
-                sectionFocus={activeTab === 'admin_users' ? 'users' : 'overview'}
-                onDataResetOrRestored={reloadDataFromStorage}
-              />
+              isAdminClaimVerified ? (
+                <AdminDashboard
+                  currentUser={userProfile}
+                  questions={questions}
+                  exams={exams}
+                  submissions={submissions}
+                  folders={folders}
+                  sectionFocus={activeTab === 'admin_users' ? 'users' : 'overview'}
+                  onDataResetOrRestored={reloadDataFromStorage}
+                />
+              ) : (
+                <div className="max-w-lg mx-auto my-10 bg-white border border-rose-200 rounded-3xl p-7 shadow-sm text-center space-y-4">
+                  <h2 className="text-base font-extrabold text-slate-900">
+                    Chưa xác thực quyền Quản trị viên (token.claims.admin != true)
+                  </h2>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    Phiên Firebase Authentication của bạn được giữ nguyên, nhưng ID Token hiện tại chưa có Custom Claim <code className="font-mono">admin: true</code>. Vui lòng kiểm tra cấu hình <code className="font-mono">INITIAL_ADMIN_UID</code>, <code className="font-mono">FIREBASE_SERVICE_ACCOUNT</code> và document <code className="font-mono">admins/{activeUid}</code> (<code className="font-mono">isActive: true</code>).
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void refreshProfile()}
+                    className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
+                  >
+                    Làm mới ID Token &amp; Kiểm tra lại
+                  </button>
+                </div>
+              )
             )}
 
             {activeTab === 'dashboard' && (

@@ -14,7 +14,10 @@ export const EXPECTED_FIRESTORE_DATABASE_ID =
   'ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e';
 
 export const SERVICE_ACCOUNT_ENV_VAR = 'FIREBASE_SERVICE_ACCOUNT_JSON' as const;
-export type ServiceAccountEnvVarName = typeof SERVICE_ACCOUNT_ENV_VAR;
+export const PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR = 'FIREBASE_SERVICE_ACCOUNT' as const;
+export type ServiceAccountEnvVarName =
+  | typeof SERVICE_ACCOUNT_ENV_VAR
+  | typeof PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR;
 
 export type FirebaseAdminErrorCode =
   | 'CONFIG_MISSING'
@@ -68,19 +71,27 @@ let cachedEnvFingerprint: string | null = null;
 let cachedInitResult: FirebaseAdminInitResult | null = null;
 
 /**
- * Resolves the active Service Account JSON string strictly from
- * process.env.FIREBASE_SERVICE_ACCOUNT_JSON.
+ * Resolves the active Service Account JSON string from
+ * process.env.FIREBASE_SERVICE_ACCOUNT_JSON or process.env.FIREBASE_SERVICE_ACCOUNT.
  */
-export function resolveServiceAccountEnvSource(): {
+export function resolveServiceAccountEnvSource(
+  preferPrimaryClaimEnv = false
+): {
   envVarName: ServiceAccountEnvVarName | null;
   rawValue: string;
 } {
-  const rawValue = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
-  if (rawValue.length > 0) {
-    return {
-      envVarName: SERVICE_ACCOUNT_ENV_VAR,
-      rawValue,
-    };
+  const candidates: ServiceAccountEnvVarName[] = preferPrimaryClaimEnv
+    ? [PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR, SERVICE_ACCOUNT_ENV_VAR]
+    : [SERVICE_ACCOUNT_ENV_VAR, PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR];
+
+  for (const envVarName of candidates) {
+    const rawValue = (process.env[envVarName] || '').trim();
+    if (rawValue.length > 0) {
+      return {
+        envVarName,
+        rawValue,
+      };
+    }
   }
 
   return {
@@ -112,11 +123,11 @@ export function formatFirebaseAdminErrorMessage(
     case null:
       return 'Firebase Admin SDK đã khởi tạo và kết nối Firestore thành công.';
     case 'CONFIG_MISSING':
-      return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ Vercel.';
+      return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT hoặc FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ Vercel.';
     case 'CONFIG_PARSE_ERROR':
-      return 'Không thể đọc/parse biến FIREBASE_SERVICE_ACCOUNT_JSON, thiếu trường bắt buộc (type, project_id, private_key_id, private_key, client_email, client_id), type != service_account hoặc project_id không khớp hqtest-online.';
+      return 'Không thể đọc/parse biến Service Account JSON, thiếu trường bắt buộc (type, project_id, private_key_id, private_key, client_email, client_id), type != service_account hoặc project_id không khớp hqtest-online.';
     case 'PRIVATE_KEY_ERROR':
-      return 'Trường private_key trong FIREBASE_SERVICE_ACCOUNT_JSON không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
+      return 'Trường private_key trong Service Account JSON không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
     case 'ADMIN_INIT_ERROR':
       return 'Không thể khởi tạo Firebase Admin SDK trên backend.';
     case 'AUTH_ERROR':
@@ -306,12 +317,14 @@ function parseServiceAccountJson(
 }
 
 /**
- * Initializes Firebase Admin SDK once in serverless/Node runtime strictly from
- * process.env.FIREBASE_SERVICE_ACCOUNT_JSON and binds Firestore strictly to
+ * Initializes Firebase Admin SDK once in serverless/Node runtime from
+ * process.env.FIREBASE_SERVICE_ACCOUNT_JSON / FIREBASE_SERVICE_ACCOUNT and binds Firestore strictly to
  * EXPECTED_FIRESTORE_DATABASE_ID.
  */
-export function getFirebaseAdminState(): FirebaseAdminInitResult {
-  const { envVarName, rawValue } = resolveServiceAccountEnvSource();
+export function getFirebaseAdminState(
+  preferPrimaryClaimEnv = false
+): FirebaseAdminInitResult {
+  const { envVarName, rawValue } = resolveServiceAccountEnvSource(preferPrimaryClaimEnv);
   const environmentVariablePresent = envVarName !== null && rawValue.length > 0;
 
   if (!environmentVariablePresent || !envVarName) {

@@ -523,7 +523,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                   <strong>Cách A (Firebase Console):</strong> Mở Firestore Database{' '}
                   <code className="font-mono bg-white/80 px-1 rounded">{syncDiag?.databaseId || 'ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e'}</code> → tạo collection <code className="font-mono">admins</code> → Document ID{' '}
                   <code className="font-mono bg-white/80 px-1 rounded">{firebaseUser?.uid}</code> với{' '}
-                  <code className="font-mono">{`{ uid, email, role: "admin", active: true }`}</code>.
+                  <code className="font-mono">{`{ email, role: "admin", isActive: true }`}</code>.
                 </li>
                 <li>
                   <strong>Cách B (Admin SDK Script):</strong> Chạy{' '}

@@ -6,6 +6,7 @@ import {
   fetchUserProfileFromFirestore,
   syncUserProfileByUid,
   reloadAndRefreshCurrentUser,
+  verifyCurrentUserAdminClaim,
   loadPendingDraft,
   logoutAccount,
   mapFirebaseAuthError,
@@ -31,6 +32,7 @@ interface AuthContextValue {
   authState: SessionAuthState;
   firebaseUser: FirebaseUser | null;
   userProfile: User | null;
+  isAdminClaimVerified: boolean;
   authError: string | null;
   authDiagnostic: ProfileDiagnosticError | null;
   pendingDraft: PendingProfileDraft | null;
@@ -62,6 +64,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   );
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [userProfile, setUserProfile] = useState<User | null>(null);
+  const [isAdminClaimVerified, setIsAdminClaimVerified] = useState<boolean>(false);
   const [authError, setAuthError] = useState<string | null>(firebaseInitError);
   const [authDiagnostic, setAuthDiagnostic] = useState<ProfileDiagnosticError | null>(null);
   const [pendingDraft, setPendingDraft] = useState<PendingProfileDraft | null>(null);
@@ -78,6 +81,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setAuthDiagnostic(null);
       setFirebaseUser(null);
       setUserProfile(null);
+      setIsAdminClaimVerified(false);
       StorageService.clearActiveWorkspaceMemory();
       return;
     }
@@ -85,6 +89,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (!fbUser) {
       setFirebaseUser(null);
       setUserProfile(null);
+      setIsAdminClaimVerified(false);
       setPendingDraft(null);
       setAuthError(null);
       setAuthDiagnostic(null);
@@ -109,11 +114,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (!profile) {
         StorageService.clearActiveWorkspaceMemory();
         setUserProfile(null);
+        setIsAdminClaimVerified(false);
         setPendingDraft(loadPendingDraft(fbUser.uid));
         setAuthState('missing_profile');
         return;
       }
 
+      let hasAdminClaim = false;
+      try {
+        const tokenRes = await fbUser.getIdTokenResult();
+        hasAdminClaim = tokenRes?.claims?.admin === true;
+      } catch {
+        hasAdminClaim = false;
+      }
+
+      if (profile.role === 'admin' && !hasAdminClaim) {
+        const claimCheck = await verifyCurrentUserAdminClaim();
+        hasAdminClaim = claimCheck.isAdmin;
+        if (!hasAdminClaim) {
+          StorageService.clearActiveWorkspaceMemory();
+          setUserProfile(null);
+          setIsAdminClaimVerified(false);
+          setAuthError(
+            claimCheck.errorMessage ||
+              'Tài khoản chưa được cấp Custom Claim Admin (token.claims.admin != true).'
+          );
+          setAuthState('profile_read_error');
+          return;
+        }
+      }
+
+      setIsAdminClaimVerified(hasAdminClaim);
       setUserProfile(profile);
 
       if (profile.status === 'locked') {
@@ -139,6 +170,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (err) {
       console.error('[HQTest AuthContext] Failed to resolve user profile:', err);
       StorageService.clearActiveWorkspaceMemory();
+      setIsAdminClaimVerified(false);
       setPendingDraft(loadPendingDraft(fbUser.uid));
 
       if (err instanceof ProfileAccessError) {
@@ -252,6 +284,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = useCallback(async () => {
     StorageService.clearActiveWorkspaceMemory();
     setUserProfile(null);
+    setIsAdminClaimVerified(false);
     setPendingDraft(null);
     setAuthError(null);
     setAuthDiagnostic(null);
@@ -266,6 +299,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authState,
         firebaseUser,
         userProfile,
+        isAdminClaimVerified,
         authError,
         authDiagnostic,
         pendingDraft,

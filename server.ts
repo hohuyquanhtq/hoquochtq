@@ -3,6 +3,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createExamApiHandlers } from './server/examApiHandlers.ts';
+import { handleSetAdminClaims } from './server/adminClaimsHandler.ts';
 import { checkFirebaseAdminHealth } from './server/firebaseAdmin.ts';
 import { hasServiceAccountConfigured, resolveServerFirebaseConfig } from './server/firebaseServerAuth.ts';
 
@@ -79,6 +80,7 @@ async function startServer() {
     res.status(statusCode).json(health);
   });
 
+  app.all('/api/admin/set-claims', wrapExpress(handleSetAdminClaims));
   app.post('/api/exams/security/configure', wrapExpress(handlers.handleConfigureExamSecurity));
   app.post('/api/exams/verify-password', wrapExpress(handlers.handleVerifyExamPassword));
   app.post('/api/exams/access-questions', wrapExpress(handlers.handleAccessExamQuestions));

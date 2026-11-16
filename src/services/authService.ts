@@ -497,21 +497,82 @@ function parseUserDoc(
   };
 }
 
-async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
+interface TrustedAdminStatus {
   adminDocExists: boolean;
   adminDocActive: boolean;
   adminDocError?: string;
   adminDocDiagnostic?: ProfileDiagnosticError;
   hasAdminClaim: boolean;
+  claimApiError?: string;
+}
+
+const inFlightAdminClaimSyncs = new Map<string, Promise<TrustedAdminStatus>>();
+
+async function callSetAdminClaimsApi(fbUser: FirebaseUser): Promise<{
+  ok: boolean;
+  errorMessage?: string;
 }> {
-  const hasAdminClaim = false;
+  try {
+    const idToken = await fbUser.getIdToken();
+    const response = await fetch('/api/admin/set-claims', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({}),
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as {
+      ok?: boolean;
+      success?: boolean;
+      error?: string;
+    };
+
+    if (!response.ok || payload.ok === false) {
+      return {
+        ok: false,
+        errorMessage:
+          (typeof payload.error === 'string' && payload.error.trim()) ||
+          `Không thể thiết lập quyền Admin từ máy chủ (HTTP ${response.status}).`,
+      };
+    }
+
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      errorMessage:
+        err instanceof Error && err.message
+          ? `Không thể kết nối API cấp quyền Admin (/api/admin/set-claims): ${err.message}`
+          : 'Không thể kết nối API cấp quyền Admin (/api/admin/set-claims).',
+    };
+  }
+}
+
+async function readTrustedAdminStatusInternal(
+  fbUser: FirebaseUser,
+  options?: { attemptClaimApi?: boolean; forceTokenRefresh?: boolean }
+): Promise<TrustedAdminStatus> {
+  let hasAdminClaim = false;
   let adminDocExists = false;
   let adminDocActive = false;
   let adminDocError: string | undefined;
   let adminDocDiagnostic: ProfileDiagnosticError | undefined;
+  let claimApiError: string | undefined;
 
   const adminPath = `admins/${fbUser.uid}`;
   const authEmail = (fbUser.email || '').trim().toLowerCase();
+
+  try {
+    if (options?.forceTokenRefresh) {
+      await fbUser.getIdToken(true).catch(() => {});
+    }
+    const tokenResult = await fbUser.getIdTokenResult();
+    hasAdminClaim = tokenResult?.claims?.admin === true;
+  } catch {
+    hasAdminClaim = false;
+  }
 
   try {
     const adminRef = doc(db, 'admins', fbUser.uid);
@@ -527,21 +588,19 @@ async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
       const data = adminSnap.data() as Record<string, unknown>;
       const docUid = typeof data.uid === 'string' ? data.uid.trim() : '';
       const docEmail = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
-      const isUidOk = docUid === fbUser.uid;
-      const isEmailOk = Boolean(authEmail) && docEmail === authEmail;
+      const isUidOk = !docUid || docUid === fbUser.uid;
+      const isEmailOk = !docEmail || (Boolean(authEmail) && docEmail === authEmail);
       const isRoleOk = data.role === 'admin';
-      const isActiveOk = data.active === true;
-      const isVerifiedOk = fbUser.emailVerified === true;
+      const isActiveOk = data.isActive === true || data.active === true;
 
-      adminDocActive = isUidOk && isEmailOk && isRoleOk && isActiveOk && isVerifiedOk;
+      adminDocActive = isUidOk && isEmailOk && isRoleOk && isActiveOk;
 
       if (!adminDocActive) {
         const mismatches: string[] = [];
-        if (!isVerifiedOk) mismatches.push('email Auth chưa xác minh');
         if (!isUidOk) mismatches.push('uid không khớp');
         if (!isEmailOk) mismatches.push('email không khớp Firebase Auth');
         if (!isRoleOk) mismatches.push('role != "admin"');
-        if (!isActiveOk) mismatches.push('active != true');
+        if (!isActiveOk) mismatches.push('isActive != true');
         adminDocError = `Document admins/${fbUser.uid} chưa hợp lệ (${mismatches.join(', ')}).`;
       }
     }
@@ -550,7 +609,81 @@ async function readTrustedAdminStatus(fbUser: FirebaseUser): Promise<{
     adminDocError = adminDocDiagnostic.userMessage;
   }
 
-  return { adminDocExists, adminDocActive, adminDocError, adminDocDiagnostic, hasAdminClaim };
+  const shouldAttemptClaimSetup =
+    !hasAdminClaim &&
+    Boolean(
+      options?.attemptClaimApi ||
+        adminDocExists ||
+        authEmail === EXPECTED_PRIMARY_ADMIN_EMAIL
+    );
+
+  if (shouldAttemptClaimSetup) {
+    const apiRes = await callSetAdminClaimsApi(fbUser);
+    if (apiRes.ok) {
+      try {
+        await fbUser.getIdToken(true);
+        const refreshedTokenResult = await fbUser.getIdTokenResult();
+        hasAdminClaim = refreshedTokenResult?.claims?.admin === true;
+        if (!hasAdminClaim) {
+          claimApiError =
+            'API đã phản hồi thành công nhưng token.claims.admin chưa bằng true sau khi làm mới ID Token.';
+        }
+      } catch (err) {
+        claimApiError =
+          err instanceof Error
+            ? `Không thể làm mới ID Token sau khi cấp quyền Admin: ${err.message}`
+            : 'Không thể làm mới ID Token sau khi cấp quyền Admin.';
+      }
+    } else {
+      claimApiError = apiRes.errorMessage;
+    }
+  }
+
+  return {
+    adminDocExists,
+    adminDocActive,
+    adminDocError,
+    adminDocDiagnostic,
+    hasAdminClaim,
+    claimApiError,
+  };
+}
+
+async function readTrustedAdminStatus(
+  fbUser: FirebaseUser,
+  options?: { attemptClaimApi?: boolean; forceTokenRefresh?: boolean }
+): Promise<TrustedAdminStatus> {
+  const inflightKey = fbUser.uid;
+  const existing = inFlightAdminClaimSyncs.get(inflightKey);
+  if (existing) {
+    return existing;
+  }
+
+  const task = readTrustedAdminStatusInternal(fbUser, options).finally(() => {
+    inFlightAdminClaimSyncs.delete(inflightKey);
+  });
+  inFlightAdminClaimSyncs.set(inflightKey, task);
+  return task;
+}
+
+export async function verifyCurrentUserAdminClaim(): Promise<{
+  isAdmin: boolean;
+  errorMessage?: string;
+}> {
+  const currentUser = auth?.currentUser;
+  if (firebaseInitError || !currentUser) {
+    return { isAdmin: false, errorMessage: 'Chưa đăng nhập Firebase Authentication.' };
+  }
+  const status = await readTrustedAdminStatus(currentUser, {
+    attemptClaimApi: true,
+    forceTokenRefresh: true,
+  });
+  return {
+    isAdmin: status.hasAdminClaim,
+    errorMessage: status.hasAdminClaim
+      ? undefined
+      : status.claimApiError || status.adminDocError || 'Tài khoản chưa có quyền Admin (token.claims.admin != true).',
+  };
 }
 
 export async function inspectAccountSyncStatus(
@@ -584,7 +717,10 @@ export async function inspectAccountSyncStatus(
     userDocError = classifyFirestoreOperationError(err, 'GET', userPath, fbUser.uid);
   }
 
-  const adminInfo = await readTrustedAdminStatus(fbUser);
+  const adminInfo = await readTrustedAdminStatus(fbUser, {
+    attemptClaimApi: raw?.role === 'admin' || forceTokenRefresh,
+    forceTokenRefresh,
+  });
 
   const requiredFields = [
     'uid',
@@ -602,7 +738,7 @@ export async function inspectAccountSyncStatus(
   const existingStatus = typeof raw?.status === 'string' ? (raw.status as AccountStatus) : undefined;
   const existingName = typeof raw?.name === 'string' ? raw.name : undefined;
 
-  const hasTrustedAdminAuthority = adminInfo.adminDocActive;
+  const hasTrustedAdminAuthority = adminInfo.hasAdminClaim;
 
   return {
     uid: fbUser.uid,
@@ -617,7 +753,7 @@ export async function inspectAccountSyncStatus(
     userDocError,
     adminDocExists: adminInfo.adminDocExists,
     adminDocActive: adminInfo.adminDocActive,
-    adminDocError: adminInfo.adminDocError,
+    adminDocError: adminInfo.claimApiError || adminInfo.adminDocError,
     adminDocDiagnostic: adminInfo.adminDocDiagnostic,
     hasAdminClaim: adminInfo.hasAdminClaim,
     hasTrustedAdminAuthority,
@@ -644,14 +780,83 @@ export async function fetchUserProfileFromFirestore(
     throw new ProfileAccessError(diag);
   }
 
-  const adminInfo = await readTrustedAdminStatus(fbUser);
+  const raw = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
+  const adminInfo = await readTrustedAdminStatus(fbUser, {
+    attemptClaimApi: raw?.role === 'admin',
+  });
+  const hasTrustedAdminAuthority = adminInfo.hasAdminClaim;
+  const cleanEmail = (fbUser.email || '').trim().toLowerCase();
 
-  if (!userSnap.exists()) {
-    return null;
+  // If Firebase ID Token already has verified Custom Claim admin === true,
+  // allow entry into Admin Dashboard directly and ensure users/{uid} stays synced cleanly.
+  if (hasTrustedAdminAuthority) {
+    const nowIso = new Date().toISOString();
+    if (!userSnap.exists() || !raw) {
+      const displayName =
+        (fbUser.displayName || '').trim() ||
+        cleanEmail.split('@')[0] ||
+        'Quản trị viên HQTest';
+      const newAdminProfile = stripUndefinedDeep({
+        uid: fbUser.uid,
+        email: cleanEmail,
+        name: displayName.slice(0, 150),
+        role: 'admin' as const,
+        status: 'active' as const,
+        createdAt: nowIso,
+        updatedAt: nowIso,
+        serverCreatedAt: serverTimestamp(),
+        serverUpdatedAt: serverTimestamp(),
+      });
+      await setDoc(userRef, newAdminProfile).catch(() => {});
+      return parseUserDoc(fbUser.uid, fbUser, newAdminProfile, true);
+    }
+
+    if (raw.role !== 'admin' || raw.status !== 'active') {
+      await updateDoc(
+        userRef,
+        stripUndefinedDeep({
+          uid: raw.uid || fbUser.uid,
+          email: raw.email || cleanEmail,
+          role: 'admin',
+          status: 'active',
+          createdAt: raw.createdAt || nowIso,
+          updatedAt: nowIso,
+          serverUpdatedAt: serverTimestamp(),
+        })
+      ).catch(() => {});
+    }
+
+    return parseUserDoc(fbUser.uid, fbUser, raw, true);
   }
 
-  const raw = userSnap.data() as Record<string, unknown>;
-  const hasTrustedAdminAuthority = adminInfo.adminDocActive;
+  // If this account is an Admin candidate (e.g. admins/{uid} exists, users/{uid}.role === 'admin',
+  // or primary admin email failed server claim validation), block Admin Dashboard entry with exact server message
+  // while preserving the Firebase Authentication session.
+  const isAdminCandidate =
+    adminInfo.adminDocExists ||
+    raw?.role === 'admin' ||
+    (cleanEmail === EXPECTED_PRIMARY_ADMIN_EMAIL && Boolean(adminInfo.claimApiError));
+
+  if (isAdminCandidate) {
+    const projectInfo = getFirebaseProjectInfo();
+    throw new ProfileAccessError({
+      category: 'admin_not_initialized',
+      code: 'admin-custom-claim-required',
+      operation: 'GET',
+      path: `admins/${fbUser.uid}`,
+      projectId: projectInfo.projectId,
+      databaseId: projectInfo.databaseId,
+      uid: fbUser.uid,
+      userMessage:
+        adminInfo.claimApiError ||
+        adminInfo.adminDocError ||
+        `Tài khoản chưa được cấp Custom Claim Admin (token.claims.admin != true) tại admins/${fbUser.uid}.`,
+    });
+  }
+
+  if (!userSnap.exists() || !raw) {
+    return null;
+  }
 
   // Require core identity/RBAC fields (supports Console Timestamp createdAt & optional name)
   const hasRequiredCore =
@@ -666,29 +871,7 @@ export async function fetchUserProfileFromFirestore(
     return null;
   }
 
-  // If users/{uid} declares admin role without trusted server authority (admins/{uid} or Claim),
-  // surface explicit admin_not_initialized error instead of opening a broken Admin UI.
-  if (raw.role === 'admin' && !hasTrustedAdminAuthority) {
-    const projectInfo = getFirebaseProjectInfo();
-    throw new ProfileAccessError({
-      category: 'admin_not_initialized',
-      code: 'admin-role-not-initialized',
-      operation: 'GET',
-      path: `admins/${fbUser.uid}`,
-      projectId: projectInfo.projectId,
-      databaseId: projectInfo.databaseId,
-      uid: fbUser.uid,
-      userMessage: `Quyền Admin chưa được khởi tạo trên máy chủ (Admin role not initialized). Tài khoản có role: "admin" tại ${userPath} nhưng chưa có document admins/${fbUser.uid} hợp lệ hoặc Admin Custom Claim.`,
-    });
-  }
-
-  // If user holds trusted server admin authority but their users/{uid} still says student/teacher,
-  // route to profile sync so users/{uid} is properly reconciled to admin/active on Firestore.
-  if (hasTrustedAdminAuthority && (raw.role !== 'admin' || raw.status !== 'active')) {
-    return null;
-  }
-
-  return parseUserDoc(fbUser.uid, fbUser, raw, hasTrustedAdminAuthority);
+  return parseUserDoc(fbUser.uid, fbUser, raw, false);
 }
 
 export async function syncUserProfileByUid(
@@ -734,11 +917,14 @@ export async function syncUserProfileByUid(
     currentOp = 'GET';
     const [existingSnap, adminInfo] = await Promise.all([
       getDocFromServer(userRef),
-      readTrustedAdminStatus(currentFbUser),
+      readTrustedAdminStatus(currentFbUser, {
+        attemptClaimApi: options.intendedRole === 'admin',
+        forceTokenRefresh: true,
+      }),
     ]);
 
     const existingRaw = existingSnap.exists() ? (existingSnap.data() as Record<string, unknown>) : null;
-    const hasTrustedAdminAuthority = adminInfo.adminDocActive;
+    const hasTrustedAdminAuthority = adminInfo.hasAdminClaim;
 
     const nowIso = new Date().toISOString();
     let warningMessage: string | undefined;
@@ -755,7 +941,10 @@ export async function syncUserProfileByUid(
           projectId: projectInfo.projectId,
           databaseId: projectInfo.databaseId,
           uid: currentFbUser.uid,
-          userMessage: `Quyền Admin chưa được khởi tạo (Admin role not initialized): Tài khoản ${cleanEmail} (UID: ${currentFbUser.uid}) chưa có document admins/${currentFbUser.uid} hoặc Admin Custom Claim trên Firebase.`,
+          userMessage:
+            adminInfo.claimApiError ||
+            adminInfo.adminDocError ||
+            `Quyền Admin chưa được cấp Custom Claim (token.claims.admin != true) cho tài khoản ${cleanEmail} (UID: ${currentFbUser.uid}).`,
         };
         return {
           success: false,
