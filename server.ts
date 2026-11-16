@@ -3,6 +3,7 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createExamApiHandlers } from './server/examApiHandlers.ts';
+import { checkFirebaseAdminHealth } from './server/firebaseAdmin.ts';
 import { hasServiceAccountConfigured, resolveServerFirebaseConfig } from './server/firebaseServerAuth.ts';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -36,12 +37,27 @@ async function startServer() {
 
   app.get('/api/health', (_req, res) => {
     const cfg = resolveServerFirebaseConfig();
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.json({
       ok: true,
       projectId: cfg.projectId,
       databaseId: cfg.databaseId,
       adminConfigured: hasServiceAccountConfigured(),
     });
+  });
+
+  app.get('/api/health/firebase-admin', async (_req, res) => {
+    const health = await checkFirebaseAdminHealth();
+    const statusCode =
+      health.adminInitialized &&
+      health.projectIdMatched &&
+      health.firestoreConnected &&
+      health.databaseIdMatched
+        ? 200
+        : 503;
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.setHeader('Pragma', 'no-cache');
+    res.status(statusCode).json(health);
   });
 
   app.post('/api/exams/security/configure', wrapExpress(handlers.handleConfigureExamSecurity));

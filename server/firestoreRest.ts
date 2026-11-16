@@ -1,4 +1,10 @@
-import { getServiceAccountAccessToken, resolveServerFirebaseConfig } from './firebaseServerAuth.ts';
+import type { Query } from 'firebase-admin/firestore';
+import {
+  getFirebaseAdminDb,
+  getFirebaseAdminFieldValue,
+  isFirebaseAdminReady,
+} from './firebaseAdmin.ts';
+import { resolveServerFirebaseConfig } from './firebaseServerAuth.ts';
 
 type FirestoreValue =
   | { nullValue: null }
@@ -15,6 +21,51 @@ export interface FirestoreDocument {
   fields?: Record<string, FirestoreValue>;
   createTime?: string;
   updateTime?: string;
+}
+
+function stripUndefinedForAdmin(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== 'object') return value;
+  if (value instanceof Date) return value;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => stripUndefinedForAdmin(item))
+      .filter((item) => item !== undefined);
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v !== undefined) {
+      const cleaned = stripUndefinedForAdmin(v);
+      if (cleaned !== undefined) {
+        out[k] = cleaned;
+      }
+    }
+  }
+  return out;
+}
+
+function normalizeAdminDocData(value: unknown): unknown {
+  if (value === null || value === undefined || typeof value !== 'object') {
+    return value;
+  }
+  if ('toDate' in value && typeof (value as { toDate?: unknown }).toDate === 'function') {
+    try {
+      return ((value as { toDate: () => Date }).toDate()).toISOString();
+    } catch {
+      return value;
+    }
+  }
+  if (value instanceof Date) {
+    return value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeAdminDocData(item));
+  }
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    out[k] = normalizeAdminDocData(v);
+  }
+  return out;
 }
 
 export function encodeFirestoreValue(val: unknown): FirestoreValue {
@@ -104,24 +155,19 @@ function getDatabaseBaseUrl(): string {
   return `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(databaseId)}`;
 }
 
-async function resolveAuthHeader(bearerTokenOverride?: string): Promise<string | null> {
-  const adminToken = await getServiceAccountAccessToken();
-  if (adminToken) {
-    return `Bearer ${adminToken}`;
-  }
-  if (bearerTokenOverride) {
-    return `Bearer ${bearerTokenOverride}`;
-  }
-  return null;
-}
-
 export async function firestoreGetDoc<T = Record<string, unknown>>(
   collectionName: string,
   docId: string,
   options?: { bearerToken?: string }
 ): Promise<T | null> {
-  const authHeader = await resolveAuthHeader(options?.bearerToken);
-  if (!authHeader) {
+  if (isFirebaseAdminReady()) {
+    const db = getFirebaseAdminDb();
+    const snap = await db.collection(collectionName).doc(docId).get();
+    if (!snap.exists) return null;
+    return normalizeAdminDocData(snap.data()) as T;
+  }
+
+  if (!options?.bearerToken) {
     throw new Error('SERVER_CREDENTIALS_MISSING');
   }
 
@@ -129,7 +175,7 @@ export async function firestoreGetDoc<T = Record<string, unknown>>(
   const url = `${base}/documents/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
   const res = await fetch(url, {
     method: 'GET',
-    headers: { Authorization: authHeader },
+    headers: { Authorization: `Bearer ${options.bearerToken}` },
   });
 
   if (res.status === 404) return null;
@@ -150,11 +196,22 @@ export async function firestoreSetDoc(
   data: Record<string, unknown>,
   options?: { bearerToken?: string; serverTimestampFields?: string[] }
 ): Promise<void> {
-  const authHeader = await resolveAuthHeader(options?.bearerToken);
-  if (!authHeader) {
+  if (isFirebaseAdminReady()) {
+    const db = getFirebaseAdminDb();
+    const FieldValue = getFirebaseAdminFieldValue();
+    const cleaned = stripUndefinedForAdmin(data) as Record<string, unknown>;
+    for (const field of options?.serverTimestampFields || []) {
+      cleaned[field] = FieldValue.serverTimestamp();
+    }
+    await db.collection(collectionName).doc(docId).set(cleaned);
+    return;
+  }
+
+  if (!options?.bearerToken) {
     throw new Error('SERVER_CREDENTIALS_MISSING');
   }
 
+  const authHeader = `Bearer ${options.bearerToken}`;
   const base = getDatabaseBaseUrl();
   const { projectId, databaseId } = resolveServerFirebaseConfig();
   const docPath = `projects/${projectId}/databases/${databaseId}/documents/${collectionName}/${docId}`;
@@ -215,11 +272,22 @@ export async function firestorePatchFields(
   partialData: Record<string, unknown>,
   options?: { bearerToken?: string; serverTimestampFields?: string[] }
 ): Promise<void> {
-  const authHeader = await resolveAuthHeader(options?.bearerToken);
-  if (!authHeader) {
+  if (isFirebaseAdminReady()) {
+    const db = getFirebaseAdminDb();
+    const FieldValue = getFirebaseAdminFieldValue();
+    const cleaned = stripUndefinedForAdmin(partialData) as Record<string, unknown>;
+    for (const field of options?.serverTimestampFields || []) {
+      cleaned[field] = FieldValue.serverTimestamp();
+    }
+    await db.collection(collectionName).doc(docId).update(cleaned);
+    return;
+  }
+
+  if (!options?.bearerToken) {
     throw new Error('SERVER_CREDENTIALS_MISSING');
   }
 
+  const authHeader = `Bearer ${options.bearerToken}`;
   const base = getDatabaseBaseUrl();
   const { projectId, databaseId } = resolveServerFirebaseConfig();
   const docPath = `projects/${projectId}/databases/${databaseId}/documents/${collectionName}/${docId}`;
@@ -267,8 +335,13 @@ export async function firestoreDeleteDoc(
   docId: string,
   options?: { bearerToken?: string }
 ): Promise<void> {
-  const authHeader = await resolveAuthHeader(options?.bearerToken);
-  if (!authHeader) {
+  if (isFirebaseAdminReady()) {
+    const db = getFirebaseAdminDb();
+    await db.collection(collectionName).doc(docId).delete();
+    return;
+  }
+
+  if (!options?.bearerToken) {
     throw new Error('SERVER_CREDENTIALS_MISSING');
   }
 
@@ -276,7 +349,7 @@ export async function firestoreDeleteDoc(
   const url = `${base}/documents/${encodeURIComponent(collectionName)}/${encodeURIComponent(docId)}`;
   const res = await fetch(url, {
     method: 'DELETE',
-    headers: { Authorization: authHeader },
+    headers: { Authorization: `Bearer ${options.bearerToken}` },
   });
 
   if (res.status === 404) return;
@@ -291,8 +364,17 @@ export async function firestoreQueryEquals<T = Record<string, unknown>>(
   filters: Array<{ field: string; value: string | boolean | number }>,
   options?: { bearerToken?: string; limit?: number }
 ): Promise<T[]> {
-  const authHeader = await resolveAuthHeader(options?.bearerToken);
-  if (!authHeader) {
+  if (isFirebaseAdminReady()) {
+    const db = getFirebaseAdminDb();
+    let query: Query = db.collection(collectionName);
+    for (const f of filters) {
+      query = query.where(f.field, '==', f.value);
+    }
+    const snap = await query.limit(options?.limit ?? 100).get();
+    return snap.docs.map((doc) => normalizeAdminDocData(doc.data()) as T);
+  }
+
+  if (!options?.bearerToken) {
     throw new Error('SERVER_CREDENTIALS_MISSING');
   }
 
@@ -326,7 +408,7 @@ export async function firestoreQueryEquals<T = Record<string, unknown>>(
   const res = await fetch(`${base}/documents:runQuery`, {
     method: 'POST',
     headers: {
-      Authorization: authHeader,
+      Authorization: `Bearer ${options.bearerToken}`,
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ structuredQuery }),
