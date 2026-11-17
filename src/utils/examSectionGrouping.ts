@@ -2,12 +2,14 @@ import { DetectedExamSection, Exam, Question, QuestionType, StudentAnswer } from
 
 export const DEFAULT_SECTION_TITLES: Record<QuestionType, string> = {
   part1_single_choice: 'PHẦN I. TRẮC NGHIỆM 4 LỰA CHỌN',
+  part1_multiple_choice: 'PHẦN I. TRẮC NGHIỆM NHIỀU LỰA CHỌN',
   part2_true_false: 'PHẦN II. TRẮC NGHIỆM ĐÚNG/SAI',
   part3_short_answer: 'PHẦN III. TRẢ LỜI NGẮN',
 };
 
 export const SHORT_PART_BADGES: Record<QuestionType, string> = {
   part1_single_choice: 'Phần I: 4 Lựa chọn',
+  part1_multiple_choice: 'Phần I: Nhiều lựa chọn',
   part2_true_false: 'Phần II: Đúng / Sai',
   part3_short_answer: 'Phần III: Trả lời ngắn',
 };
@@ -132,6 +134,7 @@ export function resolveQuestionPartType(q: Question, detectedSec?: DetectedExamS
 
   if (
     q.type === 'part1_single_choice' ||
+    q.type === 'part1_multiple_choice' ||
     q.type === 'part2_true_false' ||
     q.type === 'part3_short_answer'
   ) {
@@ -259,6 +262,22 @@ export function getQuestionProgress(q: Question, answer?: StudentAnswer): Questi
       isPartial: false,
       isFlagged,
       answeredUnits: hasSelected ? 1 : 0,
+      totalUnits: 1,
+      invalidInput: false,
+    };
+  }
+
+  if (partType === 'part1_multiple_choice') {
+    const selectedIds = Array.isArray(answer?.selectedOptionIds)
+      ? answer.selectedOptionIds.filter((id) => typeof id === 'string' && id.trim().length > 0)
+      : [];
+    const hasSelected = selectedIds.length > 0;
+    return {
+      status: hasSelected ? 'completed' : 'unanswered',
+      isCompleted: hasSelected,
+      isPartial: false,
+      isFlagged,
+      answeredUnits: selectedIds.length,
       totalUnits: 1,
       invalidInput: false,
     };

@@ -37,6 +37,11 @@ const SECTION_ACCENTS: Record<
     badgeText: 'text-blue-700',
     dot: 'bg-blue-600',
   },
+  part1_multiple_choice: {
+    headerBg: 'bg-blue-50/70 border-blue-100',
+    badgeText: 'text-blue-700',
+    dot: 'bg-blue-600',
+  },
   part2_true_false: {
     headerBg: 'bg-indigo-50/70 border-indigo-100',
     badgeText: 'text-indigo-700',

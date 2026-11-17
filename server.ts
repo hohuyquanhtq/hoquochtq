@@ -88,6 +88,7 @@ async function startServer() {
   app.post('/api/exams/access-questions', wrapExpress(handlers.handleAccessExamQuestions));
   app.post('/api/exams/submit-and-grade', wrapExpress(handlers.handleSubmitAndGradeExam));
   app.post('/api/exams/request-answer-review', wrapExpress(handlers.handleRequestAnswerReview));
+  app.post('/api/submissions/teacher-detail', wrapExpress(handlers.handleGetTeacherSubmissionDetail));
   app.post('/api/exams/allocate-public-code', wrapExpress(publicLinkHandlers.handleAllocatePublicCode));
   app.post('/api/exams/sync-link-status', wrapExpress(publicLinkHandlers.handleSyncPublicExamLinkStatus));
 

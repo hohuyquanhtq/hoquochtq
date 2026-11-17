@@ -29,7 +29,7 @@
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "code": { "type": "string", "minLength": 1, "maxLength": 64 },
         "content": { "type": "string", "minLength": 1, "maxLength": 20000 },
-        "type": { "type": "string", "enum": ["part1_single_choice", "part2_true_false", "part3_short_answer"] },
+        "type": { "type": "string", "enum": ["part1_single_choice", "part1_multiple_choice", "part2_true_false", "part3_short_answer"] },
         "subjectId": { "type": "string", "maxLength": 64 },
         "subjectName": { "type": "string", "maxLength": 120 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
@@ -43,6 +43,7 @@
         "folderId": { "type": "string", "maxLength": 128 },
         "options": { "type": "array" },
         "correctOptionId": { "type": "string", "maxLength": 8 },
+        "correctOptionIds": { "type": "array" },
         "statements": { "type": "array" },
         "shortAnswerConfig": { "type": "object" },
         "imageUrl": { "type": "string", "maxLength": 1000 },
@@ -334,6 +335,8 @@
         "gradedByServer": { "type": "boolean" },
         "serverGradeDigest": { "type": "string" },
         "serverGradedAt": { "type": "string" },
+        "examVersionUpdatedAt": { "type": "string" },
+        "hasSubmissionSnapshot": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": [
@@ -342,6 +345,51 @@
         "durationSeconds", "answers", "part1Score", "part2Score",
         "part3Score", "totalScore", "maxPossibleScore",
         "correctQuestionsCount", "status", "createdAt"
+      ]
+    },
+    "SubmissionSnapshot": {
+      "title": "SubmissionSnapshot",
+      "description": "Immutable per-attempt snapshot capturing exact question version, options, keys, student answers, and per-question scores. Teacher-owner and Admin only.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "submissionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "attemptId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^([0-9]{6}|[A-HJ-NP-Z2-9]{6})$" },
+        "variantCode": { "type": "string", "maxLength": 32 },
+        "examTitle": { "type": "string", "maxLength": 300 },
+        "examVersionUpdatedAt": { "type": "string", "maxLength": 64 },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "studentClass": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "startedAt": { "type": "string", "maxLength": 64 },
+        "submittedAt": { "type": "string", "maxLength": 64 },
+        "durationSeconds": { "type": "number" },
+        "part1Score": { "type": "number" },
+        "part2Score": { "type": "number" },
+        "part3Score": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "maxPossibleScore": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "correctQuestionsCount": { "type": "number" },
+        "wrongQuestionsCount": { "type": "number" },
+        "unansweredQuestionsCount": { "type": "number" },
+        "tabSwitchesCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "in_progress", "timed_out"] },
+        "gradedByServer": { "type": "boolean" },
+        "isLegacyReconstructed": { "type": "boolean" },
+        "capturedAt": { "type": "string", "maxLength": 64 },
+        "questionResults": { "type": "array" }
+      },
+      "required": [
+        "id", "submissionId", "examId", "examCode", "examTitle", "ownerId",
+        "studentId", "studentName", "studentClass", "startedAt", "submittedAt",
+        "durationSeconds", "part1Score", "part2Score", "part3Score", "totalScore",
+        "maxPossibleScore", "totalQuestions", "correctQuestionsCount",
+        "wrongQuestionsCount", "unansweredQuestionsCount", "status", "capturedAt", "questionResults"
       ]
     },
     "AdminMarker": {
@@ -487,6 +535,10 @@
     "/submissions/{submissionId}": {
       "schema": { "$ref": "#/entities/StudentSubmission" },
       "description": "Student exam submissions readable by exam owner teacher, submitting student, or admin."
+    },
+    "/submissionSnapshots/{submissionId}": {
+      "schema": { "$ref": "#/entities/SubmissionSnapshot" },
+      "description": "Teacher-owner and Admin-only immutable per-attempt question/answer/key snapshots. Students have zero access."
     },
     "/admins/{userId}": {
       "schema": { "$ref": "#/entities/AdminMarker" },

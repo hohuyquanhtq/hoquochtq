@@ -23,7 +23,7 @@ import {
   Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
-import { Exam, Question, StudentSubmission } from '../types';
+import { Exam, Question, StudentSubmission, SubmissionSnapshotRecord } from '../types';
 import {
   normalizeExamCode,
   normalizeExamCodeCompact,
@@ -327,6 +327,7 @@ export function sanitizeExamForStudent(exam: Exam): Exam {
 export interface AnswerKeyEntry {
   type: Question['type'];
   correctOptionId?: string;
+  correctOptionIds?: string[];
   statements?: Record<string, boolean>;
   statementExplanations?: Record<string, string>;
   shortAnswerConfig?: Question['shortAnswerConfig'];
@@ -337,8 +338,20 @@ export function extractAnswerKeyMap(exam: Exam): Record<string, AnswerKeyEntry> 
   const answerMap: Record<string, AnswerKeyEntry> = {};
   (exam.questions || []).forEach((q) => {
     const entry: AnswerKeyEntry = { type: q.type };
-    if (q.type === 'part1_single_choice' && q.correctOptionId) {
-      entry.correctOptionId = q.correctOptionId;
+    if (q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') {
+      const multiIds = Array.isArray(q.correctOptionIds) && q.correctOptionIds.length > 0
+        ? Array.from(new Set(q.correctOptionIds.map((id) => id.trim()).filter(Boolean))).sort()
+        : Array.isArray(q.options) && q.options.some((o) => o.isCorrect)
+        ? Array.from(new Set(q.options.filter((o) => o.isCorrect).map((o) => o.id.trim()).filter(Boolean))).sort()
+        : q.correctOptionId
+        ? [q.correctOptionId.trim()]
+        : [];
+      if (multiIds.length > 0) {
+        entry.correctOptionId = q.correctOptionId || multiIds[0];
+        if (q.type === 'part1_multiple_choice' || multiIds.length > 1) {
+          entry.correctOptionIds = multiIds;
+        }
+      }
     }
     if (q.type === 'part2_true_false' && q.statements) {
       const stMap: Record<string, boolean> = {};
@@ -376,13 +389,26 @@ export function rehydrateExamWithAnswerKeys(
       const key = answerMap[q.id];
       if (!key) return q;
       const hydrated: Question = { ...q };
-      if (q.type === 'part1_single_choice' && key.correctOptionId) {
-        hydrated.correctOptionId = key.correctOptionId;
-        if (hydrated.options) {
-          hydrated.options = hydrated.options.map((opt) => ({
-            ...opt,
-            isCorrect: opt.id === key.correctOptionId,
-          }));
+      if (q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') {
+        const keyIds =
+          Array.isArray(key.correctOptionIds) && key.correctOptionIds.length > 0
+            ? key.correctOptionIds
+            : key.correctOptionId
+            ? [key.correctOptionId]
+            : [];
+        if (key.correctOptionId || keyIds[0]) {
+          hydrated.correctOptionId = key.correctOptionId || keyIds[0];
+        }
+        if (keyIds.length > 0) {
+          if (q.type === 'part1_multiple_choice' || keyIds.length > 1) {
+            hydrated.correctOptionIds = keyIds;
+          }
+          if (hydrated.options) {
+            hydrated.options = hydrated.options.map((opt) => ({
+              ...opt,
+              isCorrect: keyIds.includes(opt.id),
+            }));
+          }
         }
       }
       if (q.type === 'part2_true_false' && hydrated.statements && key.statements) {
@@ -1069,6 +1095,10 @@ export async function saveSubmissionToFirestore(
       ? { unansweredQuestionsCount: submission.unansweredQuestionsCount }
       : {}),
     ...(submission.tabSwitchesCount !== undefined ? { tabSwitchesCount: submission.tabSwitchesCount } : {}),
+    ...(submission.examVersionUpdatedAt ? { examVersionUpdatedAt: submission.examVersionUpdatedAt } : {}),
+    ...(typeof submission.hasSubmissionSnapshot === 'boolean'
+      ? { hasSubmissionSnapshot: submission.hasSubmissionSnapshot }
+      : {}),
     status: submission.status || 'completed',
     createdAt: serverTimestamp(),
   });
@@ -1079,5 +1109,40 @@ export async function saveSubmissionToFirestore(
   } catch (error) {
     console.warn('Could not persist submission to Firestore:', error);
     return false;
+  }
+}
+
+export async function saveSubmissionSnapshotToFirestore(
+  snapshot: SubmissionSnapshotRecord
+): Promise<boolean> {
+  if (firebaseInitError || !snapshot.submissionId || !snapshot.ownerId) return false;
+  const safeSubId = snapshot.submissionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const payload = stripUndefinedDeep({
+    ...snapshot,
+    id: safeSubId,
+    submissionId: safeSubId,
+    serverCapturedAt: serverTimestamp(),
+  });
+  try {
+    await setDoc(doc(db, 'submissionSnapshots', safeSubId), payload);
+    return true;
+  } catch (error) {
+    console.warn('Could not persist submissionSnapshot to Firestore:', error);
+    return false;
+  }
+}
+
+export async function fetchSubmissionSnapshotFromFirestore(
+  submissionId: string
+): Promise<SubmissionSnapshotRecord | null> {
+  if (firebaseInitError || !submissionId) return null;
+  const safeSubId = submissionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+  try {
+    const snap = await getDoc(doc(db, 'submissionSnapshots', safeSubId));
+    if (!snap.exists()) return null;
+    return snap.data() as SubmissionSnapshotRecord;
+  } catch (error) {
+    console.warn('Could not fetch submissionSnapshot from Firestore:', error);
+    return null;
   }
 }

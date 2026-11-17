@@ -84,6 +84,7 @@ import { QuestionBank } from './components/teacher/QuestionBank';
 import { ExamCreator } from './components/teacher/ExamCreator';
 import { ExamManager } from './components/teacher/ExamManager';
 import { ExamResults } from './components/teacher/ExamResults';
+import { TeacherSubmissionReviewPage } from './components/teacher/TeacherSubmissionReviewPage';
 import { ClassManager } from './components/teacher/ClassManager';
 import { SystemSettingsView } from './components/teacher/SystemSettingsView';
 
@@ -160,6 +161,7 @@ export default function App() {
   const [reviewIsTeacherPreview, setReviewIsTeacherPreview] = useState<boolean>(false);
   const [pendingExamEntryAfterAuth, setPendingExamEntryAfterAuth] = useState<ExamUrlEntry | null>(null);
   const [selectedExamIdForResults, setSelectedExamIdForResults] = useState<string | null>(null);
+  const [reviewingSubmissionForTeacher, setReviewingSubmissionForTeacher] = useState<StudentSubmission | null>(null);
   const [isRefreshingSubmissions, setIsRefreshingSubmissions] = useState(false);
   const [lastSubmissionsSyncAt, setLastSubmissionsSyncAt] = useState<string | null>(null);
   const [submitSyncError, setSubmitSyncError] = useState<string | null>(null);
@@ -207,6 +209,7 @@ export default function App() {
     setEnrollments([]);
     setAssignedExams([]);
     setSelectedExamIdForResults(null);
+    setReviewingSubmissionForTeacher(null);
     setCurrentFolderId(null);
     setCreatorInitialFolderId(null);
   }, []);
@@ -1515,6 +1518,13 @@ export default function App() {
                   currentUserId={activeUid}
                   isAdmin={userProfile.role === 'admin'}
                   onSelectExam={(examId) => setSelectedExamIdForResults(examId)}
+                  onInspectSubmission={(sub) => {
+                    setReviewingSubmissionForTeacher(sub);
+                    if (sub.examId) {
+                      setSelectedExamIdForResults(sub.examId);
+                    }
+                    setActiveTab('teacher_submission_review');
+                  }}
                   onBack={() => setActiveTab('exam_manager')}
                   onShareExam={(ex) => {
                     setAutoOpenShareExamId(ex.id);
@@ -1523,6 +1533,45 @@ export default function App() {
                   onRefresh={handleRefreshTeacherSubmissions}
                   isRefreshing={isRefreshingSubmissions}
                   lastSyncedAt={lastSubmissionsSyncAt}
+                />
+              );
+            })()}
+
+            {activeTab === 'teacher_submission_review' && (() => {
+              if (!reviewingSubmissionForTeacher) {
+                return (
+                  <div className="bg-white border border-slate-200 rounded-2xl p-10 text-center space-y-4 shadow-xs">
+                    <h2 className="text-lg font-bold text-slate-900">
+                      Chưa chọn bài làm học sinh để xem chi tiết
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('exam_results')}
+                      className="px-4 py-2.5 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold"
+                    >
+                      Quay lại danh sách kết quả
+                    </button>
+                  </div>
+                );
+              }
+
+              const targetSub = reviewingSubmissionForTeacher;
+              const cleanSubCode = normalizeExamCode(targetSub.examCode);
+              const matchedExam =
+                exams.find((e) => e.id === targetSub.examId) ||
+                exams.find((e) => cleanSubCode && normalizeExamCode(e.code) === cleanSubCode) ||
+                exams.find((e) => e.id === selectedExamIdForResults);
+
+              return (
+                <TeacherSubmissionReviewPage
+                  submission={targetSub}
+                  exam={matchedExam}
+                  currentUserId={activeUid}
+                  isAdmin={userProfile.role === 'admin'}
+                  onBackToStudentList={() => {
+                    setReviewingSubmissionForTeacher(null);
+                    setActiveTab('exam_results');
+                  }}
                 />
               );
             })()}
@@ -1558,6 +1607,7 @@ export default function App() {
               'online_exams',
               'class_manager',
               'exam_results',
+              'teacher_submission_review',
               'user_guide',
               'system_settings',
             ].includes(activeTab) && (

@@ -115,7 +115,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'id', 'ownerId', 'code', 'content', 'type', 'subjectId', 'subjectName',
           'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic', 'level',
-          'folderId', 'options', 'correctOptionId', 'statements', 'shortAnswerConfig',
+          'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
           'imageUrl', 'explanation', 'source', 'authorId', 'parseStatus', 'parseWarning',
           'teacherVerified', 'section', 'sectionTitle', 'createdAt', 'updatedAt',
           'serverCreatedAt', 'serverUpdatedAt'
@@ -124,7 +124,7 @@ service cloud.firestore {
         && isValidId(data.ownerId)
         && data.code is string && data.code.size() >= 1 && data.code.size() <= 64
         && data.content is string && data.content.size() >= 1 && data.content.size() <= 20000
-        && data.type in ['part1_single_choice', 'part2_true_false', 'part3_short_answer']
+        && data.type in ['part1_single_choice', 'part1_multiple_choice', 'part2_true_false', 'part3_short_answer']
         && (!('subjectId' in data) || (data.subjectId is string && data.subjectId.size() <= 64))
         && (!('subjectName' in data) || (data.subjectName is string && data.subjectName.size() <= 120))
         && data.grade in ['10', '11', '12', 'chuyen_hsg']
@@ -138,6 +138,7 @@ service cloud.firestore {
         && (!('folderId' in data) || (data.folderId is string && data.folderId.size() <= 128))
         && (!('options' in data) || (data.options is list && data.options.size() <= 8))
         && (!('correctOptionId' in data) || (data.correctOptionId is string && data.correctOptionId.size() <= 8))
+        && (!('correctOptionIds' in data) || (data.correctOptionIds is list && data.correctOptionIds.size() <= 8 && (data.correctOptionIds.size() == 0 || (data.correctOptionIds[0] is string && data.correctOptionIds[0].size() <= 8))))
         && (!('statements' in data) || (data.statements is list && data.statements.size() <= 8))
         && (!('shortAnswerConfig' in data) || data.shortAnswerConfig is map)
         && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000))
@@ -521,7 +522,7 @@ service cloud.firestore {
           'totalScore', 'maxPossibleScore', 'totalQuestions', 'correctQuestionsCount',
           'wrongQuestionsCount', 'unansweredQuestionsCount',
           'tabSwitchesCount', 'status', 'gradedByServer', 'serverGradeDigest',
-          'serverGradedAt', 'createdAt'
+          'serverGradedAt', 'examVersionUpdatedAt', 'hasSubmissionSnapshot', 'createdAt'
         ])
         && isValidId(data.id)
         && (!('attemptId' in data) || (data.attemptId is string && data.attemptId.size() <= 128))
@@ -552,7 +553,61 @@ service cloud.firestore {
         && (!('gradedByServer' in data) || data.gradedByServer is bool)
         && (!('serverGradeDigest' in data) || (data.serverGradeDigest is string && data.serverGradeDigest.size() <= 128))
         && (!('serverGradedAt' in data) || (data.serverGradedAt is string && data.serverGradedAt.size() <= 64))
+        && (!('examVersionUpdatedAt' in data) || (data.examVersionUpdatedAt is string && data.examVersionUpdatedAt.size() <= 64))
+        && (!('hasSubmissionSnapshot' in data) || data.hasSubmissionSnapshot is bool)
         && (data.createdAt is timestamp || data.createdAt is string);
+    }
+
+    function isValidSubmissionSnapshot(data) {
+      return data.keys().hasAll([
+          'id', 'submissionId', 'examId', 'examCode', 'examTitle', 'ownerId',
+          'studentId', 'studentName', 'studentClass', 'startedAt', 'submittedAt',
+          'durationSeconds', 'part1Score', 'part2Score', 'part3Score', 'totalScore',
+          'maxPossibleScore', 'totalQuestions', 'correctQuestionsCount',
+          'wrongQuestionsCount', 'unansweredQuestionsCount', 'status', 'capturedAt',
+          'questionResults'
+        ])
+        && data.keys().hasOnly([
+          'id', 'submissionId', 'attemptId', 'examId', 'examCode', 'publicCode', 'variantCode',
+          'examTitle', 'examVersionUpdatedAt', 'ownerId', 'studentId', 'studentName', 'studentClass',
+          'startedAt', 'submittedAt', 'durationSeconds', 'part1Score', 'part2Score', 'part3Score',
+          'totalScore', 'maxPossibleScore', 'totalQuestions', 'correctQuestionsCount',
+          'wrongQuestionsCount', 'unansweredQuestionsCount', 'tabSwitchesCount', 'status',
+          'gradedByServer', 'isLegacyReconstructed', 'capturedAt', 'questionResults', 'serverCapturedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.submissionId)
+        && (!('attemptId' in data) || (data.attemptId is string && data.attemptId.size() <= 128))
+        && isValidId(data.examId)
+        && isValidExamCode(data.examCode)
+        && (!('publicCode' in data) || isValidPublicCode(data.publicCode))
+        && (!('variantCode' in data) || (data.variantCode is string && data.variantCode.size() <= 32))
+        && data.examTitle is string && data.examTitle.size() >= 1 && data.examTitle.size() <= 300
+        && (!('examVersionUpdatedAt' in data) || (data.examVersionUpdatedAt is string && data.examVersionUpdatedAt.size() <= 64))
+        && isValidId(data.ownerId)
+        && data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128
+        && data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 120
+        && data.studentClass is string && data.studentClass.size() >= 1 && data.studentClass.size() <= 80
+        && data.startedAt is string && data.startedAt.size() <= 64
+        && data.submittedAt is string && data.submittedAt.size() <= 64
+        && data.durationSeconds is number && data.durationSeconds >= 0 && data.durationSeconds <= 86400
+        && data.part1Score is number && data.part1Score >= 0 && data.part1Score <= 100
+        && data.part2Score is number && data.part2Score >= 0 && data.part2Score <= 100
+        && data.part3Score is number && data.part3Score >= 0 && data.part3Score <= 100
+        && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
+        && data.maxPossibleScore is number && data.maxPossibleScore >= 0 && data.maxPossibleScore <= 100
+        && data.totalQuestions is number && data.totalQuestions >= 0 && data.totalQuestions <= 200
+        && data.correctQuestionsCount is number && data.correctQuestionsCount >= 0 && data.correctQuestionsCount <= 200
+        && data.wrongQuestionsCount is number && data.wrongQuestionsCount >= 0 && data.wrongQuestionsCount <= 200
+        && data.unansweredQuestionsCount is number && data.unansweredQuestionsCount >= 0 && data.unansweredQuestionsCount <= 200
+        && (!('tabSwitchesCount' in data) || (data.tabSwitchesCount is number && data.tabSwitchesCount >= 0 && data.tabSwitchesCount <= 10000))
+        && data.status in ['completed', 'in_progress', 'timed_out']
+        && (!('gradedByServer' in data) || data.gradedByServer is bool)
+        && (!('isLegacyReconstructed' in data) || data.isLegacyReconstructed is bool)
+        && data.capturedAt is string && data.capturedAt.size() <= 64
+        && data.questionResults is list && data.questionResults.size() <= 200
+        && (data.questionResults.size() == 0 || data.questionResults[0] is map)
+        && (!('serverCapturedAt' in data) || (data.serverCapturedAt is timestamp || data.serverCapturedAt is string));
     }
 
     // 4. Collection Rules
@@ -1112,6 +1167,30 @@ service cloud.firestore {
             'correctQuestionsCount', 'status'
           ]))
         );
+      allow delete: if isValidId(submissionId) && (
+        (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
+      );
+    }
+
+    match /submissionSnapshots/{submissionId} {
+      // Strictly Teacher-owner or Admin only. Students NEVER access teacher answer-key snapshots.
+      allow get: if isValidId(submissionId) && (
+        (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
+      );
+      allow list: if isSignedIn() && (
+        (isActiveTeacher() && existing().ownerId == request.auth.uid) || isAdmin()
+      );
+      allow create: if isValidId(submissionId)
+        && isValidSubmissionSnapshot(incoming())
+        && incoming().id == submissionId
+        && incoming().submissionId == submissionId
+        && ((isActiveTeacher() && incoming().ownerId == request.auth.uid) || isAdmin());
+      allow update: if isValidId(submissionId)
+        && isAdmin()
+        && isValidSubmissionSnapshot(incoming())
+        && incoming().id == existing().id
+        && incoming().submissionId == existing().submissionId
+        && incoming().diff(existing()).affectedKeys().hasOnly(['ownerId']);
       allow delete: if isValidId(submissionId) && (
         (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
       );

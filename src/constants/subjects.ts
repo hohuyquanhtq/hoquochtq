@@ -101,12 +101,14 @@ export const COGNITIVE_LEVEL_SHORT_LABELS: Record<CognitiveLevel, string> = {
 
 export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
   part1_single_choice: 'Phần I · Trắc nghiệm 4 lựa chọn',
+  part1_multiple_choice: 'Phần I · Trắc nghiệm nhiều lựa chọn',
   part2_true_false: 'Phần II · Đúng - Sai 4 ý',
   part3_short_answer: 'Phần III · Trả lời ngắn',
 };
 
 export const QUESTION_TYPE_SHORT_LABELS: Record<QuestionType, string> = {
   part1_single_choice: 'Phần I',
+  part1_multiple_choice: 'Phần I (Nhiều chọn)',
   part2_true_false: 'Phần II',
   part3_short_answer: 'Phần III',
 };

@@ -4,6 +4,7 @@ import type {
   Question,
   StudentAnswer,
   StudentSubmission,
+  SubmissionSnapshotRecord,
 } from '../src/types/index.ts';
 import {
   hashExamPassword,
@@ -32,6 +33,7 @@ import {
   firestoreSetDoc,
 } from './firestoreRest.ts';
 import {
+  buildServerSubmissionSnapshot,
   evaluateAnswerReviewPolicy,
   gradeAnswersOnServer,
   normalizeExamCodeServer,
@@ -136,6 +138,8 @@ export interface ExamSecurityStore {
   saveExamAccessGrant(record: ExamAccessGrantRecord): Promise<void>;
   getSubmissionById?(submissionId: string): Promise<StudentSubmission | null>;
   saveSubmission(submission: StudentSubmission & { serverUpdatedAt?: string }): Promise<void>;
+  getSubmissionSnapshot?(submissionId: string): Promise<SubmissionSnapshotRecord | null>;
+  saveSubmissionSnapshot?(snapshot: SubmissionSnapshotRecord): Promise<void>;
   listStudentSubmissionsForExam(examCode: string, studentId: string): Promise<StudentSubmission[]>;
   saveAnswerReviewAccess(params: {
     examCode: string;
@@ -371,6 +375,21 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
         safeId,
         { ...submission },
         { serverTimestampFields: ['createdAt'] }
+      );
+    },
+
+    async getSubmissionSnapshot(submissionId) {
+      const safeId = submissionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      return firestoreGetDoc<SubmissionSnapshotRecord>('submissionSnapshots', safeId);
+    },
+
+    async saveSubmissionSnapshot(snapshot) {
+      const safeId = snapshot.submissionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+      await firestoreSetDoc(
+        'submissionSnapshots',
+        safeId,
+        { ...snapshot, id: safeId, submissionId: safeId },
+        { serverTimestampFields: ['serverCapturedAt'] }
       );
     },
 
@@ -1528,7 +1547,11 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         };
       }
 
-      const publicExam = await store.getPublicExam(examCode);
+      const [publicExam, masterExamRaw] = await Promise.all([
+        store.getPublicExam(examCode).catch(() => null),
+        secret.examId ? store.getMasterExam(secret.examId).catch(() => null) : Promise.resolve(null),
+      ]);
+      const masterExam = masterExamRaw as Partial<Exam> | null;
       const answers =
         body.answers && typeof body.answers === 'object'
           ? (body.answers as Record<string, StudentAnswer>)
@@ -1567,11 +1590,17 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         part3Score: grade.part3Score,
       });
 
+      const resolvedExamVersionUpdatedAt =
+        (typeof masterExam?.updatedAt === 'string' && masterExam.updatedAt) ||
+        (typeof publicExam?.updatedAt === 'string' && publicExam.updatedAt) ||
+        secret.updatedAt ||
+        undefined;
+
       const verifiedSubmission: StudentSubmission = {
         id: docId,
         attemptId: rawAttemptId || docId,
         examId: secret.examId,
-        examTitle: String(publicExam?.title || body.examTitle || `Bài thi ${examCode}`).slice(0, 300),
+        examTitle: String(publicExam?.title || masterExam?.title || body.examTitle || `Bài thi ${examCode}`).slice(0, 300),
         examCode,
         ...(rawPublicCode ? { publicCode: rawPublicCode.slice(0, 12) } : {}),
         ...(typeof body.variantCode === 'string' && body.variantCode
@@ -1589,7 +1618,7 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         part2Score: grade.part2Score,
         part3Score: grade.part3Score,
         totalScore: grade.totalScore,
-        maxPossibleScore: Number(publicExam?.totalScore || 10.0),
+        maxPossibleScore: Number(publicExam?.totalScore || masterExam?.totalScore || 10.0),
         totalQuestions: grade.totalQuestions,
         correctQuestionsCount: grade.correctQuestionsCount,
         wrongQuestionsCount: grade.wrongQuestionsCount,
@@ -1599,9 +1628,23 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         gradedByServer: true,
         serverGradeDigest: digest,
         serverGradedAt: nowIso,
+        ...(resolvedExamVersionUpdatedAt ? { examVersionUpdatedAt: resolvedExamVersionUpdatedAt } : {}),
+        hasSubmissionSnapshot: typeof store.saveSubmissionSnapshot === 'function',
       };
 
+      const snapshotRecord = buildServerSubmissionSnapshot({
+        submission: verifiedSubmission,
+        masterExam,
+        publicExam,
+        questionOrder: secret.questions || [],
+        answerMap: secret.answerMap || {},
+        rules: secret.rules,
+      });
+
       await store.saveSubmission(verifiedSubmission);
+      if (typeof store.saveSubmissionSnapshot === 'function') {
+        await store.saveSubmissionSnapshot(snapshotRecord);
+      }
 
       // Evaluate eligibility across all valid submissions including the one just graded
       const allSubs = [...existingSubs, verifiedSubmission];
@@ -1835,11 +1878,175 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
     }
   }
 
+  /**
+   * 6. POST /api/submissions/teacher-detail
+   * Strictly teacher-owner or active admin only. Students are denied with 403.
+   * Returns immutable SubmissionSnapshotRecord for the submission, with legacy reconstruction fallback.
+   */
+  async function handleGetTeacherSubmissionDetail(req: ApiRequest): Promise<ApiResponse> {
+    if (req.method !== 'POST') {
+      return { status: 405, body: { code: 'API_ROUTE_ERROR', error: 'Phương thức không hợp lệ.' } };
+    }
+
+    const bearer = extractBearerToken(req);
+    const caller = await store.verifyIdToken(bearer);
+    if (!caller) {
+      return {
+        status: 401,
+        body: {
+          code: 'AUTH_ERROR',
+          error: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.',
+        },
+      };
+    }
+
+    if (!store.hasAdminAccess()) {
+      const diag = resolveAdminDiagnostic(store);
+      logFirebaseAdminEvent({
+        api: 'POST /api/submissions/teacher-detail',
+        errorStage: 'admin_sdk_check',
+        errorType: 'AdminSdkNotReady',
+        errorCode: diag.errorCode,
+        message: diag.message,
+      });
+      return {
+        status: 503,
+        body: {
+          code: diag.errorCode,
+          error: 'Hệ thống phân tích bài làm đang tạm bảo trì. Vui lòng thử lại sau.',
+        },
+      };
+    }
+
+    const body = (req.body || {}) as Record<string, unknown>;
+    const rawSubId = typeof body.submissionId === 'string' ? body.submissionId.trim() : '';
+    const safeSubId = rawSubId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    if (!safeSubId || safeSubId.length > 128) {
+      return {
+        status: 400,
+        body: { error: 'Mã bài nộp (submissionId) không hợp lệ.' },
+      };
+    }
+
+    try {
+      const submission =
+        typeof store.getSubmissionById === 'function'
+          ? await store.getSubmissionById(safeSubId)
+          : null;
+      if (!submission) {
+        return {
+          status: 404,
+          body: { error: 'Không tìm thấy bài nộp của học sinh này trên hệ thống.' },
+        };
+      }
+
+      const roleInfo = await store.getUserRoleInfo(caller.uid);
+      const examCode = normalizeExamCodeServer(submission.examCode || '');
+      const secret = examCode
+        ? await resolveAuthoritativeExamSecret(store, examCode).catch(() => null)
+        : null;
+      const targetOwnerId = String(submission.ownerId || secret?.ownerId || '').trim();
+
+      const isTeacherOwner =
+        roleInfo.role === 'teacher' &&
+        roleInfo.status === 'active' &&
+        Boolean(targetOwnerId) &&
+        targetOwnerId === caller.uid;
+
+      if (!roleInfo.isAdmin && !isTeacherOwner) {
+        return {
+          status: 403,
+          body: {
+            code: 'FORBIDDEN',
+            error:
+              'Bạn không có quyền xem chi tiết bài làm này. Chỉ giáo viên sở hữu đề thi hoặc Quản trị viên mới được phép truy cập.',
+          },
+        };
+      }
+
+      const [existingSnapshot, masterExamRaw] = await Promise.all([
+        typeof store.getSubmissionSnapshot === 'function'
+          ? store.getSubmissionSnapshot(safeSubId).catch(() => null)
+          : Promise.resolve(null),
+        submission.examId
+          ? store.getMasterExam(submission.examId).catch(() => null)
+          : Promise.resolve(null),
+      ]);
+
+      const masterExam = masterExamRaw as Partial<Exam> | null;
+      const currentExamUpdatedAt =
+        (typeof masterExam?.updatedAt === 'string' && masterExam.updatedAt) || null;
+
+      if (
+        existingSnapshot &&
+        Array.isArray(existingSnapshot.questionResults) &&
+        existingSnapshot.questionResults.length > 0
+      ) {
+        const examModifiedAfterAttempt = Boolean(
+          existingSnapshot.examVersionUpdatedAt &&
+            currentExamUpdatedAt &&
+            existingSnapshot.examVersionUpdatedAt !== currentExamUpdatedAt
+        );
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            submission,
+            snapshot: existingSnapshot,
+            isLegacyReconstructed: Boolean(existingSnapshot.isLegacyReconstructed),
+            examModifiedAfterAttempt,
+            currentExamUpdatedAt,
+          },
+        };
+      }
+
+      // Legacy fallback: reconstruct cleanly from saved submission + exam + keys without guessing missing answers
+      const publicExam = examCode
+        ? await store.getPublicExam(examCode).catch(() => null)
+        : null;
+
+      const reconstructed = buildServerSubmissionSnapshot({
+        submission,
+        masterExam,
+        publicExam,
+        questionOrder: secret?.questions || [],
+        answerMap: secret?.answerMap || {},
+        rules: secret?.rules || masterExam?.rules || publicExam?.rules,
+        isLegacyReconstructed: true,
+      });
+
+      const examModifiedAfterAttempt = Boolean(
+        submission.examVersionUpdatedAt &&
+          currentExamUpdatedAt &&
+          submission.examVersionUpdatedAt !== currentExamUpdatedAt
+      );
+
+      return {
+        status: 200,
+        body: {
+          ok: true,
+          submission,
+          snapshot: reconstructed,
+          isLegacyReconstructed: true,
+          examModifiedAfterAttempt,
+          currentExamUpdatedAt,
+        },
+      };
+    } catch (err) {
+      return mapBackendFailureToResponse(err, store, {
+        api: 'POST /api/submissions/teacher-detail',
+        errorStage: 'firestore_get_teacher_submission_detail',
+        firestoreStatus: 'read_failed',
+      });
+    }
+  }
+
   return {
     handleConfigureExamSecurity,
     handleVerifyExamPassword,
     handleAccessExamQuestions,
     handleSubmitAndGradeExam,
     handleRequestAnswerReview,
+    handleGetTeacherSubmissionDetail,
   };
 }

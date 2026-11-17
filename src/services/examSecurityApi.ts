@@ -3,6 +3,7 @@ import {
   ExamAnswerReviewCheck,
   StudentAnswer,
   StudentSubmission,
+  SubmissionSnapshotRecord,
 } from '../types';
 import { auth, AnswerKeyEntry } from './firebase';
 import { normalizeExamCode, normalizePublicExamCode } from '../utils/urlHelper';
@@ -577,6 +578,89 @@ export async function syncExamLinkStatusOnServer(params: {
     return {
       ok: false,
       error: err instanceof Error ? err.message : 'Network error',
+    };
+  }
+}
+
+export async function fetchTeacherSubmissionDetailOnServer(submissionId: string): Promise<{
+  ok: boolean;
+  submission?: StudentSubmission;
+  snapshot?: SubmissionSnapshotRecord;
+  isLegacyReconstructed?: boolean;
+  examModifiedAfterAttempt?: boolean;
+  currentExamUpdatedAt?: string | null;
+  error?: string;
+  code?: string;
+}> {
+  const headers = await getIdTokenHeader();
+  if (!headers.Authorization) {
+    return {
+      ok: false,
+      code: 'AUTH_ERROR',
+      error: 'Bạn cần đăng nhập tài khoản giáo viên hoặc quản trị viên để xem chi tiết bài làm.',
+    };
+  }
+
+  try {
+    const res = await fetch('/api/submissions/teacher-detail', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify({ submissionId }),
+    });
+    const { data, isHtml } = await parseApiResponsePayload(res);
+    if (res.status === 404 || res.status === 405 || isHtml) {
+      return {
+        ok: false,
+        code: res.status === 404 && !isHtml ? 'NOT_FOUND' : 'API_ROUTE_ERROR',
+        error:
+          typeof data.error === 'string' && data.error
+            ? data.error
+            : `Không tìm thấy dữ liệu bài nộp hoặc API /api/submissions/teacher-detail (HTTP ${res.status}).`,
+      };
+    }
+
+    const typed = data as {
+      ok?: boolean;
+      submission?: StudentSubmission;
+      snapshot?: SubmissionSnapshotRecord;
+      isLegacyReconstructed?: boolean;
+      examModifiedAfterAttempt?: boolean;
+      currentExamUpdatedAt?: string | null;
+      error?: string;
+      code?: string;
+    };
+
+    if (!res.ok || !typed.ok || !typed.snapshot) {
+      return {
+        ok: false,
+        code: typed.code || (res.status === 403 ? 'FORBIDDEN' : 'API_ERROR'),
+        error:
+          typed.error ||
+          (res.status === 403
+            ? 'Bạn không có quyền xem chi tiết bài làm này.'
+            : `Không thể tải chi tiết bài làm (HTTP ${res.status}).`),
+      };
+    }
+
+    return {
+      ok: true,
+      submission: typed.submission,
+      snapshot: typed.snapshot,
+      isLegacyReconstructed: Boolean(typed.isLegacyReconstructed),
+      examModifiedAfterAttempt: Boolean(typed.examModifiedAfterAttempt),
+      currentExamUpdatedAt: typed.currentExamUpdatedAt ?? null,
+    };
+  } catch (err) {
+    return {
+      ok: false,
+      code: 'API_ROUTE_ERROR',
+      error:
+        err instanceof Error
+          ? err.message
+          : 'Không thể kết nối máy chủ để tải chi tiết bài làm học sinh.',
     };
   }
 }

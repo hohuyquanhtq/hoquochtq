@@ -279,6 +279,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     const byGrade: Record<string, number> = { '10': 0, '11': 0, '12': 0, chuyen_hsg: 0 };
     const byType: Record<QuestionType, number> = {
       part1_single_choice: 0,
+      part1_multiple_choice: 0,
       part2_true_false: 0,
       part3_short_answer: 0,
     };

@@ -6,6 +6,8 @@ import {
   QuestionEvaluationDetail,
   StatementEvaluationDetail,
   QuestionResultStatus,
+  SubmissionQuestionSnapshot,
+  SubmissionSnapshotRecord,
 } from '../types';
 
 export interface AttemptAnalyticsSummary {
@@ -21,6 +23,44 @@ export interface AttemptAnalyticsSummary {
   part3Score: number;
   totalScore: number;
   details: QuestionEvaluationDetail[];
+}
+
+export function normalizeOptionIdList(ids?: string[]): string[] {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(
+    new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))
+  ).sort();
+}
+
+export function resolveQuestionCorrectOptionIds(q: Partial<Question>): string[] {
+  const fromArray = normalizeOptionIdList(q.correctOptionIds);
+  if (fromArray.length > 0) return fromArray;
+  const fromOptions = Array.isArray(q.options)
+    ? normalizeOptionIdList(q.options.filter((o) => o && o.isCorrect).map((o) => o.id))
+    : [];
+  if (fromOptions.length > 0) return fromOptions;
+  if (q.correctOptionId && q.correctOptionId.trim()) {
+    return [q.correctOptionId.trim()];
+  }
+  return [];
+}
+
+export function resolveStudentSelectedOptionIds(ans?: StudentAnswer): string[] {
+  const fromArray = normalizeOptionIdList(ans?.selectedOptionIds);
+  if (fromArray.length > 0) return fromArray;
+  if (ans?.selectedOptionId && ans.selectedOptionId.trim()) {
+    return [ans.selectedOptionId.trim()];
+  }
+  return [];
+}
+
+export function isMultiSelectQuestion(q: Partial<Question>): boolean {
+  if (q.type === 'part1_multiple_choice') return true;
+  if (q.type === 'part1_single_choice') {
+    const ids = resolveQuestionCorrectOptionIds(q);
+    return ids.length > 1;
+  }
+  return false;
 }
 
 export function isShortAnswerMatch(
@@ -93,10 +133,53 @@ export function evaluateExamAttemptDetails(
     const orderIndex = idx + 1;
     const studentAns = safeAnswers[q.id];
 
-    if (q.type === 'part1_single_choice') {
+    if (q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') {
+      const multi = isMultiSelectQuestion(q);
+      if (multi) {
+        const selectedOptionIds = resolveStudentSelectedOptionIds(studentAns);
+        const correctOptionIds = resolveQuestionCorrectOptionIds(q);
+        const isAnswered = selectedOptionIds.length > 0;
+        const isCorrect =
+          isAnswered &&
+          correctOptionIds.length > 0 &&
+          selectedOptionIds.length === correctOptionIds.length &&
+          selectedOptionIds.every((id, index) => id === correctOptionIds[index]);
+        const earnedScore = isCorrect ? p1Points : 0;
+        const status: QuestionResultStatus = !isAnswered
+          ? 'unanswered'
+          : isCorrect
+          ? 'correct'
+          : 'incorrect';
+
+        part1Score += earnedScore;
+        if (status === 'correct') correctCount++;
+        else if (status === 'unanswered') {
+          unansweredCount++;
+          unansweredQuestionOrders.push(orderIndex);
+        } else {
+          wrongCount++;
+          wrongQuestionOrders.push(orderIndex);
+        }
+
+        return {
+          questionId: q.id,
+          questionCode: q.code || `Q${orderIndex}`,
+          orderIndex,
+          type: q.type,
+          status,
+          earnedScore: Math.round(earnedScore * 100) / 100,
+          maxScore: Math.round(p1Points * 100) / 100,
+          selectedOptionId: selectedOptionIds[0],
+          selectedOptionIds,
+          correctOptionId: correctOptionIds[0],
+          correctOptionIds,
+        };
+      }
+
       const selectedOptionId = studentAns?.selectedOptionId?.trim() || undefined;
+      const correctOptionId = resolveQuestionCorrectOptionIds(q)[0] || q.correctOptionId;
       const isAnswered = Boolean(selectedOptionId);
-      const isCorrect = Boolean(isAnswered && q.correctOptionId && selectedOptionId === q.correctOptionId);
+      const isCorrect = Boolean(isAnswered && correctOptionId && selectedOptionId === correctOptionId);
       const earnedScore = isCorrect ? p1Points : 0;
       const status: QuestionResultStatus = !isAnswered
         ? 'unanswered'
@@ -123,7 +206,7 @@ export function evaluateExamAttemptDetails(
         earnedScore: Math.round(earnedScore * 100) / 100,
         maxScore: Math.round(p1Points * 100) / 100,
         selectedOptionId,
-        correctOptionId: q.correctOptionId,
+        correctOptionId,
       };
     }
 
@@ -261,6 +344,102 @@ export function evaluateExamAttemptDetails(
 }
 
 /**
+ * Builds an immutable SubmissionSnapshotRecord from a known Exam object & StudentSubmission.
+ * Used for teacher preview / legacy local reconstruction when server snapshot doc isn't stored yet.
+ */
+export function buildSubmissionSnapshotFromExam(
+  exam: Exam,
+  submission: StudentSubmission,
+  options?: { isLegacyReconstructed?: boolean }
+): SubmissionSnapshotRecord {
+  const safeAnswers = submission.answers || {};
+  const questions = Array.isArray(exam.questions) ? exam.questions : [];
+  const evalSummary = evaluateExamAttemptDetails(exam, safeAnswers);
+  const detailById = new Map<string, QuestionEvaluationDetail>(
+    evalSummary.details.map((d) => [d.questionId, d])
+  );
+
+  const questionResults: SubmissionQuestionSnapshot[] = questions.map((q, idx) => {
+    const orderIndex = idx + 1;
+    const detail = detailById.get(q.id);
+    const correctIds = resolveQuestionCorrectOptionIds(q);
+    const normalizedOptions = Array.isArray(q.options)
+      ? q.options.map((opt) => ({
+          id: opt.id,
+          text: opt.text,
+          isCorrect: correctIds.includes(opt.id) || opt.id === q.correctOptionId || Boolean(opt.isCorrect),
+        }))
+      : undefined;
+
+    return {
+      questionId: q.id,
+      questionCode: q.code || `Q${orderIndex}`,
+      orderIndex,
+      type: q.type,
+      content: q.content || '',
+      ...(q.imageUrl ? { imageUrl: q.imageUrl } : {}),
+      ...(normalizedOptions ? { options: normalizedOptions } : {}),
+      ...(q.correctOptionId || correctIds[0]
+        ? { correctOptionId: q.correctOptionId || correctIds[0] }
+        : {}),
+      ...(correctIds.length > 0 ? { correctOptionIds: correctIds } : {}),
+      ...(Array.isArray(q.statements) ? { statements: q.statements.map((st) => ({ ...st })) } : {}),
+      ...(q.shortAnswerConfig ? { shortAnswerConfig: { ...q.shortAnswerConfig } } : {}),
+      ...(q.explanation ? { explanation: q.explanation } : {}),
+      ...(safeAnswers[q.id] ? { studentAnswer: { ...safeAnswers[q.id] } } : {}),
+      ...(detail?.statementDetails ? { statementDetails: detail.statementDetails } : {}),
+      ...(typeof detail?.correctStatementsCount === 'number'
+        ? { correctStatementsCount: detail.correctStatementsCount }
+        : {}),
+      ...(typeof detail?.totalStatementsCount === 'number'
+        ? { totalStatementsCount: detail.totalStatementsCount }
+        : {}),
+      earnedScore: detail?.earnedScore ?? 0,
+      maxScore: detail?.maxScore ?? 0,
+      status: detail?.status ?? 'unanswered',
+    };
+  });
+
+  return {
+    id: submission.id,
+    submissionId: submission.id,
+    attemptId: submission.attemptId || submission.id,
+    examId: submission.examId || exam.id,
+    examCode: submission.examCode || exam.code,
+    ...(submission.publicCode || exam.publicCode
+      ? { publicCode: submission.publicCode || exam.publicCode }
+      : {}),
+    ...(submission.variantCode ? { variantCode: submission.variantCode } : {}),
+    examTitle: submission.examTitle || exam.title,
+    examVersionUpdatedAt: submission.examVersionUpdatedAt || exam.updatedAt,
+    ownerId: submission.ownerId || exam.ownerId || '',
+    studentId: submission.studentId,
+    studentName: submission.studentName,
+    studentClass: submission.studentClass,
+    startedAt: submission.startedAt,
+    submittedAt: submission.submittedAt,
+    durationSeconds: submission.durationSeconds,
+    part1Score: evalSummary.part1Score,
+    part2Score: evalSummary.part2Score,
+    part3Score: evalSummary.part3Score,
+    totalScore: submission.totalScore ?? evalSummary.totalScore,
+    maxPossibleScore: submission.maxPossibleScore || exam.totalScore || 10.0,
+    totalQuestions: evalSummary.totalQuestions,
+    correctQuestionsCount: evalSummary.correctCount,
+    wrongQuestionsCount: evalSummary.wrongCount,
+    unansweredQuestionsCount: evalSummary.unansweredCount,
+    ...(typeof submission.tabSwitchesCount === 'number'
+      ? { tabSwitchesCount: submission.tabSwitchesCount }
+      : {}),
+    status: submission.status,
+    gradedByServer: Boolean(submission.gradedByServer),
+    ...(options?.isLegacyReconstructed ? { isLegacyReconstructed: true } : {}),
+    capturedAt: submission.submittedAt || new Date().toISOString(),
+    questionResults,
+  };
+}
+
+/**
  * Grades an entire exam submission according to official MOET rules and exam configuration
  */
 export function gradeSubmission(
@@ -290,6 +469,7 @@ export function gradeSubmission(
     examTitle: exam.title,
     examCode: exam.code,
     ...(exam.publicCode ? { publicCode: exam.publicCode } : {}),
+    ...(exam.updatedAt ? { examVersionUpdatedAt: exam.updatedAt } : {}),
     studentId,
     studentName,
     studentClass,

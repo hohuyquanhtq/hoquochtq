@@ -77,9 +77,10 @@ export interface UploadRecord {
 }
 
 export type QuestionType = 
-  | 'part1_single_choice'  // Phần I: Trắc nghiệm 4 lựa chọn (A, B, C, D)
-  | 'part2_true_false'     // Phần II: Trắc nghiệm Đúng - Sai (4 ý a, b, c, d)
-  | 'part3_short_answer';  // Phần III: Trắc nghiệm trả lời ngắn (số/chữ)
+  | 'part1_single_choice'    // Phần I: Trắc nghiệm 4 lựa chọn (1 đáp án đúng)
+  | 'part1_multiple_choice'  // Phần I mở rộng: Trắc nghiệm nhiều lựa chọn
+  | 'part2_true_false'       // Phần II: Trắc nghiệm Đúng - Sai (4 ý a, b, c, d)
+  | 'part3_short_answer';    // Phần III: Trắc nghiệm trả lời ngắn (số/chữ)
 
 export type CognitiveLevel = 
   | 'nhan_biet'   // Nhận biết
@@ -178,9 +179,10 @@ export interface Question {
   level: CognitiveLevel;
   folderId?: string;
   
-  // Dành cho Phần I (4 lựa chọn)
+  // Dành cho Phần I (4 lựa chọn hoặc nhiều lựa chọn)
   options?: MultipleChoiceOption[];
-  correctOptionId?: string; // 'A' | 'B' | 'C' | 'D'
+  correctOptionId?: string;   // 'A' | 'B' | 'C' | 'D'
+  correctOptionIds?: string[]; // Hỗ trợ câu hỏi nhiều đáp án đúng, VD: ['A', 'C']
   
   // Dành cho Phần II (Đúng / Sai)
   statements?: TrueFalseStatement[];
@@ -317,6 +319,7 @@ export interface StudentAnswer {
   
   // Phần I
   selectedOptionId?: string;
+  selectedOptionIds?: string[];
   
   // Phần II
   selectedStatements?: Record<string, boolean>; // statementId ('a','b','c','d') -> true (Đúng) | false (Sai)
@@ -348,7 +351,9 @@ export interface QuestionEvaluationDetail {
   earnedScore: number;
   maxScore: number;
   selectedOptionId?: string;
+  selectedOptionIds?: string[];
   correctOptionId?: string;
+  correctOptionIds?: string[];
   statementDetails?: StatementEvaluationDetail[];
   correctStatementsCount?: number;
   totalStatementsCount?: number;
@@ -358,6 +363,62 @@ export interface QuestionEvaluationDetail {
   numericValue?: number;
   tolerance?: number;
   unit?: string;
+}
+
+export interface SubmissionQuestionSnapshot {
+  questionId: string;
+  questionCode: string;
+  orderIndex: number;
+  type: QuestionType;
+  content: string;
+  imageUrl?: string;
+  options?: MultipleChoiceOption[];
+  correctOptionId?: string;
+  correctOptionIds?: string[];
+  statements?: TrueFalseStatement[];
+  shortAnswerConfig?: ShortAnswerConfig;
+  explanation?: string;
+  studentAnswer?: StudentAnswer;
+  statementDetails?: StatementEvaluationDetail[];
+  correctStatementsCount?: number;
+  totalStatementsCount?: number;
+  earnedScore: number;
+  maxScore: number;
+  status: QuestionResultStatus;
+}
+
+export interface SubmissionSnapshotRecord {
+  id: string;
+  submissionId: string;
+  attemptId?: string;
+  examId: string;
+  examCode: string;
+  publicCode?: string;
+  variantCode?: string;
+  examTitle: string;
+  examVersionUpdatedAt?: string;
+  ownerId: string;
+  studentId: string;
+  studentName: string;
+  studentClass: string;
+  startedAt: string;
+  submittedAt: string;
+  durationSeconds: number;
+  part1Score: number;
+  part2Score: number;
+  part3Score: number;
+  totalScore: number;
+  maxPossibleScore: number;
+  totalQuestions: number;
+  correctQuestionsCount: number;
+  wrongQuestionsCount: number;
+  unansweredQuestionsCount: number;
+  tabSwitchesCount?: number;
+  status: 'completed' | 'in_progress' | 'timed_out';
+  gradedByServer?: boolean;
+  isLegacyReconstructed?: boolean;
+  capturedAt: string;
+  questionResults: SubmissionQuestionSnapshot[];
 }
 
 export interface StudentSubmission {
@@ -396,6 +457,8 @@ export interface StudentSubmission {
   gradedByServer?: boolean;
   serverGradeDigest?: string;
   serverGradedAt?: string;
+  examVersionUpdatedAt?: string;
+  hasSubmissionSnapshot?: boolean;
 }
 
 export interface ExamStatistics {

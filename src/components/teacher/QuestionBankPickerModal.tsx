@@ -40,6 +40,7 @@ const TYPES: QuestionType[] = ['part1_single_choice', 'part2_true_false', 'part3
 function createEmptyMatrix(): MatrixGrid {
   return {
     part1_single_choice: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
+    part1_multiple_choice: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
     part2_true_false: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
     part3_short_answer: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
   };

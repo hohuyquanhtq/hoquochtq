@@ -185,6 +185,27 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
     }));
   };
 
+  const handleToggleMultiOption = (optionId: string) => {
+    setAnswers(prev => {
+      const existing = Array.isArray(prev[currentQuestion.id]?.selectedOptionIds)
+        ? prev[currentQuestion.id].selectedOptionIds!
+        : [];
+      const nextIds = existing.includes(optionId)
+        ? existing.filter(id => id !== optionId)
+        : [...existing, optionId];
+      return {
+        ...prev,
+        [currentQuestion.id]: {
+          ...prev[currentQuestion.id],
+          questionId: currentQuestion.id,
+          questionType: 'part1_multiple_choice',
+          selectedOptionIds: nextIds,
+          selectedOptionId: nextIds[0],
+        },
+      };
+    });
+  };
+
   const handleSelectStatement = (statementId: string, value: boolean) => {
     setAnswers(prev => {
       const existing = prev[currentQuestion.id]?.selectedStatements || {};
@@ -501,41 +522,49 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
             {/* Answer Input Area */}
             <div className="pt-2">
               
-              {/* Part I: 4-Choice Options */}
-              {currentQuestion.type === 'part1_single_choice' && currentQuestion.options && (
-                <div className="space-y-2.5">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
-                    Chọn một đáp án đúng nhất:
-                  </p>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    {currentQuestion.options.map((opt) => {
-                      const isSelected = currentAnswer.selectedOptionId === opt.id;
-                      return (
-                        <div
-                          key={opt.id}
-                          onClick={() => handleSelectOption(opt.id)}
-                          className={`p-3.5 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 select-none ${
-                            isSelected
-                              ? 'border-blue-600 bg-blue-50/80 shadow-xs'
-                              : 'border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50'
-                          }`}
-                        >
-                          <div className={`w-6 h-6 rounded-full flex items-center justify-center font-bold text-xs shrink-0 transition-colors ${
-                            isSelected
-                              ? 'bg-blue-600 text-white'
-                              : 'bg-slate-100 text-slate-700'
-                          }`}>
-                            {opt.id}
+              {/* Part I: 4-Choice Options (single or multi-select) */}
+              {(currentQuestion.type === 'part1_single_choice' || currentQuestion.type === 'part1_multiple_choice') && currentQuestion.options && (() => {
+                const isMulti = currentQuestion.type === 'part1_multiple_choice';
+                const selectedMulti = Array.isArray(currentAnswer.selectedOptionIds)
+                  ? currentAnswer.selectedOptionIds
+                  : [];
+                return (
+                  <div className="space-y-2.5">
+                    <p className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                      {isMulti ? 'Chọn tất cả các đáp án đúng:' : 'Chọn một đáp án đúng nhất:'}
+                    </p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {currentQuestion.options.map((opt) => {
+                        const isSelected = isMulti
+                          ? selectedMulti.includes(opt.id)
+                          : currentAnswer.selectedOptionId === opt.id;
+                        return (
+                          <div
+                            key={opt.id}
+                            onClick={() => (isMulti ? handleToggleMultiOption(opt.id) : handleSelectOption(opt.id))}
+                            className={`p-3.5 rounded-xl border-2 cursor-pointer transition-all flex items-start gap-3 select-none ${
+                              isSelected
+                                ? 'border-blue-600 bg-blue-50/80 shadow-xs'
+                                : 'border-slate-200 hover:border-slate-300 bg-white hover:bg-slate-50'
+                            }`}
+                          >
+                            <div className={`w-6 h-6 ${isMulti ? 'rounded-md' : 'rounded-full'} flex items-center justify-center font-bold text-xs shrink-0 transition-colors ${
+                              isSelected
+                                ? 'bg-blue-600 text-white'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}>
+                              {opt.id}
+                            </div>
+                            <div className="flex-1 text-xs sm:text-sm font-medium text-slate-900 pt-0.5">
+                              <ChemRenderer text={opt.text} />
+                            </div>
                           </div>
-                          <div className="flex-1 text-xs sm:text-sm font-medium text-slate-900 pt-0.5">
-                            <ChemRenderer text={opt.text} />
-                          </div>
-                        </div>
-                      );
-                    })}
+                        );
+                      })}
+                    </div>
                   </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Part II: 4 True/False Statements */}
               {currentQuestion.type === 'part2_true_false' && currentQuestion.statements && (() => {

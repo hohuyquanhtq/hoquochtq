@@ -110,7 +110,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
         {
           id: 'exam_results',
           label: 'Kết quả & Thống kê',
-          matchTabs: ['exam_results'],
+          matchTabs: ['exam_results', 'teacher_submission_review'],
           icon: BarChart3,
         },
         {

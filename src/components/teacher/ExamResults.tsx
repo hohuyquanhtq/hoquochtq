@@ -22,7 +22,6 @@ import { exportExamResultsToExcel } from '../../utils/excelExport';
 import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
 import { evaluateExamAttemptDetails } from '../../utils/gradingEngine';
 import { normalizePublicExamCode } from '../../utils/urlHelper';
-import { StudentSubmissionDetailModal } from './StudentSubmissionDetailModal';
 
 interface ExamResultsProps {
   exam?: Exam;
@@ -31,6 +30,7 @@ interface ExamResultsProps {
   currentUserId?: string;
   isAdmin?: boolean;
   onSelectExam?: (examId: string) => void;
+  onInspectSubmission?: (submission: StudentSubmission) => void;
   onBack: () => void;
   onShareExam?: (exam: Exam) => void;
   onRefresh?: () => Promise<void> | void;
@@ -59,9 +59,8 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
   exam,
   exams = [],
   submissions,
-  currentUserId,
-  isAdmin = false,
   onSelectExam,
+  onInspectSubmission,
   onBack,
   onShareExam,
   onRefresh,
@@ -72,7 +71,6 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
   const [selectedClass, setSelectedClass] = useState<string>('all');
   const [scoreFilter, setScoreFilter] = useState<ScoreRangeFilter>('all');
   const [sortBy, setSortBy] = useState<SortOption>('submitted_desc');
-  const [selectedSubmission, setSelectedSubmission] = useState<StudentSubmission | null>(null);
 
   const countsBySubmissionId = useMemo(() => {
     const map = new Map<string, { correct: number; wrong: number; unanswered: number }>();
@@ -257,7 +255,6 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
               <select
                 value={exam.id}
                 onChange={(e) => {
-                  setSelectedSubmission(null);
                   onSelectExam(e.target.value);
                 }}
                 className="min-h-[42px] px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-xs sm:text-sm font-semibold text-slate-800 max-w-[240px]"
@@ -438,7 +435,7 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
               </span>
             </h2>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Nhấp vào tên học sinh hoặc nút &ldquo;Xem chi tiết&rdquo; để phân tích bài làm từng câu hỏi.
+              Nhấp vào tên học sinh hoặc nút &ldquo;Xem bài làm&rdquo; để mở trang phân tích chi tiết từng câu hỏi.
             </p>
           </div>
 
@@ -556,7 +553,7 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
                       <td className="py-3 px-4">
                         <button
                           type="button"
-                          onClick={() => setSelectedSubmission(sub)}
+                          onClick={() => onInspectSubmission?.(sub)}
                           className="text-left font-bold text-slate-900 hover:text-teal-700 transition-colors inline-flex items-center gap-1.5"
                         >
                           <span className="underline decoration-transparent group-hover:decoration-teal-500 underline-offset-2">
@@ -630,11 +627,11 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
                       <td className="py-3 px-4 text-right">
                         <button
                           type="button"
-                          onClick={() => setSelectedSubmission(sub)}
+                          onClick={() => onInspectSubmission?.(sub)}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-teal-50 hover:bg-teal-600 text-teal-800 hover:text-white border border-teal-200 hover:border-teal-600 text-xs font-bold transition-colors whitespace-nowrap"
                         >
                           <Eye className="w-3.5 h-3.5" />
-                          <span>Xem chi tiết</span>
+                          <span>Xem bài làm</span>
                         </button>
                       </td>
                     </tr>
@@ -645,16 +642,6 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
           </table>
         </div>
       </div>
-
-      {/* Detailed Attempt Inspection Modal */}
-      <StudentSubmissionDetailModal
-        isOpen={Boolean(selectedSubmission)}
-        exam={exam}
-        submission={selectedSubmission}
-        currentUserId={currentUserId}
-        isAdmin={isAdmin}
-        onClose={() => setSelectedSubmission(null)}
-      />
     </div>
   );
 };

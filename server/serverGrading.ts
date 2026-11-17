@@ -3,12 +3,18 @@ import type {
   ExamAnswerReviewCheck,
   ExamRuleScore,
   Question,
+  QuestionResultStatus,
+  StatementEvaluationDetail,
   StudentAnswer,
+  StudentSubmission,
+  SubmissionQuestionSnapshot,
+  SubmissionSnapshotRecord,
 } from '../src/types/index.ts';
 
 export interface ServerAnswerKeyEntry {
   type: Question['type'];
   correctOptionId?: string;
+  correctOptionIds?: string[];
   statements?: Record<string, boolean>;
   statementExplanations?: Record<string, string>;
   shortAnswerConfig?: Question['shortAnswerConfig'];
@@ -32,6 +38,50 @@ export function normalizeExamCodeServer(rawCode: string): string {
     .replace(/^(?:#?\/?(?:c|exam)\/|#)/i, '')
     .replace(/[\s_]/g, '')
     .toUpperCase();
+}
+
+export function normalizeOptionIdsServer(ids?: string[]): string[] {
+  if (!Array.isArray(ids)) return [];
+  return Array.from(
+    new Set(ids.map((id) => String(id || '').trim()).filter(Boolean))
+  ).sort();
+}
+
+function isShortAnswerMatchServer(
+  text: string,
+  cfg?: Question['shortAnswerConfig']
+): boolean {
+  const trimmed = (text || '').trim();
+  if (!trimmed || !cfg) return false;
+
+  const normalizedText = trimmed.toLowerCase().replace(/\s+/g, '');
+  const acceptable = Array.isArray(cfg.acceptableAnswers) ? cfg.acceptableAnswers : [];
+  const matched = acceptable.some((ans) => {
+    const normAns = String(ans).toLowerCase().replace(/\s+/g, '');
+    return (
+      normAns === normalizedText ||
+      normAns.replace(',', '.') === normalizedText.replace(',', '.')
+    );
+  });
+  if (matched) return true;
+
+  if (cfg.isNumeric) {
+    const cleanText = trimmed.replace(',', '.');
+    const studentNum = Number.parseFloat(cleanText);
+    const targetNum =
+      cfg.numericValue !== undefined
+        ? cfg.numericValue
+        : Number.parseFloat(String(acceptable[0] || '0').replace(',', '.'));
+    const tol = cfg.tolerance !== undefined ? cfg.tolerance : 0.05;
+
+    if (Number.isFinite(studentNum) && Number.isFinite(targetNum)) {
+      if (Math.abs(studentNum - targetNum) <= tol) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 export function sanitizeQuestionsForClient(questions: Question[]): Question[] {
@@ -100,7 +150,6 @@ export function gradeAnswersOnServer(params: {
   const p2CustomPoints = Number(rules?.part2CustomScorePerStatement ?? 0.25);
   const p3Points = Number(rules?.part3ScorePerQuestion ?? 0.25);
 
-  // Iterate over authoritative server question list or answerMap keys so no extra fake question IDs count
   const items: Array<{ id: string; type: Question['type']; statementIds?: string[] }> =
     questionOrder.length > 0
       ? questionOrder
@@ -120,15 +169,47 @@ export function gradeAnswersOnServer(params: {
     const studentAns = answers?.[item.id];
     const qType = key.type || item.type;
 
-    if (qType === 'part1_single_choice') {
-      const selectedOpt = studentAns?.selectedOptionId?.trim() || '';
-      if (!selectedOpt) {
-        unansweredQuestionsCount++;
-      } else if (key.correctOptionId && selectedOpt === key.correctOptionId) {
-        part1Score += p1Points;
-        correctQuestionsCount++;
+    if (qType === 'part1_single_choice' || qType === 'part1_multiple_choice') {
+      const keyCorrectIds = normalizeOptionIdsServer(
+        key.correctOptionIds && key.correctOptionIds.length > 0
+          ? key.correctOptionIds
+          : key.correctOptionId
+          ? [key.correctOptionId]
+          : []
+      );
+      const isMulti = qType === 'part1_multiple_choice' || keyCorrectIds.length > 1;
+
+      if (isMulti) {
+        const selectedIds = normalizeOptionIdsServer(
+          studentAns?.selectedOptionIds && studentAns.selectedOptionIds.length > 0
+            ? studentAns.selectedOptionIds
+            : studentAns?.selectedOptionId
+            ? [studentAns.selectedOptionId]
+            : []
+        );
+        if (selectedIds.length === 0) {
+          unansweredQuestionsCount++;
+        } else if (
+          keyCorrectIds.length > 0 &&
+          selectedIds.length === keyCorrectIds.length &&
+          selectedIds.every((id, idx) => id === keyCorrectIds[idx])
+        ) {
+          part1Score += p1Points;
+          correctQuestionsCount++;
+        } else {
+          wrongQuestionsCount++;
+        }
       } else {
-        wrongQuestionsCount++;
+        const selectedOpt = studentAns?.selectedOptionId?.trim() || '';
+        const singleCorrectId = keyCorrectIds[0] || key.correctOptionId;
+        if (!selectedOpt) {
+          unansweredQuestionsCount++;
+        } else if (singleCorrectId && selectedOpt === singleCorrectId) {
+          part1Score += p1Points;
+          correctQuestionsCount++;
+        } else {
+          wrongQuestionsCount++;
+        }
       }
     } else if (qType === 'part2_true_false') {
       const stMap = key.statements || {};
@@ -177,42 +258,9 @@ export function gradeAnswersOnServer(params: {
 
       if (!text) {
         unansweredQuestionsCount++;
-      } else if (cfg) {
-        let isCorrect = false;
-        const normalizedText = text.toLowerCase().replace(/\s+/g, '');
-        const acceptable = Array.isArray(cfg.acceptableAnswers) ? cfg.acceptableAnswers : [];
-        const matched = acceptable.some((ans) => {
-          const normAns = String(ans).toLowerCase().replace(/\s+/g, '');
-          return (
-            normAns === normalizedText ||
-            normAns.replace(',', '.') === normalizedText.replace(',', '.')
-          );
-        });
-
-        if (matched) {
-          isCorrect = true;
-        } else if (cfg.isNumeric) {
-          const cleanText = text.replace(',', '.');
-          const studentNum = Number.parseFloat(cleanText);
-          const targetNum =
-            cfg.numericValue !== undefined
-              ? cfg.numericValue
-              : Number.parseFloat(String(acceptable[0] || '0').replace(',', '.'));
-          const tol = cfg.tolerance !== undefined ? cfg.tolerance : 0.05;
-
-          if (Number.isFinite(studentNum) && Number.isFinite(targetNum)) {
-            if (Math.abs(studentNum - targetNum) <= tol) {
-              isCorrect = true;
-            }
-          }
-        }
-
-        if (isCorrect) {
-          part3Score += p3Points;
-          correctQuestionsCount++;
-        } else {
-          wrongQuestionsCount++;
-        }
+      } else if (isShortAnswerMatchServer(text, cfg)) {
+        part3Score += p3Points;
+        correctQuestionsCount++;
       } else {
         wrongQuestionsCount++;
       }
@@ -236,6 +284,368 @@ export function gradeAnswersOnServer(params: {
   };
 }
 
+/**
+ * Builds an immutable per-attempt snapshot combining exam question content,
+ * variant ordering, option order, student's exact answers, authoritative answer keys,
+ * and exact per-question earned/max score & status at the time of attempt.
+ */
+export function buildServerSubmissionSnapshot(params: {
+  submission: StudentSubmission;
+  masterExam?: Partial<Exam> | null;
+  publicExam?: Partial<Exam> | null;
+  questionOrder?: Array<{ id: string; type: Question['type']; statementIds?: string[] }>;
+  answerMap?: Record<string, ServerAnswerKeyEntry>;
+  rules?: ExamRuleScore;
+  isLegacyReconstructed?: boolean;
+}): SubmissionSnapshotRecord {
+  const {
+    submission,
+    masterExam,
+    publicExam,
+    questionOrder = [],
+    answerMap = {},
+    rules,
+    isLegacyReconstructed = false,
+  } = params;
+
+  const resolvedRules: ExamRuleScore = rules ||
+    masterExam?.rules ||
+    publicExam?.rules || {
+      part1ScorePerQuestion: 0.25,
+      part2GradingModel: 'standard_moet',
+      part3ScorePerQuestion: 0.25,
+      totalTargetScore: 10.0,
+    };
+
+  const p1Points = Number(resolvedRules.part1ScorePerQuestion ?? 0.25);
+  const p2Model = resolvedRules.part2GradingModel || 'standard_moet';
+  const p2CustomPoints = Number(resolvedRules.part2CustomScorePerStatement ?? 0.25);
+  const p3Points = Number(resolvedRules.part3ScorePerQuestion ?? 0.25);
+
+  const masterQuestions = Array.isArray(masterExam?.questions) ? masterExam!.questions! : [];
+  const publicQuestions = Array.isArray(publicExam?.questions) ? publicExam!.questions! : [];
+  const masterById = new Map<string, Question>(masterQuestions.map((q) => [q.id, q]));
+  const publicById = new Map<string, Question>(publicQuestions.map((q) => [q.id, q]));
+
+  const variant = submission.variantCode
+    ? masterExam?.variants?.find((v) => v.code === submission.variantCode)
+    : undefined;
+
+  let orderedIds: string[] = [];
+  if (variant?.questionIds && variant.questionIds.length > 0) {
+    orderedIds = variant.questionIds;
+  } else if (questionOrder.length > 0) {
+    orderedIds = questionOrder.map((item) => item.id);
+  } else if (masterQuestions.length > 0) {
+    orderedIds = masterQuestions.map((q) => q.id);
+  } else if (publicQuestions.length > 0) {
+    orderedIds = publicQuestions.map((q) => q.id);
+  } else {
+    orderedIds = Object.keys(answerMap);
+  }
+
+  // Deduplicate while preserving exact attempt question order
+  const seenIds = new Set<string>();
+  const uniqueIds = orderedIds.filter((id) => {
+    if (!id || seenIds.has(id)) return false;
+    seenIds.add(id);
+    return true;
+  });
+
+  const safeAnswers = submission.answers || {};
+  const questionOrderMetaMap = new Map(questionOrder.map((q) => [q.id, q]));
+
+  let part1Score = 0;
+  let part2Score = 0;
+  let part3Score = 0;
+  let correctCount = 0;
+  let wrongCount = 0;
+  let unansweredCount = 0;
+
+  const questionResults: SubmissionQuestionSnapshot[] = uniqueIds.map((qId, idx) => {
+    const orderIndex = idx + 1;
+    const baseQ = masterById.get(qId) || publicById.get(qId);
+    const key = answerMap[qId];
+    const orderMeta = questionOrderMetaMap.get(qId);
+    const qType: Question['type'] = key?.type || baseQ?.type || orderMeta?.type || 'part1_single_choice';
+    const studentAns = safeAnswers[qId];
+
+    const content =
+      baseQ?.content ||
+      `[Câu hỏi ${baseQ?.code || qId}] Nội dung câu hỏi không còn trên đề gốc tại thời điểm khôi phục.`;
+    const questionCode = baseQ?.code || `Q${orderIndex}`;
+    const imageUrl = baseQ?.imageUrl;
+    const explanation = key?.explanation || baseQ?.explanation;
+
+    if (qType === 'part1_single_choice' || qType === 'part1_multiple_choice') {
+      const fromKeyIds = normalizeOptionIdsServer(
+        key?.correctOptionIds && key.correctOptionIds.length > 0
+          ? key.correctOptionIds
+          : key?.correctOptionId
+          ? [key.correctOptionId]
+          : []
+      );
+      const fromBaseIds = normalizeOptionIdsServer(
+        baseQ?.correctOptionIds && baseQ.correctOptionIds.length > 0
+          ? baseQ.correctOptionIds
+          : baseQ?.options?.some((o) => o.isCorrect)
+          ? baseQ.options.filter((o) => o.isCorrect).map((o) => o.id)
+          : baseQ?.correctOptionId
+          ? [baseQ.correctOptionId]
+          : []
+      );
+      const correctOptionIds = fromKeyIds.length > 0 ? fromKeyIds : fromBaseIds;
+      const isMulti = qType === 'part1_multiple_choice' || correctOptionIds.length > 1;
+
+      // Apply variant option shuffle if present
+      const shuffleOrder = variant?.optionShuffles?.[qId];
+      let rawOptions = Array.isArray(baseQ?.options) ? [...baseQ!.options!] : [];
+      if (Array.isArray(shuffleOrder) && shuffleOrder.length > 0 && rawOptions.length > 0) {
+        const optMap = new Map(rawOptions.map((o) => [o.id, o]));
+        const reordered = shuffleOrder.map((oid) => optMap.get(oid)).filter(Boolean) as typeof rawOptions;
+        const missing = rawOptions.filter((o) => !shuffleOrder.includes(o.id));
+        rawOptions = [...reordered, ...missing];
+      }
+
+      const normalizedOptions = rawOptions.map((o) => ({
+        id: o.id,
+        text: o.text,
+        isCorrect: correctOptionIds.includes(o.id),
+      }));
+
+      let status: QuestionResultStatus = 'unanswered';
+      let earnedScore = 0;
+
+      if (isMulti) {
+        const selectedIds = normalizeOptionIdsServer(
+          studentAns?.selectedOptionIds && studentAns.selectedOptionIds.length > 0
+            ? studentAns.selectedOptionIds
+            : studentAns?.selectedOptionId
+            ? [studentAns.selectedOptionId]
+            : []
+        );
+        if (selectedIds.length === 0) {
+          status = 'unanswered';
+          unansweredCount++;
+        } else if (
+          correctOptionIds.length > 0 &&
+          selectedIds.length === correctOptionIds.length &&
+          selectedIds.every((id, i) => id === correctOptionIds[i])
+        ) {
+          status = 'correct';
+          earnedScore = p1Points;
+          part1Score += earnedScore;
+          correctCount++;
+        } else {
+          status = 'incorrect';
+          wrongCount++;
+        }
+      } else {
+        const selectedOpt = studentAns?.selectedOptionId?.trim() || '';
+        const correctSingle = correctOptionIds[0] || key?.correctOptionId || baseQ?.correctOptionId;
+        if (!selectedOpt) {
+          status = 'unanswered';
+          unansweredCount++;
+        } else if (correctSingle && selectedOpt === correctSingle) {
+          status = 'correct';
+          earnedScore = p1Points;
+          part1Score += earnedScore;
+          correctCount++;
+        } else {
+          status = 'incorrect';
+          wrongCount++;
+        }
+      }
+
+      return {
+        questionId: qId,
+        questionCode,
+        orderIndex,
+        type: qType,
+        content,
+        ...(imageUrl ? { imageUrl } : {}),
+        ...(normalizedOptions.length > 0 ? { options: normalizedOptions } : {}),
+        ...(correctOptionIds[0] ? { correctOptionId: correctOptionIds[0] } : {}),
+        ...(correctOptionIds.length > 0 ? { correctOptionIds } : {}),
+        ...(explanation ? { explanation } : {}),
+        ...(studentAns ? { studentAnswer: studentAns } : {}),
+        earnedScore: Math.round(earnedScore * 100) / 100,
+        maxScore: Math.round(p1Points * 100) / 100,
+        status,
+      };
+    }
+
+    if (qType === 'part2_true_false') {
+      const stMap = key?.statements || {};
+      const stExp = key?.statementExplanations || {};
+      const baseStatements = Array.isArray(baseQ?.statements) ? baseQ!.statements! : [];
+      const fallbackIds =
+        baseStatements.length > 0
+          ? baseStatements.map((s) => s.id)
+          : orderMeta?.statementIds && orderMeta.statementIds.length > 0
+          ? orderMeta.statementIds
+          : Object.keys(stMap);
+      const baseStMap = new Map(baseStatements.map((s) => [s.id, s]));
+
+      const statementsSnapshot = fallbackIds.map((stId) => {
+        const baseSt = baseStMap.get(stId);
+        const correctVal = stId in stMap ? Boolean(stMap[stId]) : Boolean(baseSt?.correctAnswer);
+        const stExplanation = stExp[stId] || baseSt?.explanation;
+        return {
+          id: stId,
+          statement: baseSt?.statement || `Mệnh đề ${stId})`,
+          correctAnswer: correctVal,
+          ...(stExplanation ? { explanation: stExplanation } : {}),
+        };
+      });
+
+      const selected = studentAns?.selectedStatements || {};
+      let correctStatementsCount = 0;
+      let answeredStatementsCount = 0;
+
+      const statementDetails: StatementEvaluationDetail[] = statementsSnapshot.map((st) => {
+        const hasChoice = selected[st.id] !== undefined && selected[st.id] !== null;
+        const studentChoice = hasChoice ? Boolean(selected[st.id]) : undefined;
+        const isStCorrect = Boolean(hasChoice && studentChoice === st.correctAnswer);
+        if (hasChoice) answeredStatementsCount++;
+        if (isStCorrect) correctStatementsCount++;
+
+        return {
+          statementId: st.id,
+          statementText: st.statement,
+          studentChoice,
+          correctAnswer: st.correctAnswer,
+          isCorrect: isStCorrect,
+          isAnswered: hasChoice,
+          ...(st.explanation ? { explanation: st.explanation } : {}),
+        };
+      });
+
+      let earnedScore = 0;
+      let maxScore = 1.0;
+      if (p2Model === 'standard_moet') {
+        if (correctStatementsCount === 1) earnedScore = 0.1;
+        else if (correctStatementsCount === 2) earnedScore = 0.25;
+        else if (correctStatementsCount === 3) earnedScore = 0.5;
+        else if (correctStatementsCount === 4) earnedScore = 1.0;
+        maxScore = 1.0;
+      } else {
+        earnedScore = correctStatementsCount * p2CustomPoints;
+        maxScore = Math.max(statementsSnapshot.length, 1) * p2CustomPoints;
+      }
+
+      const isFullyCorrect =
+        statementsSnapshot.length > 0 && correctStatementsCount === statementsSnapshot.length;
+      const status: QuestionResultStatus =
+        answeredStatementsCount === 0
+          ? 'unanswered'
+          : isFullyCorrect
+          ? 'correct'
+          : 'incorrect';
+
+      part2Score += earnedScore;
+      if (status === 'correct') correctCount++;
+      else if (status === 'unanswered') unansweredCount++;
+      else wrongCount++;
+
+      return {
+        questionId: qId,
+        questionCode,
+        orderIndex,
+        type: qType,
+        content,
+        ...(imageUrl ? { imageUrl } : {}),
+        statements: statementsSnapshot,
+        ...(explanation ? { explanation } : {}),
+        ...(studentAns ? { studentAnswer: studentAns } : {}),
+        statementDetails,
+        correctStatementsCount,
+        totalStatementsCount: statementsSnapshot.length,
+        earnedScore: Math.round(earnedScore * 100) / 100,
+        maxScore: Math.round(maxScore * 100) / 100,
+        status,
+      };
+    }
+
+    // part3_short_answer
+    const cfg = key?.shortAnswerConfig || baseQ?.shortAnswerConfig;
+    const text = (studentAns?.textAnswer || '').trim();
+    const isAnswered = text.length > 0;
+    const isCorrect = isAnswered && isShortAnswerMatchServer(text, cfg);
+    const earnedScore = isCorrect ? p3Points : 0;
+    const status: QuestionResultStatus = !isAnswered
+      ? 'unanswered'
+      : isCorrect
+      ? 'correct'
+      : 'incorrect';
+
+    part3Score += earnedScore;
+    if (status === 'correct') correctCount++;
+    else if (status === 'unanswered') unansweredCount++;
+    else wrongCount++;
+
+    return {
+      questionId: qId,
+      questionCode,
+      orderIndex,
+      type: qType,
+      content,
+      ...(imageUrl ? { imageUrl } : {}),
+      ...(cfg ? { shortAnswerConfig: cfg } : {}),
+      ...(explanation ? { explanation } : {}),
+      ...(studentAns ? { studentAnswer: studentAns } : {}),
+      earnedScore: Math.round(earnedScore * 100) / 100,
+      maxScore: Math.round(p3Points * 100) / 100,
+      status,
+    };
+  });
+
+  const rPart1 = Math.round(part1Score * 100) / 100;
+  const rPart2 = Math.round(part2Score * 100) / 100;
+  const rPart3 = Math.round(part3Score * 100) / 100;
+  const computedTotalScore = Math.min(10.0, Math.round((rPart1 + rPart2 + rPart3) * 100) / 100);
+
+  return {
+    id: submission.id,
+    submissionId: submission.id,
+    ...(submission.attemptId ? { attemptId: submission.attemptId } : {}),
+    examId: submission.examId || masterExam?.id || '',
+    examCode: submission.examCode || masterExam?.code || '',
+    ...(submission.publicCode || masterExam?.publicCode || publicExam?.publicCode
+      ? { publicCode: submission.publicCode || masterExam?.publicCode || publicExam?.publicCode }
+      : {}),
+    ...(submission.variantCode ? { variantCode: submission.variantCode } : {}),
+    examTitle: submission.examTitle || masterExam?.title || publicExam?.title || `Bài thi ${submission.examCode}`,
+    ...(submission.examVersionUpdatedAt || masterExam?.updatedAt || publicExam?.updatedAt
+      ? { examVersionUpdatedAt: submission.examVersionUpdatedAt || masterExam?.updatedAt || publicExam?.updatedAt }
+      : {}),
+    ownerId: submission.ownerId || masterExam?.ownerId || '',
+    studentId: submission.studentId,
+    studentName: submission.studentName,
+    studentClass: submission.studentClass,
+    startedAt: submission.startedAt,
+    submittedAt: submission.submittedAt,
+    durationSeconds: submission.durationSeconds,
+    part1Score: submission.gradedByServer ? submission.part1Score : rPart1,
+    part2Score: submission.gradedByServer ? submission.part2Score : rPart2,
+    part3Score: submission.gradedByServer ? submission.part3Score : rPart3,
+    totalScore: submission.gradedByServer ? submission.totalScore : computedTotalScore,
+    maxPossibleScore: submission.maxPossibleScore || masterExam?.totalScore || publicExam?.totalScore || 10.0,
+    totalQuestions: questionResults.length,
+    correctQuestionsCount: correctCount,
+    wrongQuestionsCount: wrongCount,
+    unansweredQuestionsCount: unansweredCount,
+    ...(typeof submission.tabSwitchesCount === 'number'
+      ? { tabSwitchesCount: submission.tabSwitchesCount }
+      : {}),
+    status: submission.status,
+    gradedByServer: Boolean(submission.gradedByServer),
+    ...(isLegacyReconstructed ? { isLegacyReconstructed: true } : {}),
+    capturedAt: submission.submittedAt || new Date().toISOString(),
+    questionResults,
+  };
+}
+
 export function resolveLegacyAnswerPolicy(source: {
   allowAnswerReview?: unknown;
   answerReviewMinScore?: unknown;
@@ -255,8 +665,6 @@ export function resolveLegacyAnswerPolicy(source: {
   if (typeof source.answerReviewMinScore === 'number' && Number.isFinite(source.answerReviewMinScore)) {
     answerReviewMinScore = Math.max(0, Math.min(10, Math.round(source.answerReviewMinScore * 100) / 100));
   } else {
-    // Legacy compatibility: exams created before this upgrade that already had showAnswersAfterSubmit = true
-    // keep opening answers (floor 0), whereas newly configured exams default to 8.0 in creator/config UI.
     answerReviewMinScore = !hasExplicitAllow && source.showAnswersAfterSubmit === true ? 0 : 8.0;
   }
 
@@ -360,6 +768,9 @@ export function sanitizeAnswerMapForReview(
   for (const [qId, entry] of Object.entries(answerMap || {})) {
     const clean: ServerAnswerKeyEntry = { type: entry.type };
     if (entry.correctOptionId) clean.correctOptionId = entry.correctOptionId;
+    if (Array.isArray(entry.correctOptionIds) && entry.correctOptionIds.length > 0) {
+      clean.correctOptionIds = entry.correctOptionIds;
+    }
     if (entry.statements) clean.statements = entry.statements;
     if (entry.shortAnswerConfig) clean.shortAnswerConfig = entry.shortAnswerConfig;
     if (includeSolutions) {

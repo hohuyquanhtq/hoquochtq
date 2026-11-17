@@ -341,9 +341,26 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
             {activeExam.questions.map((q, idx) => {
               const studentAns = submission.answers[q.id];
               let isQuestionCorrect = false;
+              const multiCorrectIds =
+                Array.isArray(q.correctOptionIds) && q.correctOptionIds.length > 0
+                  ? [...q.correctOptionIds].sort()
+                  : q.correctOptionId
+                  ? [q.correctOptionId]
+                  : [];
+              const multiStudentIds =
+                Array.isArray(studentAns?.selectedOptionIds) && studentAns.selectedOptionIds.length > 0
+                  ? [...studentAns.selectedOptionIds].sort()
+                  : studentAns?.selectedOptionId
+                  ? [studentAns.selectedOptionId]
+                  : [];
 
               if (q.type === 'part1_single_choice') {
                 isQuestionCorrect = studentAns?.selectedOptionId === q.correctOptionId;
+              } else if (q.type === 'part1_multiple_choice') {
+                isQuestionCorrect =
+                  multiCorrectIds.length > 0 &&
+                  multiStudentIds.length === multiCorrectIds.length &&
+                  multiStudentIds.every((id, i) => id === multiCorrectIds[i]);
               } else if (q.type === 'part2_true_false') {
                 const countCorrectStmts = q.statements?.filter(
                   st => studentAns?.selectedStatements?.[st.id] === st.correctAnswer
@@ -372,7 +389,13 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
                       </span>
                       <span className="font-mono text-xs font-bold text-slate-600">Câu {idx + 1}</span>
                       <span className="text-[10px] font-bold px-2 py-0.5 rounded uppercase bg-slate-100 text-slate-700">
-                        {q.type === 'part1_single_choice' ? 'Phần I' : q.type === 'part2_true_false' ? 'Phần II' : 'Phần III'}
+                        {q.type === 'part1_single_choice'
+                          ? 'Phần I'
+                          : q.type === 'part1_multiple_choice'
+                          ? 'Phần I (Nhiều chọn)'
+                          : q.type === 'part2_true_false'
+                          ? 'Phần II'
+                          : 'Phần III'}
                       </span>
                     </div>
 
@@ -395,11 +418,15 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
                   </div>
 
                   {/* Part I Options with Choice Verification */}
-                  {q.type === 'part1_single_choice' && q.options && (
+                  {(q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') && q.options && (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs pt-1">
                       {q.options.map((opt) => {
-                        const isStudentChoice = studentAns?.selectedOptionId === opt.id;
-                        const isCorrectKey = q.correctOptionId === opt.id;
+                        const isStudentChoice = q.type === 'part1_multiple_choice'
+                          ? multiStudentIds.includes(opt.id)
+                          : studentAns?.selectedOptionId === opt.id;
+                        const isCorrectKey = q.type === 'part1_multiple_choice'
+                          ? multiCorrectIds.includes(opt.id)
+                          : q.correctOptionId === opt.id;
 
                         let style = 'bg-slate-50 border-slate-200 text-slate-700';
                         if (isCorrectKey) {
