@@ -4,6 +4,7 @@ import {
   FilePlus2,
   FileUp,
   FolderKanban,
+  Database,
   Globe,
   BarChart3,
   Users,
@@ -79,9 +80,15 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
       items: [
         {
           id: 'exam_manager',
-          label: 'Quản lý đề thi',
-          matchTabs: ['exam_manager', 'question_bank', 'folder_manager'],
+          label: 'Đề thi (Thư mục)',
+          matchTabs: ['exam_manager', 'folder_manager'],
           icon: FolderKanban,
+        },
+        {
+          id: 'question_bank',
+          label: 'Ngân hàng câu hỏi',
+          matchTabs: ['question_bank'],
+          icon: Database,
         },
         {
           id: 'online_exams',

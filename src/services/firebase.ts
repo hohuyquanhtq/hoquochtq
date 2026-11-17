@@ -469,9 +469,14 @@ export async function syncExamToFirestore(
     code: normalizedCode,
     ...(validPublicCode ? { publicCode: validPublicCode } : {}),
     title: exam.title.slice(0, 300),
+    ...(typeof exam.description === 'string' && exam.description.trim()
+      ? { description: exam.description.trim().slice(0, 1000) }
+      : {}),
+    ...(exam.subjectId ? { subjectId: exam.subjectId.slice(0, 64) } : {}),
+    ...(exam.subjectName ? { subjectName: exam.subjectName.slice(0, 120) } : {}),
     grade: exam.grade,
     ...(exam.topic ? { topic: exam.topic } : {}),
-    ...(exam.folderId ? { folderId: exam.folderId } : {}),
+    folderId: exam.folderId ? exam.folderId : null,
     durationMinutes: Math.max(1, Math.min(600, exam.durationMinutes || 45)),
     totalQuestions: exam.questions?.length ?? exam.totalQuestions ?? 0,
     totalScore: exam.totalScore || 10.0,

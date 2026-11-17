@@ -30,8 +30,11 @@
         "code": { "type": "string", "minLength": 1, "maxLength": 64 },
         "content": { "type": "string", "minLength": 1, "maxLength": 20000 },
         "type": { "type": "string", "enum": ["part1_single_choice", "part2_true_false", "part3_short_answer"] },
+        "subjectId": { "type": "string", "maxLength": 64 },
+        "subjectName": { "type": "string", "maxLength": 120 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
         "topic": { "type": "string", "maxLength": 64 },
+        "lessonTopic": { "type": "string", "maxLength": 200 },
         "level": { "type": "string", "enum": ["nhan_biet", "thong_hieu", "van_dung", "van_dung_cao"] },
         "folderId": { "type": "string", "maxLength": 128 },
         "options": { "type": "array" },
@@ -151,9 +154,12 @@
         "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
         "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "subjectId": { "type": "string", "maxLength": 64 },
+        "subjectName": { "type": "string", "maxLength": 120 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
         "topic": { "type": "string", "maxLength": 64 },
-        "folderId": { "type": "string", "maxLength": 128 },
+        "folderId": { "type": ["string", "null"], "maxLength": 128 },
         "durationMinutes": { "type": "number" },
         "totalQuestions": { "type": "number" },
         "totalScore": { "type": "number" },
@@ -347,6 +353,24 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["publicCode", "examId", "examCode", "ownerId", "isActive", "createdAt", "updatedAt"]
+    },
+    "TeacherSubject": {
+      "title": "TeacherSubject",
+      "description": "Teacher-created custom subject extending the GDPT 2018 subject catalog.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "shortName": { "type": "string", "maxLength": 40 },
+        "codePrefix": { "type": "string", "maxLength": 16 },
+        "isDefault": { "type": "boolean" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -361,6 +385,10 @@
     "/folders/{folderId}": {
       "schema": { "$ref": "#/entities/TeacherFolder" },
       "description": "Teacher-isolated folder hierarchy documents."
+    },
+    "/subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/TeacherSubject" },
+      "description": "Teacher-isolated custom GDPT 2018 subject extensions."
     },
     "/classes/{classId}": {
       "schema": { "$ref": "#/entities/Classroom" },

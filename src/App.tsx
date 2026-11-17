@@ -3,13 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   User,
   UserRole,
   Question,
   Exam,
   Folder,
+  SubjectItem,
   StudentSubmission,
   ChemGrade,
   Classroom,
@@ -24,6 +25,11 @@ import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SystemDesignModal } from './components/docs/SystemDesignModal';
 import { UserGuideView } from './components/docs/UserGuideView';
 import { APP_CONFIG } from './constants/brand';
+import {
+  DEFAULT_SUBJECT_ID,
+  DEFAULT_SUBJECT_NAME,
+  mergeSubjectsList,
+} from './constants/subjects';
 import {
   extractExamEntryFromLocation,
   ExamUrlEntry,
@@ -48,8 +54,10 @@ import {
   saveQuestionToFirestore,
   saveQuestionsBatchToFirestore,
   deleteQuestionFromFirestore,
+  deleteQuestionsBatchFromFirestore,
   saveFolderToFirestore,
   deleteFolderFromFirestore,
+  saveSubjectToFirestore,
   saveUploadRecordToFirestore,
   saveClassroomToFirestore,
   deleteClassroomFromFirestore,
@@ -125,12 +133,15 @@ export default function App() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
   const [folders, setFolders] = useState<Folder[]>([]);
+  const [customSubjects, setCustomSubjects] = useState<SubjectItem[]>([]);
   const [submissions, setSubmissions] = useState<StudentSubmission[]>([]);
   const [classes, setClasses] = useState<Classroom[]>([]);
   const [enrollments, setEnrollments] = useState<ClassEnrollment[]>([]);
   const [assignedExams, setAssignedExams] = useState<StudentAssignedExamItem[]>([]);
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
   const [isSeedingSamples, setIsSeedingSamples] = useState(false);
+
+  const mergedSubjects = useMemo(() => mergeSubjectsList(customSubjects), [customSubjects]);
 
   // Interactive flow state
   const [activeExamForTaking, setActiveExamForTaking] = useState<Exam | null>(null);
@@ -144,10 +155,11 @@ export default function App() {
   const [pendingExamEntryAfterAuth, setPendingExamEntryAfterAuth] = useState<ExamUrlEntry | null>(null);
   const [selectedExamIdForResults, setSelectedExamIdForResults] = useState<string | null>(null);
 
-  // Preload questions for ExamCreator
+  // Preload questions & folder target for ExamCreator
   const [creatorInitialQuestions, setCreatorInitialQuestions] = useState<Question[]>([]);
   const [creatorInitialTitle, setCreatorInitialTitle] = useState<string>('');
   const [creatorInitialGrade, setCreatorInitialGrade] = useState<ChemGrade>('12');
+  const [creatorInitialFolderId, setCreatorInitialFolderId] = useState<string | null>(null);
 
   // Direct Join via link/QR state
   const [directJoinExam, setDirectJoinExam] = useState<Exam | null>(null);
@@ -173,11 +185,13 @@ export default function App() {
     setQuestions([]);
     setExams([]);
     setFolders([]);
+    setCustomSubjects([]);
     setSubmissions([]);
     setClasses([]);
     setEnrollments([]);
     setAssignedExams([]);
     setSelectedExamIdForResults(null);
+    setCreatorInitialFolderId(null);
   }, []);
 
   // Load workspace when authenticated user changes
@@ -189,6 +203,7 @@ export default function App() {
     setQuestions(StorageService.getQuestions(uid));
     setExams(StorageService.getExams(uid));
     setFolders(StorageService.getFolders(uid));
+    setCustomSubjects(StorageService.getSubjects(uid));
     setSubmissions(StorageService.getSubmissions(undefined, uid));
 
     setIsLoadingWorkspace(true);
@@ -197,6 +212,7 @@ export default function App() {
         const ws = await fetchTeacherWorkspaceFromFirestore(uid);
         setQuestions(ws.questions);
         setFolders(ws.folders);
+        setCustomSubjects(ws.subjects || []);
         setExams(ws.exams);
         setSubmissions(ws.submissions);
         setClasses(ws.classes);
@@ -204,6 +220,7 @@ export default function App() {
 
         StorageService.saveQuestions(ws.questions, uid);
         StorageService.saveFolders(ws.folders, uid);
+        StorageService.saveSubjects(ws.subjects || [], uid);
         StorageService.saveExams(ws.exams, uid);
         StorageService.saveSubmissions(ws.submissions, uid);
 
@@ -279,6 +296,7 @@ export default function App() {
     setQuestions(StorageService.getQuestions(activeUid));
     setExams(StorageService.getExams(activeUid));
     setFolders(StorageService.getFolders(activeUid));
+    setCustomSubjects(StorageService.getSubjects(activeUid));
     setSubmissions(StorageService.getSubmissions(undefined, activeUid));
   }, [activeUid]);
 
@@ -404,6 +422,8 @@ export default function App() {
     const nowIso = new Date().toISOString();
     const scoped = newQuestions.map((q) => ({
       ...q,
+      subjectId: q.subjectId || DEFAULT_SUBJECT_ID,
+      subjectName: q.subjectName || DEFAULT_SUBJECT_NAME,
       ownerId: activeUid,
       authorId: activeUid,
       updatedAt: nowIso,
@@ -443,12 +463,22 @@ export default function App() {
     setCreatorInitialTitle(title);
     setCreatorInitialQuestions(parsedQuestions);
     setCreatorInitialGrade(grade);
+    setCreatorInitialFolderId(null);
     setActiveTab('create_exam');
   };
 
   const handleCreateExamFromSelected = (selectedQuestions: Question[]) => {
-    setCreatorInitialTitle(`Đề thi chọn lọc Hóa học (${selectedQuestions.length} câu)`);
+    const distinctSubjects = Array.from(
+      new Set(
+        selectedQuestions
+          .map((q) => q.subjectName?.trim() || DEFAULT_SUBJECT_NAME)
+          .filter(Boolean)
+      )
+    );
+    const subjectLabel = distinctSubjects.length === 1 ? ` ${distinctSubjects[0]}` : '';
+    setCreatorInitialTitle(`Đề thi chọn lọc${subjectLabel} (${selectedQuestions.length} câu)`);
     setCreatorInitialQuestions(selectedQuestions);
+    setCreatorInitialFolderId(null);
     setActiveTab('create_exam');
   };
 
@@ -465,6 +495,8 @@ export default function App() {
     void syncExamToFirestore(scopedExam, activeUid).catch((err) => {
       console.warn('[HQTest] Could not sync saved exam to Firestore:', err);
     });
+    setCreatorInitialFolderId(null);
+    setCreatorInitialQuestions([]);
     setAutoOpenShareExamId(scopedExam.id);
     setActiveTab('exam_manager');
   };
@@ -528,6 +560,28 @@ export default function App() {
     }
   };
 
+  const handleAddSubject = (subject: SubjectItem) => {
+    if (!activeUid) return;
+    const scoped: SubjectItem = {
+      ...subject,
+      ownerId: activeUid,
+      authorId: activeUid,
+    };
+    setCustomSubjects((prev) => {
+      const exists = prev.some(
+        (s) => s.id === scoped.id || s.name.trim().toLowerCase() === scoped.name.trim().toLowerCase()
+      );
+      const next = exists
+        ? prev.map((s) => (s.id === scoped.id ? scoped : s))
+        : [...prev, scoped];
+      StorageService.saveSubjects(next, activeUid);
+      return next;
+    });
+    void saveSubjectToFirestore(scoped, activeUid).catch((err) => {
+      console.warn('[HQTest] Could not save subject to Firestore:', err);
+    });
+  };
+
   const handleAddQuestion = (q: Question) => {
     if (!activeUid) return;
     const scoped: Question = { ...q, ownerId: activeUid, authorId: activeUid };
@@ -559,6 +613,17 @@ export default function App() {
     setQuestions(StorageService.getQuestions(activeUid));
     void deleteQuestionFromFirestore(id).catch((err) => {
       console.warn('[HQTest] Could not delete question from Firestore:', err);
+    });
+  };
+
+  const handleBulkDeleteQuestions = (ids: string[]) => {
+    if (!activeUid || ids.length === 0) return;
+    const removeSet = new Set(ids);
+    const remaining = questions.filter((q) => !removeSet.has(q.id));
+    StorageService.saveQuestions(remaining, activeUid);
+    setQuestions(remaining);
+    void deleteQuestionsBatchFromFirestore(ids).catch((err) => {
+      console.warn('[HQTest] Could not bulk delete questions from Firestore:', err);
     });
   };
 
@@ -930,7 +995,7 @@ export default function App() {
       );
     }
 
-    if (['exam_manager', 'question_bank', 'folder_manager'].includes(activeTab)) {
+    if (['exam_manager', 'folder_manager'].includes(activeTab)) {
       return (
         <div className="mb-5 flex flex-wrap items-center gap-2 bg-white border border-slate-200 rounded-2xl p-2 shadow-2xs">
           <button
@@ -942,18 +1007,7 @@ export default function App() {
                 : 'text-slate-700 hover:bg-slate-100'
             }`}
           >
-            Kho đề thi ({exams.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('question_bank')}
-            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
-              activeTab === 'question_bank'
-                ? 'bg-teal-600 text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            Ngân hàng câu hỏi ({questions.length})
+            Đề thi &amp; Cây thư mục ({exams.length})
           </button>
           <button
             type="button"
@@ -964,7 +1018,14 @@ export default function App() {
                 : 'text-slate-700 hover:bg-slate-100'
             }`}
           >
-            Thư mục chuyên đề ({folders.length})
+            Cấu trúc thư mục ({folders.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('question_bank')}
+            className="px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold text-slate-700 hover:bg-slate-100 transition-colors"
+          >
+            Ngân hàng câu hỏi ({questions.length})
           </button>
         </div>
       );
@@ -1172,9 +1233,13 @@ export default function App() {
               <QuestionBank
                 questions={questions}
                 folders={folders}
+                subjects={mergedSubjects}
+                currentUserId={activeUid}
+                onAddSubject={handleAddSubject}
                 onAddQuestion={handleAddQuestion}
                 onUpdateQuestion={handleUpdateQuestion}
                 onDeleteQuestion={handleDeleteQuestion}
+                onBulkDeleteQuestions={handleBulkDeleteQuestions}
                 onCreateExamFromSelected={handleCreateExamFromSelected}
               />
             )}
@@ -1191,33 +1256,41 @@ export default function App() {
 
             {activeTab === 'create_exam' && (
               <ExamCreator
-                initialTitle={creatorInitialTitle}
+                key={`${creatorInitialFolderId || 'root'}_${creatorInitialQuestions.length}_${creatorInitialTitle}`}
+                initialTitle={creatorInitialTitle || 'Đề kiểm tra mới'}
                 initialQuestions={creatorInitialQuestions}
                 initialGrade={creatorInitialGrade}
+                initialFolderId={creatorInitialFolderId}
                 folders={folders}
+                bankQuestions={questions}
+                subjects={mergedSubjects}
                 currentUserId={activeUid}
                 currentUserName={userProfile.name}
                 onSaveExam={handleSaveExam}
-                onCancel={() => setActiveTab('dashboard')}
+                onCancel={() => setActiveTab('exam_manager')}
               />
             )}
 
             {(activeTab === 'exam_manager' || activeTab === 'online_exams') && (
               <ExamManager
                 exams={exams}
+                folders={folders}
                 submissions={submissions}
+                currentUserId={activeUid}
                 mode={activeTab === 'online_exams' ? 'online' : 'all'}
                 autoOpenShareExamId={autoOpenShareExamId}
                 onClearAutoOpenShare={() => setAutoOpenShareExamId(null)}
-                onCreateNew={() => {
+                onCreateNew={(folderId) => {
                   setCreatorInitialQuestions([]);
-                  setCreatorInitialTitle('Đề thi Hóa học mới');
+                  setCreatorInitialTitle('Đề kiểm tra mới');
+                  setCreatorInitialFolderId(folderId || null);
                   setActiveTab('create_exam');
                 }}
                 onOpenResults={handleOpenExamResults}
                 onTakeExamAsPreview={(ex) => handleStartExam(ex, userProfile.name, 'Giáo viên xem thử', activeUid)}
                 onTogglePublish={handleToggleExamPublish}
                 onExamUpdated={handleExamUpdated}
+                onSaveFolders={handleSaveFolders}
                 onDeleteExam={handleDeleteExam}
               />
             )}
@@ -1376,6 +1449,11 @@ export default function App() {
           onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
           onSelectTab={(tab) => {
             setGuestExamMode(false);
+            if (tab === 'create_exam') {
+              setCreatorInitialQuestions([]);
+              setCreatorInitialTitle('Đề kiểm tra mới');
+              setCreatorInitialFolderId(null);
+            }
             setActiveTab(tab);
           }}
           onOpenSystemDocs={() => setIsSystemDocsOpen(true)}

@@ -1,31 +1,38 @@
-import React, { useRef, useState } from 'react';
-import { Question, Exam, ExamRuleScore, ChemGrade, ChemTopic, Folder } from '../../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Question, Exam, ChemGrade, ChemTopic, Folder, SubjectItem } from '../../types';
 import { 
   FileCheck, 
   Sparkles, 
   AlertTriangle, 
   CheckCircle2, 
   Trash2, 
-  ArrowLeft, 
+  ArrowLeft,
+  ArrowUp,
+  ArrowDown,
   Shuffle, 
   Sliders, 
-  Clock, 
   Percent, 
   Plus, 
   ListOrdered,
-  HelpCircle,
-  Share2,
   Lock,
   Unlock,
   Eye,
   EyeOff,
   Award,
-  ShieldCheck
+  BookOpen
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { APP_CONFIG } from '../../constants/brand';
+import {
+  DEFAULT_GDPT_2018_SUBJECTS,
+  DEFAULT_SUBJECT_ID,
+  DEFAULT_SUBJECT_NAME,
+  QUESTION_TYPE_SHORT_LABELS,
+} from '../../constants/subjects';
+import { flattenFolderTree } from '../../utils/folderTree';
 import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
+import { QuestionBankPickerModal, cloneQuestionsForExam } from './QuestionBankPickerModal';
 import { normalizeExamCode } from '../../utils/urlHelper';
 import { auth, extractAnswerKeyMap, syncExamToFirestore } from '../../services/firebase';
 import {
@@ -37,7 +44,10 @@ interface ExamCreatorProps {
   initialTitle?: string;
   initialQuestions?: Question[];
   initialGrade?: ChemGrade;
+  initialFolderId?: string | null;
   folders: Folder[];
+  bankQuestions?: Question[];
+  subjects?: SubjectItem[];
   currentUserId?: string;
   currentUserName?: string;
   onSaveExam: (exam: Exam) => void;
@@ -45,23 +55,37 @@ interface ExamCreatorProps {
 }
 
 export const ExamCreator: React.FC<ExamCreatorProps> = ({
-  initialTitle = 'Đề kiểm tra Hóa học mới',
+  initialTitle = 'Đề kiểm tra mới',
   initialQuestions = [],
   initialGrade = '12',
+  initialFolderId = '',
   folders,
+  bankQuestions = [],
+  subjects = DEFAULT_GDPT_2018_SUBJECTS,
   currentUserId,
   currentUserName,
   onSaveExam,
   onCancel,
 }) => {
   const [title, setTitle] = useState(initialTitle);
+  const [description, setDescription] = useState('');
   const [code, setCode] = useState(`HQ${Math.floor(10 + Math.random() * 90)}`);
+  const [subjectId, setSubjectId] = useState<string>(DEFAULT_SUBJECT_ID);
   const [grade, setGrade] = useState<ChemGrade>(initialGrade);
   const [topic, setTopic] = useState<ChemTopic>('hoa_huu_co');
   const [durationMinutes, setDurationMinutes] = useState(45);
-  const [selectedFolderId, setSelectedFolderId] = useState<string>(folders[0]?.id || '');
-  
-  const [questions, setQuestions] = useState<Question[]>(initialQuestions);
+  const [selectedFolderId, setSelectedFolderId] = useState<string>(initialFolderId || '');
+  const [isPickerOpen, setIsPickerOpen] = useState(false);
+
+  const [questions, setQuestions] = useState<Question[]>(() =>
+    cloneQuestionsForExam(initialQuestions)
+  );
+
+  useEffect(() => {
+    setSelectedFolderId(initialFolderId || '');
+  }, [initialFolderId]);
+
+  const flatFolderOptions = useMemo(() => flattenFolderTree(folders), [folders]);
 
   // Scoring rules
   const [part1Score, setPart1Score] = useState(0.25);
@@ -169,7 +193,19 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   } | null>(null);
 
   const handleRemoveQuestion = (id: string) => {
-    setQuestions(questions.filter(q => q.id !== id));
+    setQuestions((prev) => prev.filter((q) => q.id !== id));
+  };
+
+  const handleMoveQuestion = (index: number, direction: 'up' | 'down') => {
+    setQuestions((prev) => {
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const copy = [...prev];
+      const temp = copy[index];
+      copy[index] = copy[targetIndex];
+      copy[targetIndex] = temp;
+      return copy;
+    });
   };
 
   const handleSave = async () => {
@@ -273,13 +309,22 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     const resolvedAuthorName = currentUserName || auth.currentUser?.displayName || APP_CONFIG.APP_AUTHOR;
     const nowIso = new Date().toISOString();
 
+    const selectedSubject =
+      subjects.find((s) => s.id === subjectId) || {
+        id: DEFAULT_SUBJECT_ID,
+        name: DEFAULT_SUBJECT_NAME,
+      };
+
     const baseExam: Exam = {
       id: examId,
       title: title.trim(),
+      ...(description.trim() ? { description: description.trim() } : {}),
       code: cleanCode,
+      subjectId: selectedSubject.id,
+      subjectName: selectedSubject.name,
       grade,
       topic,
-      folderId: selectedFolderId,
+      folderId: selectedFolderId ? selectedFolderId : null,
       durationMinutes,
       totalQuestions: questions.length,
       totalScore: 10.0,
@@ -480,8 +525,21 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder="VD: Kiểm tra 1 tiết Hóa học 12..."
-                className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:ring-2 focus:ring-blue-500"
+                placeholder="VD: Kiểm tra giữa kì 1..."
+                className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:ring-2 focus:ring-teal-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Mô tả đề thi (tùy chọn)
+              </label>
+              <textarea
+                rows={2}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Ghi chú phạm vi kiến thức, hướng dẫn chung cho thí sinh..."
+                className="w-full p-2.5 rounded-xl border border-slate-200 text-xs focus:ring-2 focus:ring-teal-500"
               />
             </div>
 
@@ -510,30 +568,50 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
             <div className="grid grid-cols-2 gap-3">
               <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Môn học</label>
+                <select
+                  value={subjectId}
+                  onChange={(e) => setSubjectId(e.target.value)}
+                  className="w-full p-2 rounded-xl border border-slate-200 text-xs font-medium bg-white"
+                >
+                  {subjects.map((sub) => (
+                    <option key={sub.id} value={sub.id}>
+                      {sub.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Khối lớp</label>
                 <select
                   value={grade}
                   onChange={(e) => setGrade(e.target.value as ChemGrade)}
-                  className="w-full p-2 rounded-xl border border-slate-200 text-xs font-medium"
+                  className="w-full p-2 rounded-xl border border-slate-200 text-xs font-medium bg-white"
                 >
                   <option value="12">Lớp 12 THPT</option>
                   <option value="11">Lớp 11 THPT</option>
                   <option value="10">Lớp 10 THPT</option>
-                  <option value="chuyen_hsg">Chuyên & HSG</option>
+                  <option value="chuyen_hsg">Chuyên &amp; HSG</option>
                 </select>
               </div>
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Lưu vào thư mục</label>
-                <select
-                  value={selectedFolderId}
-                  onChange={(e) => setSelectedFolderId(e.target.value)}
-                  className="w-full p-2 rounded-xl border border-slate-200 text-xs font-medium truncate"
-                >
-                  {folders.map(f => (
-                    <option key={f.id} value={f.id}>{f.name}</option>
-                  ))}
-                </select>
-              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">Lưu vào thư mục</label>
+              <select
+                value={selectedFolderId}
+                onChange={(e) => setSelectedFolderId(e.target.value)}
+                className="w-full p-2 rounded-xl border border-slate-200 text-xs font-medium bg-white"
+              >
+                <option value="">Đề thi (Thư mục gốc)</option>
+                {flatFolderOptions.map((item) => (
+                  <option key={item.folder.id} value={item.folder.id}>
+                    {'\u00A0'.repeat(item.depth * 3)}
+                    {item.depth > 0 ? '↳ ' : ''}
+                    {item.folder.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
@@ -868,66 +946,106 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
         {/* Right Column: Questions in Exam (2 Cols) */}
         <div className="lg:col-span-2 space-y-4">
-          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex items-center justify-between">
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div>
               <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <ListOrdered className="w-5 h-5 text-blue-600" />
-                Danh sách câu hỏi trong đề ({questions.length} câu)
+                <ListOrdered className="w-5 h-5 text-teal-600" />
+                <span className="tabular-nums">Danh sách câu hỏi trong đề ({questions.length} câu)</span>
               </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Phần I: {p1Count} câu • Phần II: {p2Count} câu • Phần III: {p3Count} câu
+              <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
+                Phần I: {p1Count} câu · Phần II: {p2Count} câu · Phần III: {p3Count} câu
               </p>
             </div>
 
-            <button
-              onClick={() => {
-                // Shuffle questions order
-                const shuffled = [...questions].sort(() => Math.random() - 0.5);
-                setQuestions(shuffled);
-              }}
-              className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 flex items-center gap-1.5"
-            >
-              <Shuffle className="w-3.5 h-3.5" />
-              Đảo thứ tự ngay
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setIsPickerOpen(true)}
+                className="min-h-[38px] px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-xs"
+              >
+                <BookOpen className="w-3.5 h-3.5" />
+                <span>Chọn từ Ngân hàng / Ma trận</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  const shuffled = [...questions].sort(() => Math.random() - 0.5);
+                  setQuestions(shuffled);
+                }}
+                className="min-h-[38px] px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1.5"
+              >
+                <Shuffle className="w-3.5 h-3.5" />
+                <span>Đảo thứ tự</span>
+              </button>
+            </div>
           </div>
 
           {/* List */}
           <div className="space-y-3">
             {questions.length === 0 ? (
-              <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center text-slate-500 text-xs">
-                Chưa có câu hỏi nào. Hãy quay lại Ngân hàng câu hỏi hoặc Tải đề thi để thêm câu hỏi vào đề này.
+              <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-3">
+                <p className="text-slate-600 text-sm font-medium">
+                  Chưa có câu hỏi nào trong đề thi này.
+                </p>
+                <p className="text-slate-500 text-xs">
+                  Nhấn &quot;Chọn từ Ngân hàng / Ma trận&quot; ở trên để thêm câu hỏi thủ công hoặc bốc tự động theo ma trận.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setIsPickerOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Mở Ngân hàng câu hỏi ({bankQuestions.length} câu)</span>
+                </button>
               </div>
             ) : (
               questions.map((q, idx) => (
                 <div
                   key={q.id}
-                  className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs text-xs space-y-2 hover:border-blue-200 transition-colors"
+                  className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs text-xs space-y-2 hover:border-teal-200 transition-colors"
                 >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="w-6 h-6 rounded-lg bg-blue-100 text-blue-800 font-bold flex items-center justify-center text-xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="w-6 h-6 rounded-lg bg-slate-100 text-slate-800 font-bold flex items-center justify-center text-xs tabular-nums">
                         {idx + 1}
                       </span>
                       <span className="font-mono font-bold text-slate-700">{q.code}</span>
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md uppercase ${
-                        q.type === 'part1_single_choice'
-                          ? 'bg-blue-100 text-blue-800'
-                          : q.type === 'part2_true_false'
-                          ? 'bg-indigo-100 text-indigo-800'
-                          : 'bg-purple-100 text-purple-800'
-                      }`}>
-                        {q.type === 'part1_single_choice' ? 'Phần I' : q.type === 'part2_true_false' ? 'Phần II' : 'Phần III'}
+                      <span className="text-slate-400">·</span>
+                      <span className="font-semibold text-teal-700">
+                        {QUESTION_TYPE_SHORT_LABELS[q.type]}
                       </span>
                     </div>
 
-                    <button
-                      onClick={() => handleRemoveQuestion(q.id)}
-                      className="text-slate-400 hover:text-rose-600 p-1"
-                      title="Gỡ câu này khỏi đề thi"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        disabled={idx === 0}
+                        onClick={() => handleMoveQuestion(idx, 'up')}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30"
+                        title="Di chuyển lên"
+                      >
+                        <ArrowUp className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={idx === questions.length - 1}
+                        onClick={() => handleMoveQuestion(idx, 'down')}
+                        className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30"
+                        title="Di chuyển xuống"
+                      >
+                        <ArrowDown className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveQuestion(q.id)}
+                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                        title="Gỡ câu này khỏi đề thi"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
 
                   <div className="text-slate-900 font-medium leading-relaxed">
@@ -969,6 +1087,20 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         </div>
 
       </div>
+
+      {/* Question Bank & Matrix Picker Modal */}
+      <QuestionBankPickerModal
+        isOpen={isPickerOpen}
+        bankQuestions={bankQuestions}
+        existingExamQuestionIds={questions.map((q) => q.id)}
+        subjects={subjects}
+        defaultSubjectId={subjectId}
+        defaultGrade={grade}
+        onAddQuestions={(picked) => {
+          setQuestions((prev) => [...prev, ...picked]);
+        }}
+        onClose={() => setIsPickerOpen(false)}
+      />
 
       {/* Share Modal upon Successful Exam Creation */}
       <ExamShareModal

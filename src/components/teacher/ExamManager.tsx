@@ -1,51 +1,30 @@
-import React, { useState, useEffect } from 'react';
-import { Exam, StudentSubmission } from '../../types';
-import { 
-  FileCheck, 
-  Plus, 
-  Share2, 
-  Clock, 
-  BarChart3, 
-  Trash2, 
-  Play, 
-  Eye, 
-  Copy, 
-  CheckCircle2, 
-  AlertCircle,
-  ToggleLeft,
-  ToggleRight,
-  Sparkles,
-  QrCode,
-  Lock,
-  Unlock,
-  ShieldCheck,
-  Award,
-  Link as LinkIcon,
-  ExternalLink
-} from 'lucide-react';
-import { ExamShareModal } from '../common/ExamShareModal';
-import { ExamSecurityModal } from './ExamSecurityModal';
-import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
-import { getExamShortUrl, isValidSixDigitPublicCode } from '../../utils/urlHelper';
+import React from 'react';
+import { Exam, Folder, StudentSubmission } from '../../types';
+import { ExamFolderExplorer } from './ExamFolderExplorer';
 
 interface ExamManagerProps {
   exams: Exam[];
+  folders?: Folder[];
   submissions: StudentSubmission[];
+  currentUserId?: string;
   mode?: 'all' | 'online';
   autoOpenShareExamId?: string | null;
   onClearAutoOpenShare?: () => void;
-  onCreateNew: () => void;
+  onCreateNew: (folderId?: string | null) => void;
   onOpenResults: (examId: string) => void;
   onTakeExamAsPreview: (exam: Exam) => void;
   onTogglePublish: (examId: string) => void;
   onDeleteExam: (examId: string) => void;
   onExamUpdated?: (updatedExam: Exam) => void;
+  onSaveFolders?: (folders: Folder[]) => void;
   onShareExam?: (exam: Exam) => void;
 }
 
 export const ExamManager: React.FC<ExamManagerProps> = ({
   exams,
+  folders = [],
   submissions,
+  currentUserId,
   mode = 'all',
   autoOpenShareExamId,
   onClearAutoOpenShare,
@@ -55,365 +34,26 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   onTogglePublish,
   onDeleteExam,
   onExamUpdated,
+  onSaveFolders,
   onShareExam,
 }) => {
-  const [copiedCode, setCopiedCode] = useState<string | null>(null);
-  const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
-  const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
-  const [activeSecurityExam, setActiveSecurityExam] = useState<Exam | null>(null);
-  const [publishFilter, setPublishFilter] = useState<'all' | 'published' | 'closed'>(
-    mode === 'online' ? 'published' : 'all'
-  );
-
-  useEffect(() => {
-    setPublishFilter(mode === 'online' ? 'published' : 'all');
-  }, [mode]);
-
-  useEffect(() => {
-    if (!autoOpenShareExamId) return;
-    const target = exams.find((e) => e.id === autoOpenShareExamId);
-    if (target) {
-      setActiveShareExam(target);
-      onClearAutoOpenShare?.();
-    }
-  }, [autoOpenShareExamId, exams, onClearAutoOpenShare]);
-
-  const handleCopyCode = (code: string) => {
-    navigator.clipboard?.writeText(code);
-    setCopiedCode(code);
-    setTimeout(() => setCopiedCode(null), 2500);
-  };
-
-  const handleCopyShortLink = (exam: Exam) => {
-    const url = getExamShortUrl(exam);
-    navigator.clipboard?.writeText(url);
-    setCopiedLinkId(exam.id);
-    setTimeout(() => setCopiedLinkId(null), 2500);
-  };
-
-  const publishedCount = exams.filter((e) => e.isPublished).length;
-  const closedCount = exams.length - publishedCount;
-  const displayedExams = exams.filter((e) => {
-    if (publishFilter === 'published') return e.isPublished;
-    if (publishFilter === 'closed') return !e.isPublished;
-    return true;
-  });
-
   return (
-    <div className="space-y-6">
-      
-      {/* Top Banner */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2 text-teal-700 font-bold text-xs uppercase tracking-wider">
-              <FileCheck className="w-4 h-4" />
-              <span>
-                {mode === 'online'
-                  ? 'Phòng thi trực tuyến & Mã tham gia'
-                  : 'Kho đề thi & Quản lý bài kiểm tra'}
-              </span>
-            </div>
-            <h1 className="text-2xl font-bold text-slate-900 mt-1">
-              {mode === 'online'
-                ? `Bài Thi Trực Tuyến (${publishedCount} đang mở)`
-                : `Kho Đề Thi & Phòng Thi (${exams.length})`}
-            </h1>
-            <p className="text-sm text-slate-600 mt-1">
-              Quản lý mã tham gia, mật khẩu phòng thi, điều kiện điểm sàn xem đáp án và kết quả nộp bài của học sinh.
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={onCreateNew}
-            className="min-h-[44px] px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold shadow-xs transition-all flex items-center gap-2 shrink-0"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Tạo đề thi mới</span>
-          </button>
-        </div>
-
-        {/* Status Filter Bar */}
-        <div className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100">
-          <button
-            type="button"
-            onClick={() => setPublishFilter('all')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
-              publishFilter === 'all'
-                ? 'bg-slate-900 text-white'
-                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-            }`}
-          >
-            Tất cả đề ({exams.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setPublishFilter('published')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
-              publishFilter === 'published'
-                ? 'bg-emerald-600 text-white'
-                : 'bg-emerald-50 text-emerald-800 hover:bg-emerald-100'
-            }`}
-          >
-            Đang mở thi ({publishedCount})
-          </button>
-          <button
-            type="button"
-            onClick={() => setPublishFilter('closed')}
-            className={`px-3.5 py-2 rounded-xl text-xs font-bold transition-colors ${
-              publishFilter === 'closed'
-                ? 'bg-amber-600 text-white'
-                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
-            }`}
-          >
-            Đang đóng ({closedCount})
-          </button>
-        </div>
-      </div>
-
-      {/* Exams Grid */}
-      <div className="space-y-4">
-        {displayedExams.length === 0 ? (
-          <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-slate-500 text-sm">
-            {exams.length === 0
-              ? 'Chưa có đề thi nào. Nhấn "Tạo đề thi mới" hoặc vào mục Tạo đề thi để tải file Word/PDF.'
-              : 'Không có đề thi nào phù hợp với bộ lọc trạng thái hiện tại.'}
-          </div>
-        ) : (
-          displayedExams.map((exam) => {
-            const examSubs = submissions.filter(s => s.examId === exam.id);
-            const isCopied = copiedCode === exam.code;
-            const policy = getEffectiveAnswerReviewConfig(exam);
-            const qualifiedCount = policy.allowAnswerReview
-              ? examSubs.filter((s) => Math.round(s.totalScore * 100) >= Math.round(policy.answerReviewMinScore * 100)).length
-              : 0;
-            const belowFloorCount = examSubs.length - qualifiedCount;
-
-            return (
-              <div
-                key={exam.id}
-                className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs hover:border-teal-300 transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-5"
-              >
-                {/* Left: Info */}
-                <div className="space-y-2 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="px-2.5 py-1 text-xs font-mono font-bold bg-blue-100 text-blue-800 rounded-lg">
-                      Mã: {exam.code}
-                    </span>
-                    <button
-                      onClick={() => onTogglePublish(exam.id)}
-                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg transition-colors flex items-center gap-1.5 ${
-                        exam.isPublished
-                          ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200'
-                          : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                      }`}
-                    >
-                      <span className={`w-2 h-2 rounded-full ${exam.isPublished ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'}`} />
-                      {exam.isPublished ? 'Đang mở thi' : 'Đã đóng phòng thi'}
-                    </button>
-
-                    {/* Password protection badge */}
-                    <span
-                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg inline-flex items-center gap-1 ${
-                        exam.requiresPassword
-                          ? 'bg-amber-100 text-amber-800 border border-amber-200'
-                          : 'bg-slate-100 text-slate-600'
-                      }`}
-                    >
-                      {exam.requiresPassword ? (
-                        <>
-                          <Lock className="w-3 h-3" />
-                          <span>Có mật khẩu</span>
-                        </>
-                      ) : (
-                        <>
-                          <Unlock className="w-3 h-3" />
-                          <span>Không mật khẩu</span>
-                        </>
-                      )}
-                    </span>
-
-                    {/* Answer floor score badge */}
-                    <span
-                      className={`px-2.5 py-1 text-[11px] font-bold rounded-lg inline-flex items-center gap-1 ${
-                        policy.allowAnswerReview
-                          ? 'bg-indigo-100 text-indigo-800 border border-indigo-200'
-                          : 'bg-rose-50 text-rose-700 border border-rose-200'
-                      }`}
-                    >
-                      <Award className="w-3 h-3" />
-                      <span>
-                        {policy.allowAnswerReview
-                          ? `Mở đáp án ≥ ${policy.answerReviewMinScore.toFixed(1)}đ`
-                          : 'Không mở đáp án'}
-                      </span>
-                    </span>
-
-                    <span className="text-xs text-slate-500 font-medium">
-                      Khối {exam.grade === 'chuyen_hsg' ? 'Chuyên & HSG' : `Lớp ${exam.grade}`}
-                    </span>
-                    <span className="text-xs text-slate-400">
-                      Tạo ngày {new Date(exam.createdAt).toLocaleDateString('vi-VN')}
-                    </span>
-                  </div>
-
-                  <h3 className="text-base font-bold text-slate-900">
-                    {exam.title}
-                  </h3>
-
-                  {isValidSixDigitPublicCode(exam.publicCode) && (
-                    <div className="flex items-center gap-2 flex-wrap text-xs">
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 font-mono font-bold">
-                        <LinkIcon className="w-3.5 h-3.5 text-teal-600" />
-                        <span>{getExamShortUrl(exam)}</span>
-                      </span>
-                      <a
-                        href={getExamShortUrl(exam)}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold hover:underline"
-                        title="Mở link làm bài trong tab mới"
-                      >
-                        <span>Mở link</span>
-                        <ExternalLink className="w-3 h-3" />
-                      </a>
-                    </div>
-                  )}
-
-                  <div className="flex items-center gap-4 text-xs text-slate-500 flex-wrap">
-                    <span>⏱ {exam.durationMinutes} phút</span>
-                    <span>📝 {exam.questions.length} câu hỏi</span>
-                    <span>🎯 Thang {exam.totalScore || 10.0} điểm</span>
-                    <span>👥 {examSubs.length} lượt nộp bài</span>
-                    {policy.allowAnswerReview && examSubs.length > 0 && (
-                      <span className="text-indigo-700 font-semibold">
-                        Đạt sàn: {qualifiedCount} • Chưa đạt: {belowFloorCount}
-                      </span>
-                    )}
-                    {policy.answerReviewEnabledAt && (
-                      <span className="text-slate-600">
-                        🕒 Mở đáp án từ: {new Date(policy.answerReviewEnabledAt).toLocaleString('vi-VN')}
-                      </span>
-                    )}
-                    {exam.shuffleQuestions && <span className="text-purple-600">🔀 Đảo câu</span>}
-                    {exam.shuffleOptions && <span className="text-indigo-600">🔀 Đảo đáp án</span>}
-                  </div>
-                </div>
-
-                {/* Right: Actions */}
-                <div className="flex items-center gap-2 flex-wrap self-end lg:self-center shrink-0">
-                  {/* Copy Short Link Button */}
-                  <button
-                    onClick={() => handleCopyShortLink(exam)}
-                    className="px-3 py-2 rounded-xl border border-teal-200 bg-teal-50/80 hover:bg-teal-100 text-teal-800 text-xs font-bold transition-colors flex items-center gap-1.5"
-                    title="Sao chép link rút gọn 6 chữ số để gửi học sinh"
-                  >
-                    {copiedLinkId === exam.id ? (
-                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    ) : (
-                      <LinkIcon className="w-4 h-4" />
-                    )}
-                    <span>
-                      {copiedLinkId === exam.id
-                        ? 'Đã chép link!'
-                        : isValidSixDigitPublicCode(exam.publicCode)
-                        ? `Sao chép /${exam.publicCode}`
-                        : 'Sao chép link'}
-                    </span>
-                  </button>
-
-                  {/* Copy Internal Code Button */}
-                  <button
-                    onClick={() => handleCopyCode(exam.code)}
-                    className="px-3 py-2 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-blue-100 text-blue-700 text-xs font-bold transition-colors flex items-center gap-1.5"
-                  >
-                    {isCopied ? <CheckCircle2 className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-                    <span>{isCopied ? 'Đã chép mã!' : `Mã: ${exam.code}`}</span>
-                  </button>
-
-                  {/* Configure Security & Floor Score */}
-                  <button
-                    onClick={() => setActiveSecurityExam(exam)}
-                    className="px-3 py-2 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 text-amber-800 text-xs font-bold transition-colors flex items-center gap-1.5"
-                    title="Cấu hình mật khẩu đề thi và điều kiện điểm sàn xem đáp án"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Cấu hình bảo mật &amp; Đáp án</span>
-                  </button>
-
-                  {/* Share Link & QR Button (Sections V & VI) */}
-                  <button
-                    onClick={() => {
-                      if (onShareExam) onShareExam(exam);
-                      else setActiveShareExam(exam);
-                    }}
-                    className="px-3.5 py-2 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white text-xs font-bold shadow-xs transition-all flex items-center gap-1.5"
-                    title="Lấy link trực tiếp và tạo mã QR cho học sinh"
-                  >
-                    <QrCode className="w-3.5 h-3.5" />
-                    <span>Chia sẻ &amp; QR</span>
-                  </button>
-
-                  {/* Student View Preview */}
-                  <button
-                    onClick={() => onTakeExamAsPreview(exam)}
-                    className="px-3 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold transition-colors flex items-center gap-1.5"
-                    title="Vào thi thử nghiệm với tư cách thí sinh"
-                  >
-                    <Play className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Thi thử</span>
-                  </button>
-
-                  {/* View Results / Analytics */}
-                  <button
-                    onClick={() => onOpenResults(exam.id)}
-                    className="px-3.5 py-2 rounded-xl bg-slate-900 hover:bg-black text-white text-xs font-bold shadow-xs transition-colors flex items-center gap-1.5"
-                  >
-                    <BarChart3 className="w-3.5 h-3.5 text-blue-400" />
-                    <span>Xem điểm ({examSubs.length})</span>
-                  </button>
-
-                  {/* Delete */}
-                  <button
-                    onClick={() => {
-                      if (confirm(`Bạn có chắc muốn xóa đề thi "${exam.title}"?`)) {
-                        onDeleteExam(exam.id);
-                      }
-                    }}
-                    className="p-2 rounded-xl text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition-colors"
-                    title="Xóa đề thi"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
-      {/* Dedicated Exam Share & QR Modal */}
-      <ExamShareModal
-        isOpen={!!activeShareExam}
-        exam={activeShareExam ? (exams.find(e => e.id === activeShareExam.id) || activeShareExam) : null}
-        onClose={() => setActiveShareExam(null)}
-        onTogglePublish={onTogglePublish}
-        onExamUpdated={(updatedExam) => {
-          onExamUpdated?.(updatedExam);
-        }}
-      />
-
-      {/* Security & Floor-Score Config Modal */}
-      <ExamSecurityModal
-        isOpen={!!activeSecurityExam}
-        exam={activeSecurityExam ? (exams.find(e => e.id === activeSecurityExam.id) || activeSecurityExam) : null}
-        onClose={() => setActiveSecurityExam(null)}
-        onExamUpdated={(updatedExam) => {
-          onExamUpdated?.(updatedExam);
-        }}
-      />
-
-    </div>
+    <ExamFolderExplorer
+      exams={exams}
+      folders={folders}
+      submissions={submissions}
+      currentUserId={currentUserId}
+      mode={mode}
+      autoOpenShareExamId={autoOpenShareExamId}
+      onClearAutoOpenShare={onClearAutoOpenShare}
+      onCreateNew={onCreateNew}
+      onOpenResults={onOpenResults}
+      onTakeExamAsPreview={onTakeExamAsPreview}
+      onTogglePublish={onTogglePublish}
+      onDeleteExam={onDeleteExam}
+      onExamUpdated={onExamUpdated}
+      onSaveFolders={onSaveFolders}
+      onShareExam={onShareExam}
+    />
   );
 };

@@ -89,6 +89,19 @@ export type CognitiveLevel =
 
 export type ChemGrade = '10' | '11' | '12' | 'chuyen_hsg';
 
+export interface SubjectItem {
+  id: string;
+  name: string;
+  shortName?: string;
+  codePrefix?: string;
+  isDefault?: boolean;
+  order?: number;
+  ownerId?: string;
+  authorId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export type ChemTopic = 
   | 'hoa_dai_cuong'    // Hóa học đại cương (nguyên tử, liên kết, tốc độ phản ứng, cân bằng hóa học)
   | 'hoa_vo_co'        // Hóa vô cơ (kim loại, phi kim, phức chất, pin điện hóa)
@@ -122,8 +135,11 @@ export interface Question {
   code: string;               // Mã câu hỏi, VD: "H12_HC_001"
   content: string;            // Nội dung câu hỏi (chứa công thức hóa học, latex, text)
   type: QuestionType;
+  subjectId?: string;         // ID môn học GDPT 2018 (mặc định fallback: "hoa_hoc")
+  subjectName?: string;       // Tên môn học hiển thị (mặc định fallback: "Hóa học")
   grade: ChemGrade;
   topic: ChemTopic;
+  lessonTopic?: string;       // Bài học / Chủ đề chi tiết tự nhập (có gợi ý)
   level: CognitiveLevel;
   folderId?: string;
   
@@ -192,9 +208,12 @@ export interface ExamVariant {
 export interface Exam {
   id: string;
   title: string;
+  description?: string;       // Mô tả ngắn của đề thi
   code: string;                 // Mã đề tham gia online, VD: "CHEM12A", "HSG2024"
   publicCode?: string;          // Mã truy cập đường dẫn ngắn 6 chữ số (lưu dạng string giữ số 0 ở đầu)
-  folderId?: string;
+  folderId?: string | null;
+  subjectId?: string;
+  subjectName?: string;
   grade: ChemGrade;
   topic?: ChemTopic;
   durationMinutes: number;      // Thời gian làm bài (phút), VD: 50 phút

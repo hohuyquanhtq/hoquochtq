@@ -18,6 +18,8 @@ import {
   stripUndefinedDeep,
   syncExamToFirestore,
   sanitizeExamForStudent,
+  handleFirestoreError,
+  OperationType,
 } from './firebase';
 import {
   User,
@@ -25,6 +27,7 @@ import {
   AccountStatus,
   Question,
   Folder,
+  SubjectItem,
   Exam,
   StudentSubmission,
   Classroom,
@@ -37,6 +40,7 @@ import { normalizeExamCode } from '../utils/urlHelper';
 export interface TeacherWorkspaceData {
   questions: Question[];
   folders: Folder[];
+  subjects: SubjectItem[];
   exams: Exam[];
   submissions: StudentSubmission[];
   classes: Classroom[];
@@ -64,6 +68,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     return {
       questions: [],
       folders: [],
+      subjects: [],
       exams: [],
       submissions: [],
       classes: [],
@@ -72,7 +77,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     };
   }
 
-  const [qSnap, fSnap, eSnap, sSnap, cSnap, enSnap, uSnap] = await Promise.all([
+  const [qSnap, fSnap, eSnap, sSnap, cSnap, enSnap, uSnap, subSnap] = await Promise.all([
     getDocs(query(collection(db, 'questions'), where('ownerId', '==', uid))),
     getDocs(query(collection(db, 'folders'), where('ownerId', '==', uid))),
     getDocs(query(collection(db, 'exams'), where('ownerId', '==', uid))),
@@ -80,6 +85,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     getDocs(query(collection(db, 'classes'), where('ownerId', '==', uid))),
     getDocs(query(collection(db, 'classEnrollments'), where('teacherId', '==', uid))),
     getDocs(query(collection(db, 'uploadRecords'), where('ownerId', '==', uid))),
+    getDocs(query(collection(db, 'subjects'), where('ownerId', '==', uid))).catch(() => null),
   ]);
 
   const submissions = sSnap.docs
@@ -98,9 +104,14 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     .map((d) => d.data() as Classroom)
     .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 
+  const subjects = subSnap
+    ? subSnap.docs.map((d) => d.data() as SubjectItem)
+    : [];
+
   return {
     questions,
     folders: fSnap.docs.map((d) => d.data() as Folder),
+    subjects,
     exams,
     submissions,
     classes,
@@ -120,15 +131,18 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     code: (q.code || `Q_${safeId.slice(-6)}`).slice(0, 64),
     content: (q.content || '').slice(0, 20000),
     type: q.type || 'part1_single_choice',
+    ...(q.subjectId ? { subjectId: q.subjectId.slice(0, 64) } : {}),
+    ...(q.subjectName ? { subjectName: q.subjectName.slice(0, 120) } : {}),
     grade: q.grade || '12',
     topic: (q.topic || 'hoa_dai_cuong').slice(0, 64),
+    ...(q.lessonTopic && q.lessonTopic.trim() ? { lessonTopic: q.lessonTopic.trim().slice(0, 200) } : {}),
     level: q.level || 'nhan_biet',
     ...(q.folderId ? { folderId: q.folderId.slice(0, 128) } : {}),
     ...(q.options ? { options: q.options.slice(0, 8) } : {}),
     ...(q.correctOptionId ? { correctOptionId: q.correctOptionId.slice(0, 8) } : {}),
     ...(q.statements ? { statements: q.statements.slice(0, 8) } : {}),
     ...(q.shortAnswerConfig ? { shortAnswerConfig: q.shortAnswerConfig } : {}),
-    ...(q.imageUrl ? { imageUrl: q.imageUrl.slice(0, 1000) } : {}),
+    ...(q.imageUrl && q.imageUrl.trim() ? { imageUrl: q.imageUrl.trim().slice(0, 1000) } : {}),
     ...(q.explanation ? { explanation: q.explanation.slice(0, 20000) } : {}),
     ...(q.source ? { source: q.source.slice(0, 300) } : {}),
     authorId: q.authorId || ownerId,
@@ -149,9 +163,13 @@ export async function saveQuestionToFirestore(q: Question, explicitOwnerId?: str
   const ownerId = explicitOwnerId || auth.currentUser.uid;
   const safeId = safeDocId(q.id);
   const ref = doc(db, 'questions', safeId);
-  const existing = await getDoc(ref).catch(() => null);
-  const payload = buildQuestionDocPayload(q, ownerId, existing?.exists() ? existing.data()?.serverCreatedAt : undefined);
-  await setDoc(ref, payload);
+  try {
+    const existing = await getDoc(ref).catch(() => null);
+    const payload = buildQuestionDocPayload(q, ownerId, existing?.exists() ? existing.data()?.serverCreatedAt : undefined);
+    await setDoc(ref, payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `questions/${safeId}`);
+  }
 }
 
 export async function saveQuestionsBatchToFirestore(
@@ -161,22 +179,88 @@ export async function saveQuestionsBatchToFirestore(
   if (firebaseInitError || !auth.currentUser || questions.length === 0) return;
   const ownerId = explicitOwnerId || auth.currentUser.uid;
 
-  // Chunk into batches of 400 to respect Firestore 500-op batch limit
-  for (let i = 0; i < questions.length; i += 400) {
-    const chunk = questions.slice(i, i + 400);
-    const batch = writeBatch(db);
-    chunk.forEach((q) => {
-      const safeId = safeDocId(q.id);
-      const ref = doc(db, 'questions', safeId);
-      batch.set(ref, buildQuestionDocPayload(q, ownerId));
-    });
-    await batch.commit();
+  try {
+    // Chunk into batches of 400 to respect Firestore 500-op batch limit
+    for (let i = 0; i < questions.length; i += 400) {
+      const chunk = questions.slice(i, i + 400);
+      const batch = writeBatch(db);
+      chunk.forEach((q) => {
+        const safeId = safeDocId(q.id);
+        const ref = doc(db, 'questions', safeId);
+        batch.set(ref, buildQuestionDocPayload(q, ownerId));
+      });
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'questions');
   }
 }
 
 export async function deleteQuestionFromFirestore(questionId: string): Promise<void> {
   if (firebaseInitError || !auth.currentUser) return;
-  await deleteDoc(doc(db, 'questions', safeDocId(questionId)));
+  const safeId = safeDocId(questionId);
+  try {
+    await deleteDoc(doc(db, 'questions', safeId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `questions/${safeId}`);
+  }
+}
+
+export async function deleteQuestionsBatchFromFirestore(questionIds: string[]): Promise<void> {
+  if (firebaseInitError || !auth.currentUser || questionIds.length === 0) return;
+  try {
+    for (let i = 0; i < questionIds.length; i += 400) {
+      const chunk = questionIds.slice(i, i + 400);
+      const batch = writeBatch(db);
+      chunk.forEach((id) => {
+        batch.delete(doc(db, 'questions', safeDocId(id)));
+      });
+      await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'questions');
+  }
+}
+
+export async function saveSubjectToFirestore(
+  subject: SubjectItem,
+  explicitOwnerId?: string
+): Promise<void> {
+  if (firebaseInitError || !auth.currentUser) return;
+  const ownerId = explicitOwnerId || auth.currentUser.uid;
+  const safeId = safeDocId(subject.id).slice(0, 64);
+  const ref = doc(db, 'subjects', safeId);
+  const nowIso = new Date().toISOString();
+  try {
+    const existing = await getDoc(ref).catch(() => null);
+    const payload = stripUndefinedDeep({
+      id: safeId,
+      ownerId,
+      authorId: subject.authorId || ownerId,
+      name: (subject.name || 'Môn học mới').trim().slice(0, 120),
+      ...(subject.shortName ? { shortName: subject.shortName.trim().slice(0, 40) } : {}),
+      ...(subject.codePrefix ? { codePrefix: subject.codePrefix.trim().slice(0, 16) } : {}),
+      isDefault: !!subject.isDefault,
+      order: typeof subject.order === 'number' ? subject.order : 100,
+      createdAt: subject.createdAt || nowIso,
+      updatedAt: nowIso,
+      serverCreatedAt: existing?.exists() ? existing.data()?.serverCreatedAt : serverTimestamp(),
+      serverUpdatedAt: serverTimestamp(),
+    });
+    await setDoc(ref, payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `subjects/${safeId}`);
+  }
+}
+
+export async function deleteSubjectFromFirestore(subjectId: string): Promise<void> {
+  if (firebaseInitError || !auth.currentUser) return;
+  const safeId = safeDocId(subjectId).slice(0, 64);
+  try {
+    await deleteDoc(doc(db, 'subjects', safeId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `subjects/${safeId}`);
+  }
 }
 
 function buildFolderDocPayload(f: Folder, ownerId: string, existingCreatedAt?: unknown) {
@@ -186,7 +270,7 @@ function buildFolderDocPayload(f: Folder, ownerId: string, existingCreatedAt?: u
     id: safeId,
     ownerId,
     name: (f.name || 'Thư mục mới').slice(0, 150),
-    ...(f.parentId ? { parentId: f.parentId.slice(0, 128) } : {}),
+    parentId: f.parentId && f.parentId.trim() ? f.parentId.trim().slice(0, 128) : null,
     ...(f.description ? { description: f.description.slice(0, 500) } : {}),
     ...(f.grade ? { grade: f.grade } : {}),
     ...(f.color ? { color: f.color.slice(0, 32) } : {}),
@@ -204,13 +288,22 @@ export async function saveFolderToFirestore(folder: Folder, explicitOwnerId?: st
   const ownerId = explicitOwnerId || auth.currentUser.uid;
   const safeId = safeDocId(folder.id);
   const ref = doc(db, 'folders', safeId);
-  const existing = await getDoc(ref).catch(() => null);
-  await setDoc(ref, buildFolderDocPayload(folder, ownerId, existing?.exists() ? existing.data()?.serverCreatedAt : undefined));
+  try {
+    const existing = await getDoc(ref).catch(() => null);
+    await setDoc(ref, buildFolderDocPayload(folder, ownerId, existing?.exists() ? existing.data()?.serverCreatedAt : undefined));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `folders/${safeId}`);
+  }
 }
 
 export async function deleteFolderFromFirestore(folderId: string): Promise<void> {
   if (firebaseInitError || !auth.currentUser) return;
-  await deleteDoc(doc(db, 'folders', safeDocId(folderId)));
+  const safeId = safeDocId(folderId);
+  try {
+    await deleteDoc(doc(db, 'folders', safeId));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `folders/${safeId}`);
+  }
 }
 
 export async function saveUploadRecordToFirestore(

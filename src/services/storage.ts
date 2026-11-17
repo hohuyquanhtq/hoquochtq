@@ -1,4 +1,4 @@
-import { User, Question, Exam, Folder, StudentSubmission } from '../types';
+import { User, Question, Exam, Folder, SubjectItem, StudentSubmission } from '../types';
 import { parseExamContent, SAMPLE_CHEMISTRY_EXAMS } from '../utils/docxParser';
 import {
   isValidSixDigitPublicCode,
@@ -697,6 +697,18 @@ export const StorageService = {
     const targetUid = uid ?? activeWorkspaceUid;
     if (!targetUid) return;
     safeSetStorageItem(wsKey(targetUid, 'folders'), JSON.stringify(folders));
+  },
+
+  getSubjects(uid?: string): SubjectItem[] {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return [];
+    return readJsonArray<SubjectItem>(wsKey(targetUid, 'subjects')) || [];
+  },
+
+  saveSubjects(subjects: SubjectItem[], uid?: string): void {
+    const targetUid = uid ?? activeWorkspaceUid;
+    if (!targetUid) return;
+    safeSetStorageItem(wsKey(targetUid, 'subjects'), JSON.stringify(subjects));
   },
 
   getExams(uid?: string): Exam[] {
