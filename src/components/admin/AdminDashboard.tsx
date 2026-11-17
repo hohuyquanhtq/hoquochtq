@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   FileCheck,
   BookOpen,
+  BookMarked,
   FolderTree,
   Search,
   Lock,
@@ -317,14 +318,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           {onNavigate && (
-            <button
-              type="button"
-              onClick={() => onNavigate('exam_manager')}
-              className="px-3.5 py-2 rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold flex items-center gap-1.5"
-            >
-              <FolderTree className="w-4 h-4 text-teal-700" />
-              <span>Quản lý Đề thi &amp; Thư mục</span>
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => onNavigate('admin_curriculum')}
+                className="px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-xs font-bold flex items-center gap-1.5"
+              >
+                <BookMarked className="w-4 h-4 text-indigo-700" />
+                <span>Danh mục bài học SGK</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('exam_manager')}
+                className="px-3.5 py-2 rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold flex items-center gap-1.5"
+              >
+                <FolderTree className="w-4 h-4 text-teal-700" />
+                <span>Quản lý Đề thi &amp; Thư mục</span>
+              </button>
+            </>
           )}
           <button
             type="button"

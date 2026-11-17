@@ -9,6 +9,7 @@ import {
   BarChart3,
   Users,
   BookOpenCheck,
+  BookMarked,
   Settings,
   FlaskConical,
   X,
@@ -90,6 +91,16 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
           matchTabs: ['question_bank'],
           icon: Database,
         },
+        ...(userRole === 'admin'
+          ? [
+              {
+                id: 'admin_curriculum',
+                label: 'Danh mục bài học',
+                matchTabs: ['admin_curriculum'],
+                icon: BookMarked,
+              },
+            ]
+          : []),
         {
           id: 'online_exams',
           label: 'Bài thi trực tuyến',

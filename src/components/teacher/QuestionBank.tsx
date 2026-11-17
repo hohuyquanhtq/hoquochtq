@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   CognitiveLevel,
+  CurriculumGrade,
+  CurriculumLesson,
   Folder,
   Question,
   QuestionType,
@@ -29,6 +31,7 @@ import {
   Edit3,
   Eye,
   FlaskConical,
+  Loader2,
   Plus,
   Search,
   Sparkles,
@@ -38,6 +41,10 @@ import {
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { generateAiChemistryExplanation } from '../../services/geminiService';
+import {
+  fetchCurriculumLessonsBySubjectGrade,
+  filterAndGroupCurriculumLessons,
+} from '../../services/curriculumService';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { QuestionFormModal } from './QuestionFormModal';
 
@@ -68,9 +75,13 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
   const [gradeFilter, setGradeFilter] = useState<string>('all');
+  const [chapterFilter, setChapterFilter] = useState<string>('all');
   const [lessonTopicFilter, setLessonTopicFilter] = useState<string>('all');
   const [typeFilter, setTypeFilter] = useState<string>('all');
   const [levelFilter, setLevelFilter] = useState<string>('all');
+
+  const [catalogLessons, setCatalogLessons] = useState<CurriculumLesson[]>([]);
+  const [isLoadingCatalog, setIsLoadingCatalog] = useState<boolean>(false);
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -93,18 +104,92 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setTimeout(() => setToastMessage(null), 3200);
   };
 
-  // Unique lesson/topic options present in the bank (scoped by selected subject/grade when active)
+  // Fetch centralized curriculum catalog when both subject & standard grade (10/11/12) are selected
+  useEffect(() => {
+    let active = true;
+    const isStdGrade = gradeFilter === '10' || gradeFilter === '11' || gradeFilter === '12';
+    if (subjectFilter === 'all' || !isStdGrade) {
+      setCatalogLessons([]);
+      setIsLoadingCatalog(false);
+      return;
+    }
+
+    setIsLoadingCatalog(true);
+    void fetchCurriculumLessonsBySubjectGrade(
+      subjectFilter,
+      gradeFilter as CurriculumGrade,
+      { includeInactive: false }
+    )
+      .then((rows) => {
+        if (active) setCatalogLessons(rows);
+      })
+      .catch(() => {
+        if (active) setCatalogLessons([]);
+      })
+      .finally(() => {
+        if (active) setIsLoadingCatalog(false);
+      });
+
+    return () => {
+      active = false;
+    };
+  }, [subjectFilter, gradeFilter]);
+
+  const groupedCatalog = useMemo(
+    () =>
+      filterAndGroupCurriculumLessons(catalogLessons, {
+        includeInactive: false,
+      }),
+    [catalogLessons]
+  );
+
+  // Scoped question counts by lessonId and display label
+  const questionCountByLesson = useMemo(() => {
+    const byId = new Map<string, number>();
+    const byLabel = new Map<string, number>();
+    questions.forEach((q) => {
+      const sub = resolveQuestionSubject(q, subjects);
+      if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
+      if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
+      if (q.lessonId) {
+        byId.set(q.lessonId, (byId.get(q.lessonId) || 0) + 1);
+      }
+      const label = getQuestionTopicDisplay(q);
+      byLabel.set(label, (byLabel.get(label) || 0) + 1);
+    });
+    return { byId, byLabel };
+  }, [questions, subjects, subjectFilter, gradeFilter]);
+
+  // Unique lesson/topic options present in the bank (scoped by selected subject/grade/chapter when active)
   const availableTopicOptions = useMemo(() => {
     const map = new Map<string, number>();
     questions.forEach((q) => {
       const sub = resolveQuestionSubject(q, subjects);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
       if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
+      if (chapterFilter !== 'all' && q.chapterId !== chapterFilter) return;
       const label = getQuestionTopicDisplay(q);
       map.set(label, (map.get(label) || 0) + 1);
     });
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0], 'vi'));
-  }, [questions, subjects, subjectFilter, gradeFilter]);
+  }, [questions, subjects, subjectFilter, gradeFilter, chapterFilter]);
+
+  const legacyTopicsOutsideCatalog = useMemo(() => {
+    if (catalogLessons.length === 0) return [];
+    const catalogIds = new Set(catalogLessons.map((l) => l.lessonId));
+    const catalogNames = new Set(catalogLessons.map((l) => l.lessonName.trim().toLowerCase()));
+    const map = new Map<string, number>();
+    questions.forEach((q) => {
+      const sub = resolveQuestionSubject(q, subjects);
+      if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
+      if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
+      if (q.lessonId && catalogIds.has(q.lessonId)) return;
+      const label = getQuestionTopicDisplay(q);
+      if (catalogNames.has(label.trim().toLowerCase())) return;
+      map.set(label, (map.get(label) || 0) + 1);
+    });
+    return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0], 'vi'));
+  }, [catalogLessons, questions, subjects, subjectFilter, gradeFilter]);
 
   // Filtered questions
   const filtered = useMemo(() => {
@@ -113,8 +198,20 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       const sub = resolveQuestionSubject(q, subjects);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return false;
       if (gradeFilter !== 'all' && q.grade !== gradeFilter) return false;
-      if (lessonTopicFilter !== 'all' && getQuestionTopicDisplay(q) !== lessonTopicFilter) {
-        return false;
+      if (chapterFilter !== 'all' && q.chapterId !== chapterFilter) return false;
+      if (lessonTopicFilter !== 'all') {
+        if (lessonTopicFilter.startsWith('lessonId:')) {
+          const targetId = lessonTopicFilter.slice(9);
+          const matchedLesson = catalogLessons.find((l) => l.lessonId === targetId);
+          const matchesId = q.lessonId === targetId;
+          const matchesLegacyName =
+            Boolean(matchedLesson) &&
+            !q.lessonId &&
+            getQuestionTopicDisplay(q) === matchedLesson?.lessonName;
+          if (!matchesId && !matchesLegacyName) return false;
+        } else if (getQuestionTopicDisplay(q) !== lessonTopicFilter) {
+          return false;
+        }
       }
       if (typeFilter !== 'all' && q.type !== typeFilter) return false;
       if (levelFilter !== 'all' && q.level !== levelFilter) return false;
@@ -122,9 +219,21 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         const matchContent = (q.content || '').toLowerCase().includes(term);
         const matchCode = (q.code || '').toLowerCase().includes(term);
         const matchSource = (q.source || '').toLowerCase().includes(term);
+        const matchChapter = (q.chapterName || '').toLowerCase().includes(term);
+        const matchLesson = (q.lessonName || '').toLowerCase().includes(term);
+        const matchLegacyTopic = (q.lessonTopic || '').toLowerCase().includes(term);
         const matchTopic = getQuestionTopicDisplay(q).toLowerCase().includes(term);
         const matchSubject = sub.name.toLowerCase().includes(term);
-        if (!matchContent && !matchCode && !matchSource && !matchTopic && !matchSubject) {
+        if (
+          !matchContent &&
+          !matchCode &&
+          !matchSource &&
+          !matchChapter &&
+          !matchLesson &&
+          !matchLegacyTopic &&
+          !matchTopic &&
+          !matchSubject
+        ) {
           return false;
         }
       }
@@ -135,7 +244,9 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     subjects,
     subjectFilter,
     gradeFilter,
+    chapterFilter,
     lessonTopicFilter,
+    catalogLessons,
     typeFilter,
     levelFilter,
     searchTerm,
@@ -144,7 +255,16 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [subjectFilter, gradeFilter, lessonTopicFilter, typeFilter, levelFilter, searchTerm, pageSize]);
+  }, [
+    subjectFilter,
+    gradeFilter,
+    chapterFilter,
+    lessonTopicFilter,
+    typeFilter,
+    levelFilter,
+    searchTerm,
+    pageSize,
+  ]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -219,6 +339,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const hasActiveFilters =
     subjectFilter !== 'all' ||
     gradeFilter !== 'all' ||
+    chapterFilter !== 'all' ||
     lessonTopicFilter !== 'all' ||
     typeFilter !== 'all' ||
     levelFilter !== 'all' ||
@@ -227,6 +348,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const clearAllFilters = () => {
     setSubjectFilter('all');
     setGradeFilter('all');
+    setChapterFilter('all');
     setLessonTopicFilter('all');
     setTypeFilter('all');
     setLevelFilter('all');
@@ -504,7 +626,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       )}
 
-      {/* Filter Bar */}
+      {/* Filter Bar (Cascading Môn học → Khối lớp → Chương → Bài học) */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -512,18 +634,19 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Tìm kiếm theo từ khóa, nội dung, công thức, mã câu hỏi, chủ đề hoặc môn học..."
+            placeholder="Tìm kiếm theo từ khóa, nội dung, công thức, mã câu hỏi, chương, bài học hoặc môn học..."
             className="w-full min-h-[42px] pl-10 pr-4 py-2 text-xs rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
           />
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-2.5 text-xs">
           <div>
             <label className="block text-[11px] font-semibold text-slate-500 mb-1">Môn học</label>
             <select
               value={subjectFilter}
               onChange={(e) => {
                 setSubjectFilter(e.target.value);
+                setChapterFilter('all');
                 setLessonTopicFilter('all');
               }}
               className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
@@ -543,6 +666,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               value={gradeFilter}
               onChange={(e) => {
                 setGradeFilter(e.target.value);
+                setChapterFilter('all');
                 setLessonTopicFilter('all');
               }}
               className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
@@ -557,19 +681,87 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-              Bài học / Chủ đề
+              Chương / Chủ đề
+            </label>
+            <select
+              value={chapterFilter}
+              disabled={groupedCatalog.chapters.length === 0}
+              onChange={(e) => {
+                const nextCh = e.target.value;
+                setChapterFilter(nextCh);
+                if (nextCh !== 'all' && lessonTopicFilter.startsWith('lessonId:')) {
+                  const chosenId = lessonTopicFilter.slice(9);
+                  const belongs = catalogLessons.some(
+                    (l) => l.lessonId === chosenId && l.chapterId === nextCh
+                  );
+                  if (!belongs) setLessonTopicFilter('all');
+                }
+              }}
+              className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800 disabled:bg-slate-100 disabled:text-slate-400"
+            >
+              <option value="all">
+                {groupedCatalog.chapters.length > 0
+                  ? `Tất cả chương (${groupedCatalog.chapters.length})`
+                  : subjectFilter !== 'all' &&
+                    (gradeFilter === '10' || gradeFilter === '11' || gradeFilter === '12')
+                  ? isLoadingCatalog
+                    ? 'Đang tải chương...'
+                    : 'Chưa có danh mục'
+                  : 'Chọn môn & khối lớp'}
+              </option>
+              {groupedCatalog.chapters.map((ch) => (
+                <option key={ch.chapterId} value={ch.chapterId}>
+                  {ch.chapterName}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div>
+            <label className="flex items-center justify-between text-[11px] font-semibold text-slate-500 mb-1">
+              <span>Bài học</span>
+              {isLoadingCatalog && <Loader2 className="w-3 h-3 animate-spin text-teal-600" />}
             </label>
             <select
               value={lessonTopicFilter}
               onChange={(e) => setLessonTopicFilter(e.target.value)}
               className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
             >
-              <option value="all">Tất cả chủ đề</option>
-              {availableTopicOptions.map(([label, count]) => (
-                <option key={label} value={label}>
-                  {label} ({count})
-                </option>
-              ))}
+              <option value="all">Tất cả bài học</option>
+              {groupedCatalog.chapters.length > 0 ? (
+                <>
+                  {groupedCatalog.chapters
+                    .filter((ch) => chapterFilter === 'all' || ch.chapterId === chapterFilter)
+                    .map((ch) => (
+                      <optgroup key={ch.chapterId} label={ch.chapterName}>
+                        {ch.lessons.map((lesson) => {
+                          const cnt = questionCountByLesson.byId.get(lesson.lessonId) || 0;
+                          return (
+                            <option key={lesson.id} value={`lessonId:${lesson.lessonId}`}>
+                              {lesson.lessonName}
+                              {cnt > 0 ? ` (${cnt})` : ''}
+                            </option>
+                          );
+                        })}
+                      </optgroup>
+                    ))}
+                  {legacyTopicsOutsideCatalog.length > 0 && chapterFilter === 'all' && (
+                    <optgroup label="Phân loại cũ chưa gắn bài SGK">
+                      {legacyTopicsOutsideCatalog.map(([label, count]) => (
+                        <option key={label} value={label}>
+                          {label} ({count})
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                </>
+              ) : (
+                availableTopicOptions.map(([label, count]) => (
+                  <option key={label} value={label}>
+                    {label} ({count})
+                  </option>
+                ))
+              )}
             </select>
           </div>
 
@@ -735,14 +927,20 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                         <span className="font-semibold text-teal-700">{sub.name}</span>
                         <span className="text-slate-300">·</span>
                         <span className="text-slate-700 font-medium">{GRADE_LABELS[q.grade]}</span>
+                        {q.chapterName && (
+                          <>
+                            <span className="text-slate-300">·</span>
+                            <span className="text-slate-500">{q.chapterName}</span>
+                          </>
+                        )}
                         <span className="text-slate-300">·</span>
-                        <span className="text-slate-600">{topicLabel}</span>
+                        <span className="text-slate-800 font-medium">{topicLabel}</span>
                         <span className="text-slate-300">·</span>
                         <span className="font-semibold text-slate-800">
                           {QUESTION_TYPE_SHORT_LABELS[q.type]}
                         </span>
                         <span className="text-slate-300">·</span>
-                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
+                        <span className="font-semibold text-slate-600">
                           {COGNITIVE_LEVEL_SHORT_LABELS[q.level]}
                         </span>
                       </div>
@@ -978,6 +1176,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 <p className="text-xs text-slate-300 mt-0.5">
                   {resolveQuestionSubject(viewingQuestion, subjects).name} ·{' '}
                   {GRADE_LABELS[viewingQuestion.grade]} ·{' '}
+                  {viewingQuestion.chapterName ? `${viewingQuestion.chapterName} · ` : ''}
                   {getQuestionTopicDisplay(viewingQuestion)}
                 </p>
               </div>
@@ -990,7 +1189,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               </button>
             </div>
             <div className="p-6 overflow-y-auto space-y-4 text-sm">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs">
                 <div>
                   <span className="text-slate-500 block">Môn học</span>
                   <span className="font-bold text-slate-900">
@@ -1001,6 +1200,18 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                   <span className="text-slate-500 block">Khối lớp</span>
                   <span className="font-bold text-slate-900">
                     {GRADE_LABELS[viewingQuestion.grade]}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Chương / Chủ đề</span>
+                  <span className="font-bold text-slate-900">
+                    {viewingQuestion.chapterName || '—'}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-slate-500 block">Bài học</span>
+                  <span className="font-bold text-slate-900">
+                    {getQuestionTopicDisplay(viewingQuestion)}
                   </span>
                 </div>
                 <div>

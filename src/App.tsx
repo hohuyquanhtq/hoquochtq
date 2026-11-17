@@ -93,6 +93,7 @@ import { ExamJoinLanding, ExamLandingStatus } from './components/student/ExamJoi
 
 // Admin Components
 import { AdminDashboard } from './components/admin/AdminDashboard';
+import { CurriculumCatalogManager } from './components/admin/CurriculumCatalogManager';
 
 function getDefaultTabForRole(role: UserRole): string {
   if (role === 'student') return 'student_home';
@@ -1242,18 +1243,25 @@ export default function App() {
           <ProtectedRoute allowedRoles={['teacher', 'admin']} onBackHome={resetToRoleHome}>
             {renderWorkspaceSubNav()}
 
-            {userProfile.role === 'admin' && (activeTab === 'admin_dashboard' || activeTab === 'admin_users') && (
+            {userProfile.role === 'admin' && (activeTab === 'admin_dashboard' || activeTab === 'admin_users' || activeTab === 'admin_curriculum') && (
               isAdminClaimVerified ? (
-                <AdminDashboard
-                  currentUser={userProfile}
-                  questions={questions}
-                  exams={exams}
-                  submissions={submissions}
-                  folders={folders}
-                  sectionFocus={activeTab === 'admin_users' ? 'users' : 'overview'}
-                  onNavigate={(tab) => setActiveTab(tab)}
-                  onDataResetOrRestored={reloadDataFromStorage}
-                />
+                activeTab === 'admin_curriculum' ? (
+                  <CurriculumCatalogManager
+                    currentUser={userProfile}
+                    subjects={mergedSubjects}
+                  />
+                ) : (
+                  <AdminDashboard
+                    currentUser={userProfile}
+                    questions={questions}
+                    exams={exams}
+                    submissions={submissions}
+                    folders={folders}
+                    sectionFocus={activeTab === 'admin_users' ? 'users' : 'overview'}
+                    onNavigate={(tab) => setActiveTab(tab)}
+                    onDataResetOrRestored={reloadDataFromStorage}
+                  />
+                )
               ) : (
                 <div className="max-w-lg mx-auto my-10 bg-white border border-rose-200 rounded-3xl p-7 shadow-sm text-center space-y-4">
                   <h2 className="text-base font-extrabold text-slate-900">
@@ -1409,6 +1417,7 @@ export default function App() {
               'dashboard',
               'admin_dashboard',
               'admin_users',
+              'admin_curriculum',
               'upload_exam',
               'question_bank',
               'folder_manager',

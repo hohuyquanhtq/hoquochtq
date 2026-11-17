@@ -34,6 +34,10 @@
         "subjectName": { "type": "string", "maxLength": 120 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
         "topic": { "type": "string", "maxLength": 64 },
+        "chapterId": { "type": "string", "maxLength": 128 },
+        "chapterName": { "type": "string", "maxLength": 250 },
+        "lessonId": { "type": "string", "maxLength": 128 },
+        "lessonName": { "type": "string", "maxLength": 250 },
         "lessonTopic": { "type": "string", "maxLength": 200 },
         "level": { "type": "string", "enum": ["nhan_biet", "thong_hieu", "van_dung", "van_dung_cao"] },
         "folderId": { "type": "string", "maxLength": 128 },
@@ -377,6 +381,49 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "ownerId", "name", "createdAt", "updatedAt"]
+    },
+    "CurriculumConfig": {
+      "title": "CurriculumConfig",
+      "description": "School-wide approved GDPT 2018 textbook series configuration managed by Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "textbookSeries": { "type": "string", "maxLength": 150 },
+        "textbookYear": { "type": "string", "maxLength": 64 },
+        "schoolName": { "type": "string", "maxLength": 200 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "textbookSeries", "textbookYear", "updatedAt"]
+    },
+    "CurriculumLesson": {
+      "title": "CurriculumLesson",
+      "description": "Admin-curated GDPT 2018 textbook chapter and lesson entry indexed by subjectId and grade.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "grade": { "type": "string", "enum": ["10", "11", "12"] },
+        "textbookSeries": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "textbookYear": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "chapterId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "chapterName": { "type": "string", "minLength": 1, "maxLength": 250 },
+        "chapterOrder": { "type": "number" },
+        "lessonId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "lessonName": { "type": "string", "minLength": 1, "maxLength": 250 },
+        "lessonOrder": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "subjectId", "subjectName", "grade", "textbookSeries", "textbookYear",
+        "chapterId", "chapterName", "lessonId", "lessonName", "lessonOrder", "status",
+        "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -451,6 +498,14 @@
     },
     "/answerReviewAccess/{accessId}": {
       "description": "Server-verified floor-score qualification audit grants keyed by {examCode}_{uid} (client write: false)."
+    },
+    "/curriculumConfig/{configId}": {
+      "schema": { "$ref": "#/entities/CurriculumConfig" },
+      "description": "Centralized school textbook series setting managed by Admin and readable by authenticated teachers."
+    },
+    "/curriculumLessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/CurriculumLesson" },
+      "description": "Centralized GDPT 2018 chapter/lesson catalog managed by Admin and consumed by Teachers via cascading dropdown."
     }
   }
 }

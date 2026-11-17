@@ -6,7 +6,14 @@ export const DEFAULT_SUBJECT_NAME = 'Hóa học';
 export const DEFAULT_GDPT_2018_SUBJECTS: SubjectItem[] = [
   { id: 'toan_hoc', name: 'Toán học', shortName: 'Toán', codePrefix: 'TOAN', isDefault: true, order: 1 },
   { id: 'ngu_van', name: 'Ngữ văn', shortName: 'Văn', codePrefix: 'VAN', isDefault: true, order: 2 },
-  { id: 'ngoai_ngu_1', name: 'Ngoại ngữ 1', shortName: 'NN1', codePrefix: 'NN1', isDefault: true, order: 3 },
+  {
+    id: 'ngoai_ngu_1',
+    name: 'Tiếng Anh và các ngoại ngữ khác',
+    shortName: 'Ngoại ngữ',
+    codePrefix: 'NN',
+    isDefault: true,
+    order: 3,
+  },
   { id: 'vat_li', name: 'Vật lí', shortName: 'Lí', codePrefix: 'VL', isDefault: true, order: 4 },
   { id: 'hoa_hoc', name: 'Hóa học', shortName: 'Hóa', codePrefix: 'HH', isDefault: true, order: 5 },
   { id: 'sinh_hoc', name: 'Sinh học', shortName: 'Sinh', codePrefix: 'SH', isDefault: true, order: 6 },
@@ -65,6 +72,18 @@ export const GRADE_LABELS: Record<ChemGrade, string> = {
   '12': 'Lớp 12',
   chuyen_hsg: 'Chuyên & HSG',
 };
+
+export const CURRICULUM_GRADES: { id: '10' | '11' | '12'; label: string }[] = [
+  { id: '10', label: 'Lớp 10' },
+  { id: '11', label: 'Lớp 11' },
+  { id: '12', label: 'Lớp 12' },
+];
+
+export const TEXTBOOK_SERIES_OPTIONS: string[] = [
+  'Kết nối tri thức với cuộc sống',
+  'Chân trời sáng tạo',
+  'Cánh diều',
+];
 
 export const COGNITIVE_LEVEL_LABELS: Record<CognitiveLevel, string> = {
   nhan_biet: 'Biết (Nhận biết)',
@@ -130,16 +149,28 @@ export function resolveQuestionSubject(
   const rawName = (q.subjectName || '').trim();
   if (rawId) {
     const found = subjects.find((s) => s.id === rawId);
-    return { id: rawId, name: rawName || found?.name || DEFAULT_SUBJECT_NAME };
+    if (found) {
+      return { id: found.id, name: found.name };
+    }
+    return { id: rawId, name: rawName || DEFAULT_SUBJECT_NAME };
   }
   if (rawName) {
-    const byName = subjects.find((s) => s.name.toLowerCase() === rawName.toLowerCase());
-    return { id: byName?.id || DEFAULT_SUBJECT_ID, name: rawName };
+    const lower = rawName.toLowerCase();
+    if (lower === 'ngoại ngữ 1' || lower === 'tiếng anh') {
+      const lang = subjects.find((s) => s.id === 'ngoai_ngu_1');
+      if (lang) return { id: lang.id, name: lang.name };
+    }
+    const byName = subjects.find((s) => s.name.toLowerCase() === lower);
+    return { id: byName?.id || DEFAULT_SUBJECT_ID, name: byName?.name || rawName };
   }
   return { id: DEFAULT_SUBJECT_ID, name: DEFAULT_SUBJECT_NAME };
 }
 
-export function getQuestionTopicDisplay(q: Pick<Question, 'lessonTopic' | 'topic'>): string {
+export function getQuestionTopicDisplay(
+  q: Pick<Question, 'lessonName' | 'chapterName' | 'lessonTopic' | 'topic'>
+): string {
+  const lessonName = (q.lessonName || '').trim();
+  if (lessonName) return lessonName;
   const custom = (q.lessonTopic || '').trim();
   if (custom) return custom;
   return CHEM_TOPIC_LABELS[q.topic] || 'Chủ đề chung';

@@ -88,6 +88,37 @@ export type CognitiveLevel =
   | 'van_dung_cao'; // Vận dụng cao
 
 export type ChemGrade = '10' | '11' | '12' | 'chuyen_hsg';
+export type CurriculumGrade = '10' | '11' | '12';
+export type CurriculumStatus = 'active' | 'inactive';
+
+export interface CurriculumConfig {
+  id: string;
+  textbookSeries: string;
+  textbookYear: string;
+  schoolName?: string;
+  updatedBy?: string;
+  updatedAt: string;
+}
+
+export interface CurriculumLesson {
+  id: string;
+  subjectId: string;
+  subjectName: string;
+  grade: CurriculumGrade;
+  textbookSeries: string;
+  textbookYear: string;
+  chapterId: string;
+  chapterName: string;
+  chapterOrder?: number;
+  lessonId: string;
+  lessonName: string;
+  lessonOrder: number;
+  status: CurriculumStatus;
+  createdBy?: string;
+  updatedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface SubjectItem {
   id: string;
@@ -139,7 +170,11 @@ export interface Question {
   subjectName?: string;       // Tên môn học hiển thị (mặc định fallback: "Hóa học")
   grade: ChemGrade;
   topic: ChemTopic;
-  lessonTopic?: string;       // Bài học / Chủ đề chi tiết tự nhập (có gợi ý)
+  chapterId?: string;         // Mã chương / chủ đề lớn chuẩn GDPT 2018
+  chapterName?: string;       // Tên chương / chủ đề lớn
+  lessonId?: string;          // Mã bài học chuẩn hóa từ danh mục SGK
+  lessonName?: string;        // Tên bài học chuẩn hóa từ danh mục SGK
+  lessonTopic?: string;       // Tên bài học / chủ đề hiển thị (tương thích ngược dữ liệu cũ)
   level: CognitiveLevel;
   folderId?: string;
   

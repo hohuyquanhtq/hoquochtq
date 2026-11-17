@@ -112,7 +112,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'id', 'ownerId', 'code', 'content', 'type', 'subjectId', 'subjectName',
-          'grade', 'topic', 'lessonTopic', 'level',
+          'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic', 'level',
           'folderId', 'options', 'correctOptionId', 'statements', 'shortAnswerConfig',
           'imageUrl', 'explanation', 'source', 'authorId', 'parseStatus', 'parseWarning',
           'teacherVerified', 'section', 'sectionTitle', 'createdAt', 'updatedAt',
@@ -127,6 +127,10 @@ service cloud.firestore {
         && (!('subjectName' in data) || (data.subjectName is string && data.subjectName.size() <= 120))
         && data.grade in ['10', '11', '12', 'chuyen_hsg']
         && data.topic is string && data.topic.size() >= 1 && data.topic.size() <= 64
+        && (!('chapterId' in data) || (data.chapterId is string && data.chapterId.size() <= 128))
+        && (!('chapterName' in data) || (data.chapterName is string && data.chapterName.size() <= 250))
+        && (!('lessonId' in data) || (data.lessonId is string && data.lessonId.size() <= 128))
+        && (!('lessonName' in data) || (data.lessonName is string && data.lessonName.size() <= 250))
         && (!('lessonTopic' in data) || (data.lessonTopic is string && data.lessonTopic.size() <= 200))
         && data.level in ['nhan_biet', 'thong_hieu', 'van_dung', 'van_dung_cao']
         && (!('folderId' in data) || (data.folderId is string && data.folderId.size() <= 128))
@@ -609,26 +613,30 @@ service cloud.firestore {
       allow update: if isValidId(questionId)
         && isValidTeacherQuestion(incoming())
         && incoming().id == existing().id
-        && incoming().serverCreatedAt == existing().serverCreatedAt
+        && (
+          ('serverCreatedAt' in existing() && incoming().serverCreatedAt == existing().serverCreatedAt) ||
+          (!('serverCreatedAt' in existing()) && incoming().serverCreatedAt == request.time)
+        )
         && incoming().serverUpdatedAt == request.time
         && (
           (isActiveTeacher()
             && isOwner(existing().ownerId)
             && incoming().ownerId == existing().ownerId
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'code', 'content', 'type', 'subjectId', 'subjectName', 'grade', 'topic', 'lessonTopic',
+              'code', 'content', 'type', 'subjectId', 'subjectName', 'grade', 'topic',
+              'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
               'level', 'folderId',
               'options', 'correctOptionId', 'statements', 'shortAnswerConfig',
               'imageUrl', 'explanation', 'source', 'parseStatus', 'parseWarning',
-              'teacherVerified', 'section', 'sectionTitle', 'updatedAt', 'serverUpdatedAt'
+              'teacherVerified', 'section', 'sectionTitle', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
             'ownerId', 'authorId', 'code', 'content', 'type', 'subjectId', 'subjectName',
-            'grade', 'topic', 'lessonTopic',
+            'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
             'level', 'folderId', 'options', 'correctOptionId', 'statements',
             'shortAnswerConfig', 'imageUrl', 'explanation', 'source', 'parseStatus',
             'parseWarning', 'teacherVerified', 'section', 'sectionTitle',
-            'updatedAt', 'serverUpdatedAt'
+            'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
           ]))
         );
       allow delete: if isValidId(questionId) && (
@@ -1104,6 +1112,93 @@ service cloud.firestore {
     match /admins/{userId} {
       allow get: if isSignedIn() && request.auth.uid == userId;
       allow list, create, update, delete: if false;
+    }
+
+    function isValidCurriculumConfig(data) {
+      return data.keys().hasAll([
+          'id', 'textbookSeries', 'textbookYear', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'textbookSeries', 'textbookYear', 'schoolName', 'updatedBy',
+          'updatedAt', 'serverUpdatedAt'
+        ])
+        && isValidId(data.id)
+        && data.textbookSeries is string && data.textbookSeries.size() <= 150
+        && data.textbookYear is string && data.textbookYear.size() <= 64
+        && (!('schoolName' in data) || (data.schoolName is string && data.schoolName.size() <= 200))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128))
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidCurriculumLesson(data) {
+      return data.keys().hasAll([
+          'id', 'subjectId', 'subjectName', 'grade', 'textbookSeries', 'textbookYear',
+          'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonOrder', 'status',
+          'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'subjectId', 'subjectName', 'grade', 'textbookSeries', 'textbookYear',
+          'chapterId', 'chapterName', 'chapterOrder', 'lessonId', 'lessonName', 'lessonOrder',
+          'status', 'createdBy', 'updatedBy', 'createdAt', 'updatedAt',
+          'serverCreatedAt', 'serverUpdatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.subjectId)
+        && data.subjectName is string && data.subjectName.size() >= 1 && data.subjectName.size() <= 120
+        && data.grade in ['10', '11', '12']
+        && data.textbookSeries is string && data.textbookSeries.size() >= 1 && data.textbookSeries.size() <= 150
+        && data.textbookYear is string && data.textbookYear.size() >= 1 && data.textbookYear.size() <= 64
+        && isValidId(data.chapterId)
+        && data.chapterName is string && data.chapterName.size() >= 1 && data.chapterName.size() <= 250
+        && (!('chapterOrder' in data) || (data.chapterOrder is number && data.chapterOrder >= 0 && data.chapterOrder <= 10000))
+        && isValidId(data.lessonId)
+        && data.lessonName is string && data.lessonName.size() >= 1 && data.lessonName.size() <= 250
+        && data.lessonOrder is number && data.lessonOrder >= 0 && data.lessonOrder <= 10000
+        && data.status in ['active', 'inactive']
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128))
+        && data.createdAt is string && data.createdAt.size() <= 64
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && data.serverCreatedAt is timestamp
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    match /curriculumConfig/{configId} {
+      allow get: if isValidId(configId) && isSignedIn() && (isActiveTeacher() || isAdmin());
+      allow list: if isSignedIn() && (isActiveTeacher() || isAdmin());
+      allow create, update: if isValidId(configId)
+        && isAdmin()
+        && isValidCurriculumConfig(incoming())
+        && incoming().id == configId
+        && incoming().serverUpdatedAt == request.time;
+      allow delete: if isValidId(configId) && isAdmin();
+    }
+
+    match /curriculumLessons/{lessonId} {
+      allow get: if isValidId(lessonId) && isSignedIn() && (isActiveTeacher() || isAdmin());
+      allow list: if isSignedIn() && (isActiveTeacher() || isAdmin());
+      allow create: if isValidId(lessonId)
+        && isAdmin()
+        && isValidCurriculumLesson(incoming())
+        && incoming().id == lessonId
+        && incoming().serverCreatedAt == request.time
+        && incoming().serverUpdatedAt == request.time;
+      allow update: if isValidId(lessonId)
+        && isAdmin()
+        && isValidCurriculumLesson(incoming())
+        && incoming().id == existing().id
+        && (
+          ('serverCreatedAt' in existing() && incoming().serverCreatedAt == existing().serverCreatedAt) ||
+          (!('serverCreatedAt' in existing()) && incoming().serverCreatedAt == request.time)
+        )
+        && incoming().serverUpdatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'subjectId', 'subjectName', 'grade', 'textbookSeries', 'textbookYear',
+          'chapterId', 'chapterName', 'chapterOrder', 'lessonId', 'lessonName', 'lessonOrder',
+          'status', 'updatedBy', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+        ]);
+      allow delete: if isValidId(lessonId) && isAdmin();
     }
   }
 }
