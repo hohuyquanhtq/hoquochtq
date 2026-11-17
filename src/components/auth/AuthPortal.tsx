@@ -936,7 +936,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
                   type="text"
                   value={quickExamCode}
                   onChange={(e) => setQuickExamCode(e.target.value.toUpperCase())}
-                  placeholder="Nhập mã đề (VD: HQ50)..."
+                  placeholder="Nhập mã đề / mã 6 ký tự (VD: HQ50, H7K9P2)..."
                   className="flex-1 px-3 py-2 rounded-xl border border-slate-200 text-xs font-mono font-bold uppercase bg-slate-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
                 <button

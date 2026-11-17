@@ -20,7 +20,10 @@ export interface ServerGradeBreakdown {
   part2Score: number;
   part3Score: number;
   totalScore: number;
+  totalQuestions: number;
   correctQuestionsCount: number;
+  wrongQuestionsCount: number;
+  unansweredQuestionsCount: number;
 }
 
 export function normalizeExamCodeServer(rawCode: string): string {
@@ -89,6 +92,8 @@ export function gradeAnswersOnServer(params: {
   let part2Score = 0;
   let part3Score = 0;
   let correctQuestionsCount = 0;
+  let wrongQuestionsCount = 0;
+  let unansweredQuestionsCount = 0;
 
   const p1Points = Number(rules?.part1ScorePerQuestion ?? 0.25);
   const p2Model = rules?.part2GradingModel || 'standard_moet';
@@ -105,35 +110,39 @@ export function gradeAnswersOnServer(params: {
           statementIds: entry.statements ? Object.keys(entry.statements) : undefined,
         }));
 
+  let totalQuestions = 0;
+
   for (const item of items) {
     const key = answerMap[item.id];
-    const studentAns = answers?.[item.id];
-    if (!key || !studentAns) continue;
+    if (!key) continue;
+    totalQuestions++;
 
+    const studentAns = answers?.[item.id];
     const qType = key.type || item.type;
 
     if (qType === 'part1_single_choice') {
-      if (
-        studentAns.selectedOptionId &&
-        key.correctOptionId &&
-        studentAns.selectedOptionId === key.correctOptionId
-      ) {
+      const selectedOpt = studentAns?.selectedOptionId?.trim() || '';
+      if (!selectedOpt) {
+        unansweredQuestionsCount++;
+      } else if (key.correctOptionId && selectedOpt === key.correctOptionId) {
         part1Score += p1Points;
         correctQuestionsCount++;
+      } else {
+        wrongQuestionsCount++;
       }
     } else if (qType === 'part2_true_false') {
       const stMap = key.statements || {};
       const stIds = item.statementIds && item.statementIds.length > 0 ? item.statementIds : Object.keys(stMap);
-      const selected = studentAns.selectedStatements || {};
+      const selected = studentAns?.selectedStatements || {};
       let correctStatementsCount = 0;
+      let answeredStatementsCount = 0;
 
       for (const stId of stIds) {
-        if (
-          stId in stMap &&
-          selected[stId] !== undefined &&
-          Boolean(selected[stId]) === Boolean(stMap[stId])
-        ) {
-          correctStatementsCount++;
+        if (selected[stId] !== undefined && selected[stId] !== null) {
+          answeredStatementsCount++;
+          if (stId in stMap && Boolean(selected[stId]) === Boolean(stMap[stId])) {
+            correctStatementsCount++;
+          }
         }
       }
 
@@ -145,18 +154,30 @@ export function gradeAnswersOnServer(params: {
         else if (correctStatementsCount === 4) qPts = 1.0;
 
         part2Score += qPts;
-        if (correctStatementsCount === 4) correctQuestionsCount++;
+        if (answeredStatementsCount === 0) {
+          unansweredQuestionsCount++;
+        } else if (stIds.length > 0 && correctStatementsCount === stIds.length) {
+          correctQuestionsCount++;
+        } else {
+          wrongQuestionsCount++;
+        }
       } else {
         part2Score += correctStatementsCount * p2CustomPoints;
-        if (stIds.length > 0 && correctStatementsCount === stIds.length) {
+        if (answeredStatementsCount === 0) {
+          unansweredQuestionsCount++;
+        } else if (stIds.length > 0 && correctStatementsCount === stIds.length) {
           correctQuestionsCount++;
+        } else {
+          wrongQuestionsCount++;
         }
       }
     } else if (qType === 'part3_short_answer') {
-      const text = (studentAns.textAnswer || '').trim();
+      const text = (studentAns?.textAnswer || '').trim();
       const cfg = key.shortAnswerConfig;
 
-      if (text && cfg) {
+      if (!text) {
+        unansweredQuestionsCount++;
+      } else if (cfg) {
         let isCorrect = false;
         const normalizedText = text.toLowerCase().replace(/\s+/g, '');
         const acceptable = Array.isArray(cfg.acceptableAnswers) ? cfg.acceptableAnswers : [];
@@ -189,7 +210,11 @@ export function gradeAnswersOnServer(params: {
         if (isCorrect) {
           part3Score += p3Points;
           correctQuestionsCount++;
+        } else {
+          wrongQuestionsCount++;
         }
+      } else {
+        wrongQuestionsCount++;
       }
     }
   }
@@ -204,7 +229,10 @@ export function gradeAnswersOnServer(params: {
     part2Score: rPart2,
     part3Score: rPart3,
     totalScore,
+    totalQuestions,
     correctQuestionsCount,
+    wrongQuestionsCount,
+    unansweredQuestionsCount,
   };
 }
 

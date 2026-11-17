@@ -25,8 +25,8 @@ import {
   getExamShortUrl,
   getPublicDomain,
   isPreviewOrLocalOrigin,
-  isValidSixDigitPublicCode,
   normalizeExamCode,
+  normalizePublicExamCode,
   getSavedProductionDomainOverride,
   setSavedProductionDomainOverride,
 } from '../../utils/urlHelper';
@@ -68,13 +68,12 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const printableRef = useRef<HTMLDivElement>(null);
 
-  // Clean internal examCode and 6-digit publicCode
+  // Clean internal examCode and 6-char publicCode
   const examCode = normalizeExamCode(exam?.code || 'HQ50');
-  const resolvedPublicCode = isValidSixDigitPublicCode(exam?.publicCode)
-    ? exam!.publicCode!.trim()
-    : isValidSixDigitPublicCode(localPublicCode)
-    ? localPublicCode
-    : '';
+  const resolvedPublicCode =
+    normalizePublicExamCode(exam?.publicCode) ||
+    normalizePublicExamCode(localPublicCode) ||
+    '';
   const displayShareCode = resolvedPublicCode || examCode;
   const activeDomain = getPublicDomain();
   const isPreviewDomain = isPreviewOrLocalOrigin(activeDomain);
@@ -86,18 +85,15 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
 
   const totalQuestionsCount = exam ? (exam.totalQuestions || exam.questions?.length || 0) : 0;
 
-  // Auto-sync to Firestore & ensure 6-digit publicCode exists if opened on a legacy exam
+  // Auto-sync to Firestore & ensure 6-char publicCode exists if opened on a legacy exam
   useEffect(() => {
     if (!isOpen || !exam) return;
     let cancelled = false;
     setDomainInput(getSavedProductionDomainOverride());
     setAllocationError(null);
 
-    if (isValidSixDigitPublicCode(exam.publicCode)) {
-      setLocalPublicCode(exam.publicCode.trim());
-    } else {
-      setLocalPublicCode('');
-    }
+    const existingPublicCode = normalizePublicExamCode(exam.publicCode);
+    setLocalPublicCode(existingPublicCode);
 
     const ensureCloudAndPublicCode = async () => {
       if (!auth.currentUser) {
@@ -106,7 +102,7 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
       }
 
       let activeExam = exam;
-      if (!isValidSixDigitPublicCode(exam.publicCode)) {
+      if (!existingPublicCode) {
         if (!cancelled) setIsAllocatingCode(true);
         const alloc = await allocateExamPublicCodeOnServer({
           examId: exam.id,
@@ -119,7 +115,7 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
           activeExam = { ...exam, publicCode: alloc.publicCode };
           onExamUpdated?.(activeExam);
         } else if (!cancelled) {
-          setAllocationError(alloc.error || 'Chưa thể cấp mã đường dẫn 6 chữ số.');
+          setAllocationError(alloc.error || 'Chưa thể cấp mã đường dẫn 6 ký tự.');
         }
       }
 
@@ -296,7 +292,7 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
     return `THÔNG BÁO THI TRỰC TUYẾN - ${APP_CONFIG.APP_NAME}
 
 📖 Bài thi: ${exam.title}
-🔑 Mã truy cập 6 chữ số: ${displayShareCode}
+🔑 Mã truy cập 6 ký tự: ${displayShareCode}
 🌐 Link vào thi trực tiếp: ${directLink}
 ⏱ Thời gian làm bài: ${exam.durationMinutes} phút
 📝 Số lượng câu hỏi: ${totalQuestionsCount} câu
@@ -389,7 +385,7 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
 
     ctx.fillStyle = '#475569';
     ctx.font = 'bold 14px sans-serif';
-    ctx.fillText('MÃ TRUY CẬP 6 SỐ:', 450, 245);
+    ctx.fillText('MÃ TRUY CẬP 6 KÝ TỰ:', 450, 245);
     ctx.fillStyle = '#1d4ed8';
     ctx.font = '900 36px monospace';
     ctx.fillText(displayShareCode, 450, 282);
@@ -462,7 +458,7 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
               <div className="flex items-center gap-2">
                 <span className="text-[11px] font-extrabold uppercase tracking-wider text-blue-200 flex items-center gap-1">
                   <Sparkles className="w-3.5 h-3.5" />
-                  Chia Sẻ Bài Thi &amp; Link Ngắn 6 Chữ Số
+                  Chia Sẻ Bài Thi &amp; Link Ngắn 6 Ký Tự
                 </span>
                 <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-white/20 text-white rounded-md">
                   {resolvedPublicCode ? `/${resolvedPublicCode}` : `Mã: ${examCode}`}
@@ -532,7 +528,7 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div>
                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                      {resolvedPublicCode ? 'MÃ TRUY CẬP 6 CHỮ SỐ' : 'MÃ BÀI THI'}
+                      {resolvedPublicCode ? 'MÃ TRUY CẬP 6 KÝ TỰ' : 'MÃ BÀI THI'}
                     </span>
                     <div className="flex items-center gap-2.5 mt-0.5">
                       <span className="text-3xl font-black font-mono text-blue-700 tracking-widest">
@@ -674,7 +670,7 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
                     <LinkIcon className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Đường dẫn làm bài rút gọn (6 chữ số)</span>
+                    <span>Đường dẫn làm bài rút gọn (6 ký tự)</span>
                   </label>
                   <span className={`text-[11px] font-bold px-2 py-0.5 rounded-md border ${
                     isPreviewDomain

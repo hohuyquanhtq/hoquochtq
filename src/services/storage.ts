@@ -1,9 +1,10 @@
 import { User, Question, Exam, Folder, SubjectItem, StudentSubmission } from '../types';
 import { parseExamContent, SAMPLE_CHEMISTRY_EXAMS } from '../utils/docxParser';
 import {
-  isValidSixDigitPublicCode,
+  isValidPublicExamCode,
   normalizeExamCode,
   normalizeExamCodeCompact,
+  normalizePublicExamCode,
 } from '../utils/urlHelper';
 import {
   fetchPublicExamByPublicCode,
@@ -773,10 +774,10 @@ export const StorageService = {
   },
 
   getExamByPublicCode(rawPublicCode: string, uid?: string): Exam | undefined {
-    const clean = (rawPublicCode || '').trim();
-    if (!isValidSixDigitPublicCode(clean)) return undefined;
+    const clean = normalizePublicExamCode(rawPublicCode);
+    if (!clean) return undefined;
     const matchByPublicCode = (list: Exam[]) =>
-      list.find((e) => (e.publicCode || '').trim() === clean);
+      list.find((e) => normalizePublicExamCode(e.publicCode) === clean);
     return (
       matchByPublicCode(this.getExams(uid)) ||
       matchByPublicCode(readJsonArray<Exam>(STORAGE_KEYS.EXAMS) || []) ||
@@ -885,10 +886,23 @@ export const StorageService = {
     }
 
     try {
-      const cloudResult =
+      const normalizedRaw = normalizeExamCode(rawCode);
+      let cloudResult =
         kind === 'publicCode'
-          ? await fetchPublicExamByPublicCode(rawCode)
+          ? await fetchPublicExamByPublicCode(normalizePublicExamCode(rawCode) || rawCode)
           : await fetchPublicExamFromFirestore(rawCode);
+
+      // If student typed a 6-char short link code (e.g. H7K9P2 or 583921) in manual examCode lookup, fallback to examLinks
+      if (
+        kind === 'examCode' &&
+        cloudResult.status === 'not_found' &&
+        isValidPublicExamCode(normalizedRaw)
+      ) {
+        const publicLinkResult = await fetchPublicExamByPublicCode(normalizedRaw);
+        if (publicLinkResult.status !== 'not_found') {
+          cloudResult = publicLinkResult;
+        }
+      }
 
       if (
         cloudResult.status === 'found' ||

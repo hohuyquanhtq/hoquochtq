@@ -76,7 +76,9 @@ service cloud.firestore {
     }
 
     function isValidPublicCode(code) {
-      return code is string && code.size() == 6 && code.matches('^[0-9]{6}$');
+      return code is string && code.size() == 6 && (
+        code.matches('^[0-9]{6}$') || code.matches('^[A-HJ-NP-Z2-9]{6}$')
+      );
     }
 
     // 3. Entity Validation Blueprints
@@ -513,17 +515,20 @@ service cloud.firestore {
           'totalScore', 'maxPossibleScore', 'correctQuestionsCount', 'status', 'createdAt'
         ])
         && data.keys().hasOnly([
-          'id', 'examId', 'examTitle', 'examCode', 'variantCode', 'ownerId',
+          'id', 'attemptId', 'examId', 'examTitle', 'examCode', 'publicCode', 'variantCode', 'ownerId',
           'studentId', 'studentName', 'studentClass', 'startedAt', 'submittedAt',
           'durationSeconds', 'answers', 'part1Score', 'part2Score', 'part3Score',
-          'totalScore', 'maxPossibleScore', 'correctQuestionsCount',
+          'totalScore', 'maxPossibleScore', 'totalQuestions', 'correctQuestionsCount',
+          'wrongQuestionsCount', 'unansweredQuestionsCount',
           'tabSwitchesCount', 'status', 'gradedByServer', 'serverGradeDigest',
           'serverGradedAt', 'createdAt'
         ])
         && isValidId(data.id)
+        && (!('attemptId' in data) || (data.attemptId is string && data.attemptId.size() <= 128))
         && isValidId(data.examId)
         && data.examTitle is string && data.examTitle.size() >= 1 && data.examTitle.size() <= 300
         && isValidExamCode(data.examCode)
+        && (!('publicCode' in data) || isValidPublicCode(data.publicCode))
         && (!('variantCode' in data) || (data.variantCode is string && data.variantCode.size() <= 32))
         && isValidId(data.ownerId)
         && data.studentId is string && data.studentId.size() >= 1 && data.studentId.size() <= 128
@@ -538,7 +543,10 @@ service cloud.firestore {
         && data.part3Score is number && data.part3Score >= 0 && data.part3Score <= 100
         && data.totalScore is number && data.totalScore >= 0 && data.totalScore <= 100
         && data.maxPossibleScore is number && data.maxPossibleScore >= 0 && data.maxPossibleScore <= 100
+        && (!('totalQuestions' in data) || (data.totalQuestions is number && data.totalQuestions >= 0 && data.totalQuestions <= 200))
         && data.correctQuestionsCount is number && data.correctQuestionsCount >= 0 && data.correctQuestionsCount <= 200
+        && (!('wrongQuestionsCount' in data) || (data.wrongQuestionsCount is number && data.wrongQuestionsCount >= 0 && data.wrongQuestionsCount <= 200))
+        && (!('unansweredQuestionsCount' in data) || (data.unansweredQuestionsCount is number && data.unansweredQuestionsCount >= 0 && data.unansweredQuestionsCount <= 200))
         && (!('tabSwitchesCount' in data) || (data.tabSwitchesCount is number && data.tabSwitchesCount >= 0 && data.tabSwitchesCount <= 10000))
         && data.status in ['completed', 'in_progress', 'timed_out']
         && (!('gradedByServer' in data) || data.gradedByServer is bool)

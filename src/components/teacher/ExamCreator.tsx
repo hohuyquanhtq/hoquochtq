@@ -365,7 +365,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     try {
       if (!auth.currentUser) {
         setFormError(
-          'Bạn cần đăng nhập tài khoản Giáo viên để tạo đề thi và cấp đường dẫn 6 chữ số.'
+          'Bạn cần đăng nhập tài khoản Giáo viên để tạo đề thi và cấp đường dẫn 6 ký tự.'
         );
         return;
       }
@@ -379,7 +379,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       if (!allocRes.ok || !allocRes.publicCode) {
         setFormError(
           allocRes.error ||
-            'Không thể cấp mã đường dẫn 6 chữ số duy nhất từ máy chủ. Vui lòng thử lại!'
+            'Không thể cấp mã đường dẫn 6 ký tự duy nhất từ máy chủ. Vui lòng thử lại!'
         );
         return;
       }

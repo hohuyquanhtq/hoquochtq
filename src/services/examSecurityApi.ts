@@ -5,7 +5,7 @@ import {
   StudentSubmission,
 } from '../types';
 import { auth, AnswerKeyEntry } from './firebase';
-import { normalizeExamCode } from '../utils/urlHelper';
+import { normalizeExamCode, normalizePublicExamCode } from '../utils/urlHelper';
 
 function accessStorageKey(examCode: string, uid: string): string {
   return `hqtest_exam_access_${normalizeExamCode(examCode)}_${uid}`;
@@ -326,7 +326,9 @@ export async function accessExamQuestionsOnServer(examCode: string): Promise<{
 
 export async function submitAndGradeExamOnServer(params: {
   submissionId: string;
+  attemptId?: string;
   examCode: string;
+  publicCode?: string;
   examTitle?: string;
   variantCode?: string;
   studentName: string;
@@ -480,7 +482,7 @@ export async function allocateExamPublicCodeOnServer(params: {
     return {
       ok: false,
       code: 'AUTH_ERROR',
-      error: '[AUTH_ERROR] Cần đăng nhập tài khoản giáo viên để cấp mã đường dẫn 6 chữ số.',
+      error: '[AUTH_ERROR] Cần đăng nhập tài khoản giáo viên để cấp mã đường dẫn 6 ký tự.',
     };
   }
 
@@ -508,15 +510,17 @@ export async function allocateExamPublicCodeOnServer(params: {
       };
     }
 
-    const publicCode = typeof data.publicCode === 'string' ? data.publicCode.trim() : '';
-    if (!res.ok || !data.ok || !/^\d{6}$/.test(publicCode)) {
+    const publicCode = normalizePublicExamCode(
+      typeof data.publicCode === 'string' ? data.publicCode : ''
+    );
+    if (!res.ok || !data.ok || !publicCode) {
       return {
         ok: false,
         code: typeof data.code === 'string' ? data.code : 'EXAM_SAVE_ERROR',
         error:
           typeof data.error === 'string' && data.error
             ? data.error
-            : `Không thể cấp mã đường dẫn 6 chữ số cho đề thi (HTTP ${res.status}).`,
+            : `Không thể cấp mã đường dẫn 6 ký tự cho đề thi (HTTP ${res.status}).`,
       };
     }
 
@@ -532,7 +536,7 @@ export async function allocateExamPublicCodeOnServer(params: {
       error:
         err instanceof Error
           ? err.message
-          : 'Không thể kết nối máy chủ để cấp mã đường dẫn 6 chữ số.',
+          : 'Không thể kết nối máy chủ để cấp mã đường dẫn 6 ký tự.',
     };
   }
 }

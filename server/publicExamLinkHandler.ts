@@ -16,7 +16,9 @@ import {
 import { firestoreGetDoc } from './firestoreRest.ts';
 import { normalizeExamCodeServer } from './serverGrading.ts';
 
-const PUBLIC_CODE_REGEX = /^[0-9]{6}$/;
+export const EXAM_LINK_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+const NEW_PUBLIC_CODE_REGEX = /^[A-HJ-NP-Z2-9]{6}$/;
+const LEGACY_PUBLIC_CODE_REGEX = /^[0-9]{6}$/;
 const SAFE_DOC_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
 const MAX_ALLOCATION_ATTEMPTS = 30;
 
@@ -81,16 +83,40 @@ export class PublicExamLinkError extends Error {
   }
 }
 
+export function isValidNewPublicCodeServer(value: unknown): value is string {
+  return typeof value === 'string' && NEW_PUBLIC_CODE_REGEX.test(value.trim().toUpperCase());
+}
+
+export function isValidLegacyNumericPublicCodeServer(value: unknown): value is string {
+  return typeof value === 'string' && LEGACY_PUBLIC_CODE_REGEX.test(value.trim());
+}
+
+export function normalizePublicCodeServer(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (LEGACY_PUBLIC_CODE_REGEX.test(trimmed)) return trimmed;
+  const upper = trimmed.toUpperCase();
+  return NEW_PUBLIC_CODE_REGEX.test(upper) ? upper : '';
+}
+
 export function isValidSixDigitPublicCodeServer(value: unknown): value is string {
-  return typeof value === 'string' && PUBLIC_CODE_REGEX.test(value.trim());
+  return normalizePublicCodeServer(value) !== '';
 }
 
 /**
- * Generates a cryptographically random 6-digit numeric string (000000 - 999999),
- * preserving leading zeros (always exactly 6 characters).
+ * Generates a cryptographically random 6-character uppercase alphanumeric code
+ * excluding ambiguous characters (O, 0, I, 1).
  */
+export function generateAlphanumericPublicCode(): string {
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += EXAM_LINK_ALPHABET[crypto.randomInt(0, EXAM_LINK_ALPHABET.length)];
+  }
+  return code;
+}
+
 export function generateSixDigitPublicCode(): string {
-  return crypto.randomInt(0, 1_000_000).toString().padStart(6, '0');
+  return generateAlphanumericPublicCode();
 }
 
 function sanitizeDocId(raw: unknown): string {
@@ -179,7 +205,7 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
       isAdmin,
       isPublished,
       existingPublicCode,
-      codeGenerator = generateSixDigitPublicCode,
+      codeGenerator = generateAlphanumericPublicCode,
     }) {
       const db = getFirebaseAdminDb();
       const FieldValue = getFirebaseAdminFieldValue();
@@ -221,15 +247,15 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
             : Boolean(isPublished);
         const nowIso = new Date().toISOString();
 
-        // Check if this exam already has a permanently assigned valid 6-digit publicCode
+        // Check if this exam already has a permanently assigned valid publicCode (alphanumeric or legacy 6-digit)
         const candidateExistingList = [
           masterData?.publicCode,
           statusData?.publicCode,
           pubData?.publicCode,
           existingPublicCode,
         ]
-          .filter((v): v is string => isValidSixDigitPublicCodeServer(v))
-          .map((v) => v.trim());
+          .map((v) => normalizePublicCodeServer(v))
+          .filter(Boolean);
 
         const existingCodeToReuse = candidateExistingList[0] || '';
         if (existingCodeToReuse) {
@@ -339,8 +365,8 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
         if (!existingByExamQuery.empty) {
           const foundDoc = existingByExamQuery.docs[0];
           const foundData = foundDoc.data() as Partial<PublicExamLinkDoc>;
-          if (isValidSixDigitPublicCodeServer(foundDoc.id)) {
-            const stableCode = foundDoc.id.trim();
+          const stableCode = normalizePublicCodeServer(foundDoc.id);
+          if (stableCode) {
             if (
               foundData.isActive !== resolvedIsPublished ||
               foundData.examCode !== examCode
@@ -384,11 +410,11 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
           }
         }
 
-        // Allocate a fresh unique 6-digit numeric string atomically
+        // Allocate a fresh unique 6-character alphanumeric code atomically
         const tried = new Set<string>();
         for (let attempt = 0; attempt < MAX_ALLOCATION_ATTEMPTS; attempt++) {
-          const candidate = String(codeGenerator()).trim();
-          if (!isValidSixDigitPublicCodeServer(candidate) || tried.has(candidate)) {
+          const candidate = normalizePublicCodeServer(String(codeGenerator()));
+          if (!candidate || tried.has(candidate)) {
             continue;
           }
           tried.add(candidate);
@@ -444,7 +470,7 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
           409,
           'EXAM_SAVE_ERROR',
           'allocate_public_code',
-          'Không thể cấp mã truy cập 6 chữ số duy nhất sau nhiều lần thử. Vui lòng thử lại.'
+          'Không thể cấp mã truy cập 6 ký tự duy nhất sau nhiều lần thử. Vui lòng thử lại.'
         );
       });
     },
@@ -463,8 +489,9 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
       const linksCol = db.collection('examLinks');
 
       const docsToHandle: Array<{ ref: FirebaseFirestore.DocumentReference; data: Partial<PublicExamLinkDoc> }> = [];
-      if (isValidSixDigitPublicCodeServer(publicCode)) {
-        const directRef = linksCol.doc(publicCode.trim());
+      const cleanPublicCode = normalizePublicCodeServer(publicCode);
+      if (cleanPublicCode) {
+        const directRef = linksCol.doc(cleanPublicCode);
         const directSnap = await directRef.get();
         if (directSnap.exists) {
           docsToHandle.push({
@@ -576,9 +603,8 @@ export function createPublicExamLinkHandlers(
       const examId = sanitizeDocId(body.examId);
       const examCode = normalizeExamCodeServer(String(body.examCode || ''));
       const isPublished = body.isPublished !== false;
-      const existingPublicCode = isValidSixDigitPublicCodeServer(body.existingPublicCode)
-        ? body.existingPublicCode.trim()
-        : null;
+      const normalizedExisting = normalizePublicCodeServer(body.existingPublicCode);
+      const existingPublicCode = normalizedExisting || null;
 
       if (!examId || !examCode || !/^[A-Z0-9-]{2,32}$/.test(examCode)) {
         return {
@@ -719,9 +745,8 @@ export function createPublicExamLinkHandlers(
       const action = body.action === 'delete' ? 'delete' : 'set_active';
       const examId = sanitizeDocId(body.examId);
       const examCode = normalizeExamCodeServer(String(body.examCode || ''));
-      const publicCode = isValidSixDigitPublicCodeServer(body.publicCode)
-        ? body.publicCode.trim()
-        : null;
+      const normalizedPublic = normalizePublicCodeServer(body.publicCode);
+      const publicCode = normalizedPublic || null;
       const isActive = Boolean(body.isActive);
 
       if (!examId && !examCode && !publicCode) {

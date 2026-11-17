@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { StudentSubmission, Exam } from '../types';
+import { evaluateExamAttemptDetails } from './gradingEngine';
 
 /**
  * Exports exam submissions to a nicely styled Excel (.xlsx) file
@@ -17,6 +18,24 @@ export function exportExamResultsToExcel(exam: Exam, submissions: StudentSubmiss
     const durationSecs = sub.durationSeconds % 60;
     const durationStr = `${durationMins}p ${durationSecs}s`;
 
+    const hasPersistedBreakdown =
+      typeof sub.wrongQuestionsCount === 'number' &&
+      typeof sub.unansweredQuestionsCount === 'number';
+    const evaluated = hasPersistedBreakdown
+      ? null
+      : evaluateExamAttemptDetails(exam, sub.answers || {});
+
+    const correctCount =
+      typeof sub.correctQuestionsCount === 'number'
+        ? sub.correctQuestionsCount
+        : evaluated?.correctCount ?? 0;
+    const wrongCount = hasPersistedBreakdown
+      ? sub.wrongQuestionsCount!
+      : evaluated?.wrongCount ?? 0;
+    const unansweredCount = hasPersistedBreakdown
+      ? sub.unansweredQuestionsCount!
+      : evaluated?.unansweredCount ?? 0;
+
     return {
       'STT': index + 1,
       'Họ và tên': sub.studentName,
@@ -25,6 +44,9 @@ export function exportExamResultsToExcel(exam: Exam, submissions: StudentSubmiss
       'Thời gian bắt đầu': new Date(sub.startedAt).toLocaleString('vi-VN'),
       'Thời gian nộp bài': new Date(sub.submittedAt).toLocaleString('vi-VN'),
       'Thời gian làm bài': durationStr,
+      'Số câu đúng': correctCount,
+      'Số câu sai': wrongCount,
+      'Chưa làm': unansweredCount,
       'Điểm Phần I (Trắc nghiệm)': Number(sub.part1Score.toFixed(2)),
       'Điểm Phần II (Đúng/Sai)': Number(sub.part2Score.toFixed(2)),
       'Điểm Phần III (Trả lời ngắn)': Number(sub.part3Score.toFixed(2)),
@@ -67,6 +89,9 @@ export function exportExamResultsToExcel(exam: Exam, submissions: StudentSubmiss
     { wch: 20 }, // Bắt đầu
     { wch: 20 }, // Nộp bài
     { wch: 16 }, // Thời gian làm
+    { wch: 12 }, // Câu đúng
+    { wch: 12 }, // Câu sai
+    { wch: 12 }, // Chưa làm
     { wch: 16 }, // Phần I
     { wch: 16 }, // Phần II
     { wch: 16 }, // Phần III

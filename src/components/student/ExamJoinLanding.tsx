@@ -25,7 +25,7 @@ import {
 import { Exam, User } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
 import { verifyExamPasswordOnServer } from '../../services/examSecurityApi';
-import { isValidSixDigitPublicCode } from '../../utils/urlHelper';
+import { normalizePublicExamCode } from '../../utils/urlHelper';
 
 export type ExamLandingStatus =
   | 'loading'
@@ -67,14 +67,12 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
   onRetryLookup,
   onBackToHome,
 }) => {
-  const isSixDigitEntry = entryKind === 'publicCode' || entryKind === 'invalidPublicUrl';
+  const isShortLinkEntry = entryKind === 'publicCode' || entryKind === 'invalidPublicUrl';
   const publicBadgeCode =
-    isValidSixDigitPublicCode(exam?.publicCode)
-      ? exam!.publicCode!.trim()
-      : isValidSixDigitPublicCode(examCode)
-      ? examCode!.trim()
-      : '';
-  const visibleBadgeCode = isSixDigitEntry
+    normalizePublicExamCode(exam?.publicCode) ||
+    normalizePublicExamCode(examCode) ||
+    '';
+  const visibleBadgeCode = isShortLinkEntry
     ? publicBadgeCode
     : exam?.code || examCode || '';
   const [studentName, setStudentName] = useState(currentUser?.name || '');
@@ -276,7 +274,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
     const isUnauthorized = status === 'unauthorized';
     const isNetwork = status === 'network_error';
     const isUnexpected = status === 'unexpected_error' || status === 'firebase_not_initialized';
-    const displayCode = visibleBadgeCode || (isSixDigitEntry ? '' : examCode || 'N/A');
+    const displayCode = visibleBadgeCode || (isShortLinkEntry ? '' : examCode || 'N/A');
 
     const titleText =
       status === 'not_published'
@@ -293,7 +291,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
         ? 'Firestore chưa khởi tạo'
         : status === 'unexpected_error'
         ? 'Lỗi hệ thống'
-        : isSixDigitEntry
+        : isShortLinkEntry
         ? 'Đường dẫn đề thi không hợp lệ'
         : 'Không tìm thấy mã bài thi';
 
@@ -308,7 +306,7 @@ export const ExamJoinLanding: React.FC<ExamJoinLandingProps> = ({
         ? 'Dịch vụ cơ sở dữ liệu Firestore chưa được khởi tạo sẵn sàng. Vui lòng kiểm tra cấu hình hoặc tải lại trang.'
         : status === 'unexpected_error'
         ? 'Hệ thống gặp sự cố không mong muốn khi tải thông tin bài thi. Vui lòng thử tải lại.'
-        : isSixDigitEntry
+        : isShortLinkEntry
         ? 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại'
         : `Không tìm thấy bài thi với mã "${displayCode}".`;
 

@@ -27,6 +27,9 @@ interface ExamResultViewProps {
   submission: StudentSubmission;
   exam?: Exam;
   answerReviewCheck?: ExamAnswerReviewCheck | null;
+  submitSyncError?: string | null;
+  isRetryingSubmit?: boolean;
+  onRetrySubmit?: () => void;
   isTeacherPreview?: boolean;
   onUnlockAnswers?: (hydratedExam: Exam) => void;
   onBackToHome: () => void;
@@ -46,6 +49,9 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
   submission,
   exam,
   answerReviewCheck,
+  submitSyncError,
+  isRetryingSubmit = false,
+  onRetrySubmit,
   isTeacherPreview = false,
   onUnlockAnswers,
   onBackToHome,
@@ -171,6 +177,33 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
         </span>
       </div>
 
+      {/* Server Grading Sync Failure Banner with Retry */}
+      {submitSyncError && (
+        <div className="p-4 sm:p-5 bg-rose-50 border-2 border-rose-300 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm">
+          <div className="flex items-start gap-3 text-rose-950 text-xs sm:text-sm">
+            <AlertCircle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold">Chưa gửi được bài làm lên máy chủ để chấm điểm chính thức</p>
+              <p className="text-xs text-rose-800 leading-relaxed">{submitSyncError}</p>
+              <p className="text-[11px] text-rose-700 font-medium">
+                Bài làm của bạn đã được giữ nguyên trên thiết bị. Nhấn nút bên cạnh để gửi lại ngay.
+              </p>
+            </div>
+          </div>
+          {onRetrySubmit && (
+            <button
+              type="button"
+              onClick={onRetrySubmit}
+              disabled={isRetryingSubmit}
+              className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-xs font-extrabold shadow-md shadow-rose-500/20 flex items-center justify-center gap-2 shrink-0 transition-all"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRetryingSubmit ? 'animate-spin' : ''}`} />
+              <span>{isRetryingSubmit ? 'Đang nộp lại...' : 'Nộp lại lên máy chủ'}</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {/* Hero Score Card */}
       <div className={`p-6 sm:p-8 rounded-3xl border-2 text-center shadow-lg ${scoreColor} space-y-4`}>
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/80 backdrop-blur-xs text-xs font-bold shadow-2xs">
@@ -191,14 +224,25 @@ export const ExamResultView: React.FC<ExamResultViewProps> = ({
         {showScore ? (
           <>
             <div className="py-2">
-              <span className="text-5xl sm:text-6xl font-black tracking-tight text-slate-900">
+              <span className="text-5xl sm:text-6xl font-black tracking-tight tabular-nums text-slate-900">
                 {submission.totalScore.toFixed(2)}
               </span>
               <span className="text-xl font-bold text-slate-500"> / 10.0</span>
+              {(typeof submission.totalQuestions === 'number' || typeof submission.wrongQuestionsCount === 'number') && (
+                <p className="text-xs font-semibold text-slate-700 mt-2 tabular-nums">
+                  Đúng <b className="text-emerald-700">{submission.correctQuestionsCount}</b>
+                  {typeof submission.wrongQuestionsCount === 'number' && (
+                    <> • Sai <b className="text-rose-700">{submission.wrongQuestionsCount}</b></>
+                  )}
+                  {typeof submission.unansweredQuestionsCount === 'number' && (
+                    <> • Chưa làm <b className="text-slate-700">{submission.unansweredQuestionsCount}</b></>
+                  )}
+                </p>
+              )}
             </div>
 
             {/* Detailed Breakdown Pill Row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-2xl mx-auto text-xs tabular-nums">
               <div className="p-3 bg-white/90 rounded-2xl border border-slate-200/60 shadow-2xs">
                 <p className="text-[10px] text-slate-500 font-medium">Phần I (Trắc nghiệm)</p>
                 <p className="text-base font-extrabold text-blue-700 mt-0.5">{submission.part1Score.toFixed(2)}đ</p>

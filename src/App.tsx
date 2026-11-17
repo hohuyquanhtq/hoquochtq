@@ -33,13 +33,15 @@ import {
 import {
   extractExamEntryFromLocation,
   ExamUrlEntry,
-  isValidSixDigitPublicCode,
+  isValidPublicExamCode,
+  normalizePublicExamCode,
   normalizeExamCode,
 } from './utils/urlHelper';
 import {
   syncExamToFirestore,
   deleteExamFromFirestore,
-  saveSubmissionToFirestore,
+  fetchTeacherSubmissionsFromFirestore,
+  subscribeTeacherSubmissions,
   sanitizeExamForStudent,
 } from './services/firebase';
 import {
@@ -158,6 +160,15 @@ export default function App() {
   const [reviewIsTeacherPreview, setReviewIsTeacherPreview] = useState<boolean>(false);
   const [pendingExamEntryAfterAuth, setPendingExamEntryAfterAuth] = useState<ExamUrlEntry | null>(null);
   const [selectedExamIdForResults, setSelectedExamIdForResults] = useState<string | null>(null);
+  const [isRefreshingSubmissions, setIsRefreshingSubmissions] = useState(false);
+  const [lastSubmissionsSyncAt, setLastSubmissionsSyncAt] = useState<string | null>(null);
+  const [submitSyncError, setSubmitSyncError] = useState<string | null>(null);
+  const [isRetryingSubmit, setIsRetryingSubmit] = useState(false);
+  const [pendingCloudSubmitPayload, setPendingCloudSubmitPayload] = useState<{
+    exam: Exam;
+    rawSubmission: StudentSubmission;
+    ownerId: string;
+  } | null>(null);
 
   // Preload questions & folder target for ExamCreator + persistent active folder explorer state
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
@@ -221,6 +232,7 @@ export default function App() {
         setCustomSubjects(ws.subjects || []);
         setExams(ws.exams);
         setSubmissions(ws.submissions);
+        setLastSubmissionsSyncAt(new Date().toISOString());
         setClasses(ws.classes);
         setEnrollments(ws.enrollments);
 
@@ -230,8 +242,8 @@ export default function App() {
         StorageService.saveExams(ws.exams, uid);
         StorageService.saveSubmissions(ws.submissions, uid);
 
-        // One-time background backfill: permanently assign a unique 6-digit publicCode to legacy exams
-        const missingPublicCodes = ws.exams.filter((ex) => !isValidSixDigitPublicCode(ex.publicCode));
+        // One-time background backfill: permanently assign a unique 6-char publicCode to legacy exams
+        const missingPublicCodes = ws.exams.filter((ex) => !normalizePublicExamCode(ex.publicCode));
         if (missingPublicCodes.length > 0 && backfillingUidRef.current !== uid) {
           backfillingUidRef.current = uid;
           void (async () => {
@@ -251,7 +263,7 @@ export default function App() {
                 setExams((prev) => {
                   const next = prev.map((item) => {
                     const assigned = allocatedMap.get(item.id);
-                    return assigned && !isValidSixDigitPublicCode(item.publicCode)
+                    return assigned && !normalizePublicExamCode(item.publicCode)
                       ? { ...item, publicCode: assigned }
                       : item;
                   });
@@ -260,7 +272,7 @@ export default function App() {
                 });
               }
             } catch (err) {
-              console.warn('[HQTest] Backfill 6-digit publicCode notice:', err);
+              console.warn('[HQTest] Backfill publicCode notice:', err);
             } finally {
               if (backfillingUidRef.current === uid) {
                 backfillingUidRef.current = null;
@@ -297,6 +309,41 @@ export default function App() {
     }
   }, [authState, userProfile, hydrateAuthenticatedWorkspace, resetWorkspaceMemoryState, guestExamMode, pendingExamEntryAfterAuth]);
 
+  useEffect(() => {
+    if (
+      authState !== 'authenticated' ||
+      !activeUid ||
+      (userProfile?.role !== 'teacher' && userProfile?.role !== 'admin')
+    ) {
+      return;
+    }
+
+    const unsubscribe = subscribeTeacherSubmissions(activeUid, (liveSubs) => {
+      setSubmissions(liveSubs);
+      StorageService.saveSubmissions(liveSubs, activeUid);
+      setLastSubmissionsSyncAt(new Date().toISOString());
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [authState, activeUid, userProfile?.role]);
+
+  const handleRefreshTeacherSubmissions = useCallback(async () => {
+    if (!activeUid) return;
+    setIsRefreshingSubmissions(true);
+    try {
+      const fresh = await fetchTeacherSubmissionsFromFirestore(activeUid);
+      setSubmissions(fresh);
+      StorageService.saveSubmissions(fresh, activeUid);
+      setLastSubmissionsSyncAt(new Date().toISOString());
+    } catch (err) {
+      console.warn('[HQTest] Không thể làm mới danh sách bài nộp:', err);
+    } finally {
+      setIsRefreshingSubmissions(false);
+    }
+  }, [activeUid]);
+
   const reloadDataFromStorage = useCallback(() => {
     if (!activeUid) return;
     setQuestions(StorageService.getQuestions(activeUid));
@@ -308,7 +355,12 @@ export default function App() {
 
   const resolveDirectExamByCode = useCallback(
     async (rawValue: string, kind: ExamUrlEntry['kind'] = 'examCode') => {
-      const clean = kind === 'examCode' ? normalizeExamCode(rawValue) : rawValue.trim();
+      const clean =
+        kind === 'examCode'
+          ? normalizeExamCode(rawValue)
+          : kind === 'publicCode'
+          ? normalizePublicExamCode(rawValue) || rawValue.trim().toUpperCase()
+          : rawValue.trim();
       if (!clean) return;
 
       if (typeof window !== 'undefined') {
@@ -789,6 +841,7 @@ export default function App() {
   const handleOpenExamResults = (examId: string) => {
     setSelectedExamIdForResults(examId);
     setActiveTab('exam_results');
+    void handleRefreshTeacherSubmissions();
   };
 
   // --- Handlers for Student & Exam Taking Actions ---
@@ -797,17 +850,20 @@ export default function App() {
     setActiveExamOwnerId(ownerId || exam.ownerId);
     setActiveStudentName(name);
     setActiveStudentClass(cls);
+    setSubmitSyncError(null);
+    setPendingCloudSubmitPayload(null);
 
     if (typeof window !== 'undefined') {
       try {
         const currentEntry = extractExamEntryFromLocation(window.location);
-        if (isValidSixDigitPublicCode(exam.publicCode)) {
-          const shortPath = `/${exam.publicCode.trim()}`;
+        const normalizedPubCode = normalizePublicExamCode(exam.publicCode);
+        if (normalizedPubCode) {
+          const shortPath = `/${normalizedPubCode}`;
           if (window.location.pathname !== shortPath || window.location.search) {
             window.history.replaceState({}, '', shortPath);
           }
         } else if (currentEntry?.kind === 'publicCode') {
-          const shortPath = `/${currentEntry.value}`;
+          const shortPath = `/${normalizePublicExamCode(currentEntry.value) || currentEntry.value}`;
           if (window.location.pathname !== shortPath || window.location.search) {
             window.history.replaceState({}, '', shortPath);
           }
@@ -824,6 +880,9 @@ export default function App() {
   };
 
   const handleFinishExam = async (rawSubmission: StudentSubmission) => {
+    setSubmitSyncError(null);
+    setPendingCloudSubmitPayload(null);
+
     let finalSubmission: StudentSubmission = {
       ...rawSubmission,
       studentId: activeUid || rawSubmission.studentId || 'guest_student',
@@ -834,6 +893,7 @@ export default function App() {
       : undefined;
     let nextReviewCheck: ExamAnswerReviewCheck | null = null;
     let nextIsTeacherPreview = false;
+    let cloudSubmitFailed = false;
 
     if (activeExamForTaking) {
       const teacherMaster =
@@ -852,7 +912,8 @@ export default function App() {
           rawSubmission.studentClass,
           rawSubmission.startedAt,
           rawSubmission.answers,
-          rawSubmission.tabSwitchesCount || 0
+          rawSubmission.tabSwitchesCount || 0,
+          rawSubmission.attemptId
         );
         finalSubmission = {
           ...graded,
@@ -873,7 +934,9 @@ export default function App() {
         // Cloud exam: server-authoritative grading & floor-score verification
         const serverRes = await submitAndGradeExamOnServer({
           submissionId: rawSubmission.id,
+          attemptId: rawSubmission.attemptId,
           examCode: activeExamForTaking.code,
+          publicCode: normalizePublicExamCode(activeExamForTaking.publicCode) || undefined,
           examTitle: activeExamForTaking.title,
           studentName: rawSubmission.studentName,
           studentClass: rawSubmission.studentClass,
@@ -889,19 +952,24 @@ export default function App() {
           nextReviewCheck = serverRes.answerReviewCheck || null;
           examForReview = sanitizeExamForStudent(activeExamForTaking);
         } else {
-          // Server unreachable fallback: never leak client keys for cloud exams
+          // Never fabricate a 0-score submission on Firestore; keep student's attempt intact and allow retry
+          cloudSubmitFailed = true;
+          const errMessage =
+            serverRes.error ||
+            'Không thể kết nối máy chủ chấm điểm để ghi nhận bài làm. Vui lòng thử nộp lại.';
+          setSubmitSyncError(errMessage);
+          setPendingCloudSubmitPayload({
+            exam: activeExamForTaking,
+            rawSubmission,
+            ownerId: resolvedOwnerId,
+          });
           nextReviewCheck = {
             allowed: false,
             reason: 'server_unavailable',
             score: finalSubmission.totalScore,
             minScore: activeExamForTaking.answerReviewMinScore ?? 8.0,
-            message:
-              serverRes.error ||
-              'Không thể kết nối máy chủ chấm điểm để xác thực quyền xem đáp án. Vui lòng thử lại sau.',
+            message: errMessage,
           };
-          if (!activeExamForTaking.requiresPassword) {
-            void saveSubmissionToFirestore(finalSubmission, resolvedOwnerId);
-          }
         }
       } else {
         // Built-in local sample/demo exam (no remote owner)
@@ -917,7 +985,8 @@ export default function App() {
             rawSubmission.studentClass,
             rawSubmission.startedAt,
             rawSubmission.answers,
-            rawSubmission.tabSwitchesCount || 0
+            rawSubmission.tabSwitchesCount || 0,
+            rawSubmission.attemptId
           );
           finalSubmission = {
             ...graded,
@@ -938,7 +1007,7 @@ export default function App() {
       }
     }
 
-    if (activeUid) {
+    if (activeUid && !cloudSubmitFailed) {
       StorageService.addSubmission(finalSubmission, activeUid);
       setSubmissions(StorageService.getSubmissions(undefined, activeUid));
     }
@@ -947,6 +1016,46 @@ export default function App() {
     setReviewExamOverride(examForReview);
     setReviewSubmission(finalSubmission);
     setActiveTab('review_submission');
+  };
+
+  const handleRetryCloudSubmission = async () => {
+    if (!pendingCloudSubmitPayload || isRetryingSubmit) return;
+    setIsRetryingSubmit(true);
+    try {
+      const { exam, rawSubmission } = pendingCloudSubmitPayload;
+      const serverRes = await submitAndGradeExamOnServer({
+        submissionId: rawSubmission.id,
+        attemptId: rawSubmission.attemptId,
+        examCode: exam.code,
+        publicCode: normalizePublicExamCode(exam.publicCode) || undefined,
+        examTitle: exam.title,
+        studentName: rawSubmission.studentName,
+        studentClass: rawSubmission.studentClass,
+        startedAt: rawSubmission.startedAt,
+        durationSeconds: rawSubmission.durationSeconds,
+        answers: rawSubmission.answers,
+        tabSwitchesCount: rawSubmission.tabSwitchesCount || 0,
+        status: rawSubmission.status === 'timed_out' ? 'timed_out' : 'completed',
+      });
+
+      if (serverRes.ok && serverRes.submission) {
+        setSubmitSyncError(null);
+        setPendingCloudSubmitPayload(null);
+        setReviewSubmission(serverRes.submission);
+        setReviewAnswerCheck(serverRes.answerReviewCheck || null);
+        setReviewExamOverride(sanitizeExamForStudent(exam));
+        if (activeUid) {
+          StorageService.addSubmission(serverRes.submission, activeUid);
+          setSubmissions(StorageService.getSubmissions(undefined, activeUid));
+        }
+      } else {
+        setSubmitSyncError(
+          serverRes.error || 'Vẫn chưa thể gửi bài làm lên máy chủ. Vui lòng kiểm tra mạng và thử lại.'
+        );
+      }
+    } finally {
+      setIsRetryingSubmit(false);
+    }
   };
 
   const handleReviewSubmission = (sub: StudentSubmission) => {
@@ -1035,7 +1144,7 @@ export default function App() {
           onQuickExamCodeLookup={(code) => {
             void resolveDirectExamByCode(
               code,
-              isValidSixDigitPublicCode(code) ? 'publicCode' : 'examCode'
+              isValidPublicExamCode(code) ? 'publicCode' : 'examCode'
             );
           }}
         />
@@ -1207,6 +1316,9 @@ export default function App() {
             submission={reviewSubmission}
             exam={reviewExamOverride}
             answerReviewCheck={reviewAnswerCheck}
+            submitSyncError={submitSyncError}
+            isRetryingSubmit={isRetryingSubmit}
+            onRetrySubmit={pendingCloudSubmitPayload ? () => void handleRetryCloudSubmission() : undefined}
             isTeacherPreview={reviewIsTeacherPreview}
             onUnlockAnswers={(hydrated) => setReviewExamOverride(hydrated)}
             onBackToHome={() => {
@@ -1383,17 +1495,37 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'exam_results' && (
-              <ExamResults
-                exam={exams.find((e) => e.id === selectedExamIdForResults) || exams[0]}
-                exams={exams}
-                submissions={submissions.filter(
-                  (s) => s.examId === (selectedExamIdForResults || exams[0]?.id)
-                )}
-                onSelectExam={(examId) => setSelectedExamIdForResults(examId)}
-                onBack={() => setActiveTab('exam_manager')}
-              />
-            )}
+            {activeTab === 'exam_results' && (() => {
+              const targetExam = exams.find((e) => e.id === selectedExamIdForResults) || exams[0];
+              const cleanTargetCode = targetExam ? normalizeExamCode(targetExam.code) : '';
+              const examSubs = targetExam
+                ? submissions.filter(
+                    (s) =>
+                      s.examId === targetExam.id ||
+                      (cleanTargetCode &&
+                        normalizeExamCode(s.examCode) === cleanTargetCode &&
+                        (!s.ownerId || !targetExam.ownerId || s.ownerId === targetExam.ownerId))
+                  )
+                : [];
+              return (
+                <ExamResults
+                  exam={targetExam}
+                  exams={exams}
+                  submissions={examSubs}
+                  currentUserId={activeUid}
+                  isAdmin={userProfile.role === 'admin'}
+                  onSelectExam={(examId) => setSelectedExamIdForResults(examId)}
+                  onBack={() => setActiveTab('exam_manager')}
+                  onShareExam={(ex) => {
+                    setAutoOpenShareExamId(ex.id);
+                    setActiveTab('exam_manager');
+                  }}
+                  onRefresh={handleRefreshTeacherSubmissions}
+                  isRefreshing={isRefreshingSubmissions}
+                  lastSyncedAt={lastSubmissionsSyncAt}
+                />
+              );
+            })()}
 
             {activeTab === 'user_guide' && (
               <UserGuideView
@@ -1473,7 +1605,7 @@ export default function App() {
               onOpenExamLanding={(code) =>
                 void resolveDirectExamByCode(
                   code,
-                  isValidSixDigitPublicCode(code) ? 'publicCode' : 'examCode'
+                  isValidPublicExamCode(code) ? 'publicCode' : 'examCode'
                 )
               }
               onReviewSubmission={handleReviewSubmission}

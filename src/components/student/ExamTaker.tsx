@@ -42,12 +42,73 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   // Local storage auto-save key
   const storageKey = `chemtest_progress_${exam?.id || 'unknown'}_${(studentName || 'student').replace(/\s+/g, '_')}`;
 
+  const [attemptId] = useState<string>(() => {
+    try {
+      const saved =
+        typeof window !== 'undefined' && window.localStorage
+          ? window.localStorage.getItem(storageKey)
+          : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.attemptId === 'string' && parsed.attemptId.trim()) {
+          return parsed.attemptId.trim();
+        }
+      }
+    } catch {}
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `att_${crypto.randomUUID().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+    }
+    return `att_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  });
+
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [answers, setAnswers] = useState<Record<string, StudentAnswer>>({});
-  const [startedAt] = useState<string>(() => new Date().toISOString());
-  
+  const [answers, setAnswers] = useState<Record<string, StudentAnswer>>(() => {
+    try {
+      const saved =
+        typeof window !== 'undefined' && window.localStorage
+          ? window.localStorage.getItem(storageKey)
+          : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed?.answers && typeof parsed.answers === 'object') {
+          return parsed.answers as Record<string, StudentAnswer>;
+        }
+      }
+    } catch {}
+    return {};
+  });
+  const [startedAt] = useState<string>(() => {
+    try {
+      const saved =
+        typeof window !== 'undefined' && window.localStorage
+          ? window.localStorage.getItem(storageKey)
+          : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.startedAt === 'string' && parsed.startedAt.trim()) {
+          return parsed.startedAt;
+        }
+      }
+    } catch {}
+    return new Date().toISOString();
+  });
+
   // Timer state (seconds)
-  const [timeLeftSeconds, setTimeLeftSeconds] = useState((exam?.durationMinutes || 45) * 60);
+  const [timeLeftSeconds, setTimeLeftSeconds] = useState<number>(() => {
+    try {
+      const saved =
+        typeof window !== 'undefined' && window.localStorage
+          ? window.localStorage.getItem(storageKey)
+          : null;
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (typeof parsed?.timeLeftSeconds === 'number' && parsed.timeLeftSeconds > 5) {
+          return parsed.timeLeftSeconds;
+        }
+      }
+    } catch {}
+    return (exam?.durationMinutes || 45) * 60;
+  });
   const [tabSwitchesCount, setTabSwitchesCount] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showConfirmSubmit, setShowConfirmSubmit] = useState(false);
@@ -55,32 +116,20 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
-  // Restore saved state from localStorage if available
-  useEffect(() => {
-    try {
-      const saved = typeof window !== 'undefined' && window.localStorage ? window.localStorage.getItem(storageKey) : null;
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.answers) setAnswers(parsed.answers);
-        if (parsed.timeLeftSeconds && parsed.timeLeftSeconds > 5) {
-          setTimeLeftSeconds(parsed.timeLeftSeconds);
-        }
-      }
-    } catch {}
-  }, [storageKey]);
-
-  // Auto-save answers whenever they change
+  // Auto-save answers & stable attemptId whenever they change
   useEffect(() => {
     try {
       if (typeof window !== 'undefined' && window.localStorage) {
         window.localStorage.setItem(storageKey, JSON.stringify({
+          attemptId,
+          startedAt,
           answers,
           timeLeftSeconds,
           timestamp: Date.now(),
         }));
       }
     } catch {}
-  }, [answers, timeLeftSeconds, storageKey]);
+  }, [attemptId, startedAt, answers, timeLeftSeconds, storageKey]);
 
   // Anti-cheat tab switch monitoring
   useEffect(() => {
@@ -206,7 +255,8 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
       studentClass,
       startedAt,
       answers,
-      tabSwitchesCount
+      tabSwitchesCount,
+      attemptId
     );
 
     if (autoTimeout) {

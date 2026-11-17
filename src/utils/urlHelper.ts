@@ -116,8 +116,46 @@ export function getPublicDomain(): string {
   return '';
 }
 
+export const EXAM_LINK_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+export const PUBLIC_CODE_NEW_REGEX = /^[A-HJ-NP-Z2-9]{6}$/;
+export const PUBLIC_CODE_LEGACY_NUMERIC_REGEX = /^[0-9]{6}$/;
+
+export function isValidNewPublicCode(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  return PUBLIC_CODE_NEW_REGEX.test(value.trim().toUpperCase());
+}
+
+export function isValidLegacyNumericPublicCode(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  return PUBLIC_CODE_LEGACY_NUMERIC_REGEX.test(value.trim());
+}
+
+/**
+ * Validates either the new 6-character unambiguous alphanumeric publicCode (^[A-HJ-NP-Z2-9]{6}$)
+ * or a legacy 6-digit numeric publicCode (^[0-9]{6}$).
+ */
+export function isValidPublicExamCode(value: unknown): value is string {
+  if (typeof value !== 'string') return false;
+  const trimmed = value.trim();
+  return PUBLIC_CODE_LEGACY_NUMERIC_REGEX.test(trimmed) || PUBLIC_CODE_NEW_REGEX.test(trimmed.toUpperCase());
+}
+
+/**
+ * Normalizes a valid publicCode (uppercases alphanumeric codes; preserves legacy 6-digit codes).
+ */
+export function normalizePublicExamCode(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (PUBLIC_CODE_LEGACY_NUMERIC_REGEX.test(trimmed)) return trimmed;
+  const upper = trimmed.toUpperCase();
+  return PUBLIC_CODE_NEW_REGEX.test(upper) ? upper : '';
+}
+
+/**
+ * Backward-compatible export name preserved across modules.
+ */
 export function isValidSixDigitPublicCode(value: unknown): value is string {
-  return typeof value === 'string' && /^\d{6}$/.test(value.trim());
+  return isValidPublicExamCode(value);
 }
 
 /**
@@ -139,20 +177,21 @@ export function normalizeExamCodeCompact(rawCode: string): string {
 }
 
 /**
- * Returns the canonical 6-digit short link: https://<PRODUCTION_DOMAIN>/<6_DIGITS>
- * Falls back to legacy ?examCode= only when an exam has not yet been assigned a 6-digit publicCode.
+ * Returns the canonical short link: https://<PRODUCTION_DOMAIN>/<6_CHAR_CODE>
+ * Supports both new 6-char alphanumeric codes (/H7K9P2) and legacy 6-digit codes (/004821).
+ * Falls back to legacy ?examCode= only when an exam has not yet been assigned a publicCode.
  */
 export function getExamShortUrl(examOrCode: { publicCode?: string; code?: string } | string): string {
   const domain = getPublicDomain();
   if (typeof examOrCode === 'string') {
-    const trimmed = examOrCode.trim();
-    if (isValidSixDigitPublicCode(trimmed)) {
-      return domain ? `${domain}/${trimmed}` : `/${trimmed}`;
+    const pub = normalizePublicExamCode(examOrCode);
+    if (pub) {
+      return domain ? `${domain}/${pub}` : `/${pub}`;
     }
-    return getExamDirectUrl(trimmed);
+    return getExamDirectUrl(examOrCode);
   }
-  const pub = typeof examOrCode?.publicCode === 'string' ? examOrCode.publicCode.trim() : '';
-  if (isValidSixDigitPublicCode(pub)) {
+  const pub = normalizePublicExamCode(examOrCode?.publicCode);
+  if (pub) {
     return domain ? `${domain}/${pub}` : `/${pub}`;
   }
   return getExamDirectUrl(examOrCode?.code || '');
@@ -220,14 +259,17 @@ export function extractExamEntryFromLocation(locationLike?: {
   const search = loc.search || '';
   const hash = loc.hash || '';
 
-  // 1. Primary 6-digit short path: /{6_digits} (preserves leading zeros, e.g. /004821)
+  // 1. Primary 6-char public code path: /{CODE} (supports new H7K9P2 and legacy 004821)
   if (pathname) {
-    const sixDigitMatch = pathname.match(/^\/(\d{6})\/?$/);
-    if (sixDigitMatch && sixDigitMatch[1]) {
-      return {
-        kind: 'publicCode',
-        value: sixDigitMatch[1],
-      };
+    const sixCharMatch = pathname.match(/^\/([A-Za-z0-9]{6})\/?$/);
+    if (sixCharMatch && sixCharMatch[1]) {
+      const normalizedPublicCode = normalizePublicExamCode(sixCharMatch[1]);
+      if (normalizedPublicCode) {
+        return {
+          kind: 'publicCode',
+          value: normalizedPublicCode,
+        };
+      }
     }
   }
 

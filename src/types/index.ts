@@ -249,7 +249,7 @@ export interface Exam {
   title: string;
   description?: string;       // Mô tả ngắn của đề thi
   code: string;                 // Mã đề tham gia online, VD: "CHEM12A", "HSG2024"
-  publicCode?: string;          // Mã truy cập đường dẫn ngắn 6 chữ số (lưu dạng string giữ số 0 ở đầu)
+  publicCode?: string;          // Mã truy cập đường dẫn ngắn 6 ký tự (chữ hoa + số không nhầm lẫn, hoặc 6 chữ số cũ)
   folderId?: string | null;
   subjectId?: string;
   subjectName?: string;
@@ -327,11 +327,46 @@ export interface StudentAnswer {
   isMarkedForReview?: boolean;
 }
 
+export type QuestionResultStatus = 'correct' | 'incorrect' | 'unanswered';
+
+export interface StatementEvaluationDetail {
+  statementId: string;
+  statementText: string;
+  studentChoice?: boolean;
+  correctAnswer: boolean;
+  isCorrect: boolean;
+  isAnswered: boolean;
+  explanation?: string;
+}
+
+export interface QuestionEvaluationDetail {
+  questionId: string;
+  questionCode: string;
+  orderIndex: number;
+  type: QuestionType;
+  status: QuestionResultStatus;
+  earnedScore: number;
+  maxScore: number;
+  selectedOptionId?: string;
+  correctOptionId?: string;
+  statementDetails?: StatementEvaluationDetail[];
+  correctStatementsCount?: number;
+  totalStatementsCount?: number;
+  textAnswer?: string;
+  acceptableAnswers?: string[];
+  isNumeric?: boolean;
+  numericValue?: number;
+  tolerance?: number;
+  unit?: string;
+}
+
 export interface StudentSubmission {
   id: string;
+  attemptId?: string;
   examId: string;
   examTitle: string;
   examCode: string;
+  publicCode?: string;
   variantCode?: string;
   ownerId?: string;
   
@@ -351,7 +386,10 @@ export interface StudentSubmission {
   part3Score: number;
   totalScore: number;
   maxPossibleScore: number;
+  totalQuestions?: number;
   correctQuestionsCount: number;
+  wrongQuestionsCount?: number;
+  unansweredQuestionsCount?: number;
   
   tabSwitchesCount?: number;    // Giám sát rời màn hình thi
   status: 'completed' | 'in_progress' | 'timed_out';

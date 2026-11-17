@@ -18,14 +18,16 @@ import {
   setDoc,
   writeBatch,
   serverTimestamp,
+  onSnapshot,
+  Unsubscribe,
   Firestore,
 } from 'firebase/firestore';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Exam, Question, StudentSubmission } from '../types';
 import {
-  isValidSixDigitPublicCode,
   normalizeExamCode,
   normalizeExamCodeCompact,
+  normalizePublicExamCode,
 } from '../utils/urlHelper';
 import { normalizeFolderId } from '../utils/folderTree';
 
@@ -270,11 +272,12 @@ export function sanitizeExamForStudent(exam: Exam): Exam {
   const rawQuestions = Array.isArray(exam?.questions) ? exam.questions : [];
   const safeQuestions = rawQuestions.filter((q) => q && typeof q === 'object').map(sanitizeQuestionForStudent);
 
+  const cleanPublicCode = normalizePublicExamCode(exam?.publicCode);
   return {
     id: exam?.id || '',
     title: (exam?.title || 'Bài kiểm tra HQTest').slice(0, 300),
     code: normalizeExamCode(exam?.code || ''),
-    ...(isValidSixDigitPublicCode(exam?.publicCode) ? { publicCode: exam.publicCode.trim() } : {}),
+    ...(cleanPublicCode ? { publicCode: cleanPublicCode } : {}),
     grade: exam?.grade || '12',
     ...(exam?.topic ? { topic: exam.topic } : {}),
     durationMinutes: exam?.durationMinutes || 45,
@@ -470,7 +473,10 @@ export async function syncExamToFirestore(
   const existingCreatedAt = existingData?.serverCreatedAt ?? null;
   const normalizedFolderId = normalizeFolderId(exam.folderId);
 
-  const validPublicCode = isValidSixDigitPublicCode(exam.publicCode) ? exam.publicCode.trim() : undefined;
+  const validPublicCode =
+    normalizePublicExamCode(exam.publicCode) ||
+    normalizePublicExamCode(existingData?.publicCode) ||
+    undefined;
   const masterPayload = stripUndefinedDeep({
     id: safeId,
     examId: safeId,
@@ -643,10 +649,36 @@ export async function fetchTeacherSubmissionsFromFirestore(uid: string): Promise
   try {
     const q = query(collection(db, 'submissions'), where('ownerId', '==', uid));
     const snap = await getDocs(q);
-    return snap.docs.map((d) => d.data() as StudentSubmission);
+    return snap.docs
+      .map((d) => d.data() as StudentSubmission)
+      .sort((a, b) => Date.parse(b.submittedAt || '') - Date.parse(a.submittedAt || ''));
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'submissions');
   }
+}
+
+export function subscribeTeacherSubmissions(
+  uid: string,
+  onUpdate: (subs: StudentSubmission[]) => void,
+  onError?: (err: unknown) => void
+): Unsubscribe {
+  if (firebaseInitError || !uid) {
+    return () => {};
+  }
+  const q = query(collection(db, 'submissions'), where('ownerId', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => d.data() as StudentSubmission)
+        .sort((a, b) => Date.parse(b.submittedAt || '') - Date.parse(a.submittedAt || ''));
+      onUpdate(list);
+    },
+    (error) => {
+      console.warn('[HQTest Firestore] Lỗi lắng nghe submissions realtime:', error);
+      onError?.(error);
+    }
+  );
 }
 
 // --- Public Student Lookup & Submission ---
@@ -752,12 +784,11 @@ export async function fetchPublicExamFromFirestore(rawCode: string): Promise<Clo
         continue;
       }
 
+      const resolvedPublicCode = normalizePublicExamCode(statusData.publicCode);
       const placeholderExam: Exam = {
         id: statusData.examId || code,
         code: recordExamCode,
-        ...(isValidSixDigitPublicCode(statusData.publicCode)
-          ? { publicCode: statusData.publicCode.trim() }
-          : {}),
+        ...(resolvedPublicCode ? { publicCode: resolvedPublicCode } : {}),
         title: statusData.title || `Bài thi ${recordExamCode}`,
         grade: statusData.grade || '12',
         durationMinutes: statusData.durationMinutes || 45,
@@ -902,8 +933,8 @@ export async function fetchPublicExamByPublicCode(
     };
   }
 
-  const cleanPublicCode = (rawPublicCode || '').trim();
-  if (!isValidSixDigitPublicCode(cleanPublicCode)) {
+  const cleanPublicCode = normalizePublicExamCode(rawPublicCode);
+  if (!cleanPublicCode) {
     return {
       status: 'not_found',
       message: 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại',
@@ -1011,6 +1042,10 @@ export async function saveSubmissionToFirestore(
     examId: submission.examId.replace(/[^a-zA-Z0-9_-]/g, '_'),
     examTitle: (submission.examTitle || 'Bài thi HQTest').slice(0, 300),
     examCode: code,
+    ...(submission.attemptId ? { attemptId: submission.attemptId.slice(0, 128) } : {}),
+    ...(normalizePublicExamCode(submission.publicCode)
+      ? { publicCode: normalizePublicExamCode(submission.publicCode) }
+      : {}),
     ...(submission.variantCode ? { variantCode: submission.variantCode } : {}),
     ownerId,
     studentId: (submission.studentId || safeSubId).slice(0, 128),
@@ -1025,7 +1060,14 @@ export async function saveSubmissionToFirestore(
     part3Score: submission.part3Score || 0,
     totalScore: submission.totalScore || 0,
     maxPossibleScore: submission.maxPossibleScore || 10.0,
+    ...(typeof submission.totalQuestions === 'number' ? { totalQuestions: submission.totalQuestions } : {}),
     correctQuestionsCount: submission.correctQuestionsCount || 0,
+    ...(typeof submission.wrongQuestionsCount === 'number'
+      ? { wrongQuestionsCount: submission.wrongQuestionsCount }
+      : {}),
+    ...(typeof submission.unansweredQuestionsCount === 'number'
+      ? { unansweredQuestionsCount: submission.unansweredQuestionsCount }
+      : {}),
     ...(submission.tabSwitchesCount !== undefined ? { tabSwitchesCount: submission.tabSwitchesCount } : {}),
     status: submission.status || 'completed',
     createdAt: serverTimestamp(),

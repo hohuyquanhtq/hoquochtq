@@ -45,7 +45,7 @@ import {
 } from '../../utils/folderTree';
 import { GRADE_LABELS } from '../../constants/subjects';
 import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
-import { getExamShortUrl, isValidSixDigitPublicCode } from '../../utils/urlHelper';
+import { getExamShortUrl, normalizeExamCode, normalizePublicExamCode } from '../../utils/urlHelper';
 import { syncExamToFirestore } from '../../services/firebase';
 import { ExamShareModal } from '../common/ExamShareModal';
 import { ExamSecurityModal } from './ExamSecurityModal';
@@ -279,7 +279,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
         return (
           ex.title.toLowerCase().includes(searchLower) ||
           ex.code.toLowerCase().includes(searchLower) ||
-          (ex.publicCode || '').includes(searchLower) ||
+          (ex.publicCode || '').toLowerCase().includes(searchLower) ||
           (ex.description || '').toLowerCase().includes(searchLower)
         );
       }
@@ -603,8 +603,12 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
     });
 
   const renderExamCard = (exam: Exam) => {
-    const examSubs = submissions.filter((s) => s.examId === exam.id);
+    const cleanExamCode = normalizeExamCode(exam.code);
+    const examSubs = submissions.filter(
+      (s) => s.examId === exam.id || (cleanExamCode && normalizeExamCode(s.examCode) === cleanExamCode && (!s.ownerId || !exam.ownerId || s.ownerId === exam.ownerId))
+    );
     const isCopied = copiedCode === exam.code;
+    const normalizedPublicCode = normalizePublicExamCode(exam.publicCode);
     const policy = getEffectiveAnswerReviewConfig(exam);
     const qualifiedCount = policy.allowAnswerReview
       ? examSubs.filter(
@@ -687,7 +691,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             <p className="text-xs text-slate-600 line-clamp-2">{exam.description}</p>
           )}
 
-          {isValidSixDigitPublicCode(exam.publicCode) && (
+          {normalizedPublicCode && (
             <div className="flex items-center gap-2.5 flex-wrap text-xs">
               <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 border border-teal-200 text-teal-800 font-mono font-bold">
                 <LinkIcon className="w-3.5 h-3.5 text-teal-600" />
@@ -731,7 +735,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             type="button"
             onClick={() => handleCopyShortLink(exam)}
             className="min-h-[36px] px-3 py-1.5 rounded-xl border border-teal-200 bg-teal-50/80 hover:bg-teal-100 text-teal-800 text-xs font-semibold inline-flex items-center gap-1.5"
-            title="Sao chép link rút gọn 6 chữ số"
+            title="Sao chép link rút gọn 6 ký tự"
           >
             {copiedLinkId === exam.id ? (
               <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
@@ -741,8 +745,8 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             <span>
               {copiedLinkId === exam.id
                 ? 'Đã chép link!'
-                : isValidSixDigitPublicCode(exam.publicCode)
-                ? `/${exam.publicCode}`
+                : normalizedPublicCode
+                ? `/${normalizedPublicCode}`
                 : 'Chép link'}
             </span>
           </button>
@@ -862,7 +866,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
           </h1>
           <p className="text-sm text-slate-600 mt-1">
             {mode === 'online'
-              ? 'Theo dõi các phòng thi đang mở, liên kết ngắn 6 chữ số, mật khẩu và lượt nộp bài.'
+              ? 'Theo dõi các phòng thi đang mở, liên kết ngắn 6 ký tự, mật khẩu và lượt nộp bài.'
               : 'Tổ chức đề thi nhiều cấp theo khối lớp, chuyên đề, kỳ kiểm tra và tạo đề ngay trong thư mục đang mở.'}
           </p>
         </div>
@@ -1024,7 +1028,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   type="text"
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  placeholder="Tìm kiếm thư mục, tên đề thi, mã đề hoặc link 6 chữ số..."
+                  placeholder="Tìm kiếm thư mục, tên đề thi, mã đề hoặc mã link 6 ký tự..."
                   className="w-full min-h-[38px] pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
                 />
               </div>
@@ -1434,8 +1438,8 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 </select>
                 <p className="text-[11px] text-slate-500 mt-1.5">
                   Mã đề ({editingExamMeta.code})
-                  {isValidSixDigitPublicCode(editingExamMeta.publicCode)
-                    ? ` và link rút gọn /${editingExamMeta.publicCode}`
+                  {normalizePublicExamCode(editingExamMeta.publicCode)
+                    ? ` và link rút gọn /${normalizePublicExamCode(editingExamMeta.publicCode)}`
                     : ''}{' '}
                   sẽ được giữ nguyên hoàn toàn khi di chuyển thư mục.
                 </p>

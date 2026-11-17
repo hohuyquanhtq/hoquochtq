@@ -239,14 +239,14 @@ export const StudentHome: React.FC<StudentHomeProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Mã bài thi (Ví dụ: HQ50)</label>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">Mã đề thi hoặc mã 6 ký tự (VD: HQ50 hoặc H7K9P2)</label>
                 <div className="flex gap-2">
                   <input
                     type="text"
                     required
                     value={examCode}
                     onChange={(e) => setExamCode(e.target.value.toUpperCase())}
-                    placeholder="VD: HQ50"
+                    placeholder="VD: HQ50 hoặc H7K9P2"
                     className="flex-1 p-2.5 rounded-xl border border-slate-200 text-xs font-mono font-bold uppercase focus:ring-2 focus:ring-blue-500 bg-slate-50 text-blue-800"
                   />
                   <button

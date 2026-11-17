@@ -134,6 +134,7 @@ export interface ExamSecurityStore {
   savePasswordAttempt(attemptKey: string, record: PasswordAttemptRecord): Promise<void>;
   getExamAccessGrant(examCode: string, uid: string): Promise<ExamAccessGrantRecord | null>;
   saveExamAccessGrant(record: ExamAccessGrantRecord): Promise<void>;
+  getSubmissionById?(submissionId: string): Promise<StudentSubmission | null>;
   saveSubmission(submission: StudentSubmission & { serverUpdatedAt?: string }): Promise<void>;
   listStudentSubmissionsForExam(examCode: string, studentId: string): Promise<StudentSubmission[]>;
   saveAnswerReviewAccess(params: {
@@ -359,6 +360,10 @@ export function createFirestoreExamSecurityStore(): ExamSecurityStore {
       await firestoreSetDoc('examAccessGrants', grantId, { ...record });
     },
 
+    async getSubmissionById(submissionId) {
+      return firestoreGetDoc<StudentSubmission>('submissions', submissionId);
+    },
+
     async saveSubmission(submission) {
       const safeId = submission.id.replace(/[^a-zA-Z0-9_-]/g, '_');
       await firestoreSetDoc(
@@ -433,12 +438,40 @@ async function resolveAuthoritativeExamSecret(
   examCode: string
 ): Promise<ExamSecretRecord | null> {
   const secret = await store.getExamSecret(examCode);
-  if (secret) return secret;
+  if (secret) {
+    if (!secret.ownerId) {
+      const { examKeys, publicExam, examStatus } = await store.getLegacyExamBundle(examCode);
+      const recoveredOwner = String(
+        publicExam?.ownerId || examKeys?.ownerId || examStatus?.ownerId || ''
+      ).trim();
+      const recoveredExamId = String(
+        secret.examId || publicExam?.id || examKeys?.examId || examStatus?.examId || examCode
+      ).trim();
+      if (recoveredOwner) {
+        return { ...secret, ownerId: recoveredOwner, examId: recoveredExamId };
+      }
+      if (recoveredExamId && recoveredExamId !== examCode) {
+        const master = await store.getMasterExam(recoveredExamId).catch(() => null);
+        const masterOwner = String(master?.ownerId || master?.authorId || '').trim();
+        if (masterOwner) {
+          return { ...secret, ownerId: masterOwner, examId: recoveredExamId };
+        }
+      }
+    }
+    return secret;
+  }
 
   // Backward compatibility for legacy exams synced before examSecrets existed
   const { examKeys, publicExam, examStatus } = await store.getLegacyExamBundle(examCode);
   if (!examKeys && !publicExam) {
     return null;
+  }
+
+  const resolvedExamId = String(publicExam?.id || examKeys?.examId || examStatus?.examId || examCode);
+  let resolvedOwnerId = String(publicExam?.ownerId || examKeys?.ownerId || examStatus?.ownerId || '').trim();
+  if (!resolvedOwnerId && resolvedExamId && resolvedExamId !== examCode) {
+    const master = await store.getMasterExam(resolvedExamId).catch(() => null);
+    resolvedOwnerId = String(master?.ownerId || master?.authorId || '').trim();
   }
 
   const pubQuestions = Array.isArray(publicExam?.questions) ? (publicExam.questions as Question[]) : [];
@@ -459,8 +492,8 @@ async function resolveAuthoritativeExamSecret(
 
   return {
     examCode,
-    examId: String(publicExam?.id || examKeys?.examId || examStatus?.examId || examCode),
-    ownerId: String(publicExam?.ownerId || examKeys?.ownerId || examStatus?.ownerId || ''),
+    examId: resolvedExamId,
+    ownerId: resolvedOwnerId,
     requiresPassword: Boolean(publicExam?.requiresPassword ?? examStatus?.requiresPassword ?? false),
     passwordHash: null,
     passwordUpdatedAt: (publicExam?.passwordUpdatedAt as string | null) ?? null,
@@ -1419,10 +1452,71 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         }
       }
 
+      const rawAttemptId =
+        typeof body.attemptId === 'string' && body.attemptId.trim()
+          ? body.attemptId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
+          : '';
+      const rawSubId =
+        typeof body.submissionId === 'string' && body.submissionId.trim()
+          ? body.submissionId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
+          : '';
+      const docId = rawAttemptId || rawSubId || `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+
       const studentId = caller?.uid || `guest_${Date.now()}`;
       const existingSubs = caller
         ? await store.listStudentSubmissionsForExam(examCode, caller.uid)
         : [];
+
+      // Idempotency guard: prevent double-submit or retry from creating duplicate records or tripping maxAttempts
+      const existingFromList = existingSubs.find(
+        (s) => s.id === docId || (rawAttemptId && s.attemptId === rawAttemptId)
+      );
+      const existingById =
+        existingFromList ||
+        (typeof store.getSubmissionById === 'function'
+          ? await store.getSubmissionById(docId).catch(() => null)
+          : null);
+
+      if (
+        existingById &&
+        normalizeExamCodeServer(existingById.examCode) === examCode &&
+        (!caller || existingById.studentId === caller.uid)
+      ) {
+        const verifiedScores = (existingSubs.length > 0 ? existingSubs : [existingById]).map(
+          (s) =>
+            gradeAnswersOnServer({
+              questionOrder: secret.questions || [],
+              answerMap: secret.answerMap || {},
+              rules: secret.rules,
+              answers: s.answers || {},
+            }).totalScore
+        );
+        const answerReviewCheck = !caller
+          ? {
+              allowed: false,
+              reason: 'unauthenticated' as const,
+              score: existingById.totalScore,
+              minScore: secret.answerReviewMinScore,
+              enabledAt: secret.answerReviewEnabledAt,
+              message: 'Vui lòng đăng nhập tài khoản học sinh để kiểm tra quyền xem đáp án & lời giải.',
+            }
+          : evaluateAnswerReviewPolicy({
+              allowAnswerReview: secret.allowAnswerReview,
+              answerReviewMinScore: secret.answerReviewMinScore,
+              answerReviewEnabledAt: secret.answerReviewEnabledAt,
+              verifiedScores,
+            });
+
+        return {
+          status: 200,
+          body: {
+            ok: true,
+            submission: existingById,
+            answerReviewCheck,
+            deduplicated: true,
+          },
+        };
+      }
 
       if (!isOwnerOrAdmin && secret.maxAttempts > 0 && existingSubs.length >= secret.maxAttempts) {
         return {
@@ -1456,13 +1550,15 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         ? Math.max(1, Math.min(86400, Math.round((Date.now() - startMs) / 1000)))
         : Math.max(1, Number(body.durationSeconds || 1));
 
-      const rawId =
-        typeof body.submissionId === 'string' && body.submissionId.trim()
-          ? body.submissionId.trim().replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128)
-          : `sub_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+      const rawPublicCode =
+        typeof publicExam?.publicCode === 'string' && publicExam.publicCode.trim()
+          ? publicExam.publicCode.trim()
+          : typeof body.publicCode === 'string' && body.publicCode.trim()
+          ? body.publicCode.trim()
+          : '';
 
       const digest = signSubmissionGradeDigest({
-        submissionId: rawId,
+        submissionId: docId,
         examCode,
         studentId,
         totalScore: grade.totalScore,
@@ -1472,10 +1568,12 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
       });
 
       const verifiedSubmission: StudentSubmission = {
-        id: rawId,
+        id: docId,
+        attemptId: rawAttemptId || docId,
         examId: secret.examId,
         examTitle: String(publicExam?.title || body.examTitle || `Bài thi ${examCode}`).slice(0, 300),
         examCode,
+        ...(rawPublicCode ? { publicCode: rawPublicCode.slice(0, 12) } : {}),
         ...(typeof body.variantCode === 'string' && body.variantCode
           ? { variantCode: body.variantCode.slice(0, 32) }
           : {}),
@@ -1492,7 +1590,10 @@ export function createExamApiHandlers(store: ExamSecurityStore = createFirestore
         part3Score: grade.part3Score,
         totalScore: grade.totalScore,
         maxPossibleScore: Number(publicExam?.totalScore || 10.0),
+        totalQuestions: grade.totalQuestions,
         correctQuestionsCount: grade.correctQuestionsCount,
+        wrongQuestionsCount: grade.wrongQuestionsCount,
+        unansweredQuestionsCount: grade.unansweredQuestionsCount,
         tabSwitchesCount: Math.max(0, Math.min(10000, Number(body.tabSwitchesCount || 0))),
         status: body.status === 'timed_out' ? 'timed_out' : 'completed',
         gradedByServer: true,
