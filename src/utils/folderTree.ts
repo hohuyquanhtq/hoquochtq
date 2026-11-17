@@ -10,13 +10,33 @@ export interface FolderTreeNode {
 export type SortField = 'name' | 'createdAt' | 'updatedAt';
 export type SortDirection = 'asc' | 'desc';
 
+export function normalizeFolderId(folderId?: string | null): string | null {
+  if (!folderId || typeof folderId !== 'string') return null;
+  const trimmed = folderId.trim();
+  if (!trimmed || trimmed === 'null' || trimmed === 'undefined') return null;
+  return trimmed;
+}
+
 export function normalizeParentId(parentId?: string | null): string | null {
-  if (!parentId || typeof parentId !== 'string') return null;
-  const trimmed = parentId.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  return normalizeFolderId(parentId);
+}
+
+export function filterDirectExamsInFolder(
+  exams: Exam[],
+  activeFolderId: string | null,
+  folderIdSet: Set<string>
+): Exam[] {
+  const targetId = normalizeFolderId(activeFolderId);
+  return exams.filter((ex) => {
+    const rawFid = normalizeFolderId(ex.folderId);
+    const effectiveFolderId = rawFid && folderIdSet.has(rawFid) ? rawFid : null;
+    return effectiveFolderId === targetId;
+  });
 }
 
 export function getDescendantFolderIds(folderId: string, folders: Folder[]): Set<string> {
+  const cleanRoot = normalizeFolderId(folderId);
+  if (!cleanRoot) return new Set();
   const childrenByParent = new Map<string, string[]>();
   folders.forEach((f) => {
     const pId = normalizeParentId(f.parentId);
@@ -27,8 +47,8 @@ export function getDescendantFolderIds(folderId: string, folders: Folder[]): Set
     }
   });
 
-  const visited = new Set<string>([folderId]);
-  const queue: string[] = [folderId];
+  const visited = new Set<string>([cleanRoot]);
+  const queue: string[] = [cleanRoot];
   while (queue.length > 0) {
     const current = queue.shift()!;
     const children = childrenByParent.get(current) || [];
@@ -55,11 +75,12 @@ export function canMoveFolder(
 }
 
 export function getFolderAncestors(folderId: string | null, folders: Folder[]): Folder[] {
-  if (!folderId) return [];
+  const cleanFolderId = normalizeFolderId(folderId);
+  if (!cleanFolderId) return [];
   const byId = new Map(folders.map((f) => [f.id, f]));
   const chain: Folder[] = [];
   const seen = new Set<string>();
-  let current: Folder | undefined = byId.get(folderId);
+  let current: Folder | undefined = byId.get(cleanFolderId);
 
   while (current && !seen.has(current.id)) {
     seen.add(current.id);
@@ -72,8 +93,9 @@ export function getFolderAncestors(folderId: string | null, folders: Folder[]): 
 }
 
 export function getFolderPathLabel(folderId: string | null | undefined, folders: Folder[]): string {
-  if (!folderId) return 'Đề thi';
-  const ancestors = getFolderAncestors(folderId, folders);
+  const cleanFolderId = normalizeFolderId(folderId);
+  if (!cleanFolderId) return 'Đề thi';
+  const ancestors = getFolderAncestors(cleanFolderId, folders);
   if (ancestors.length === 0) return 'Đề thi';
   return ['Đề thi', ...ancestors.map((f) => f.name)].join(' / ');
 }
@@ -83,7 +105,8 @@ export function buildFolderTree(folders: Folder[], exams: Exam[]): FolderTreeNod
   const directExamCountMap = new Map<string, number>();
 
   exams.forEach((ex) => {
-    const fId = ex.folderId && folderIds.has(ex.folderId) ? ex.folderId : null;
+    const cleanFid = normalizeFolderId(ex.folderId);
+    const fId = cleanFid && folderIds.has(cleanFid) ? cleanFid : null;
     if (fId) {
       directExamCountMap.set(fId, (directExamCountMap.get(fId) || 0) + 1);
     }

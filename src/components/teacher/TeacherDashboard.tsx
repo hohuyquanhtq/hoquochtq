@@ -525,11 +525,11 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               <div className="grid grid-cols-2 gap-2.5">
                 <button
                   type="button"
-                  onClick={() => onNavigate('folder_manager')}
+                  onClick={() => onNavigate('exam_manager')}
                   className="p-2.5 min-h-[42px] rounded-xl bg-slate-50 hover:bg-slate-100 text-slate-800 text-sm font-medium text-left flex items-center gap-2 transition-colors border border-slate-200"
                 >
                   <FolderTree className="w-4 h-4 text-teal-600 shrink-0" />
-                  <span className="truncate">Thư mục</span>
+                  <span className="truncate">Đề thi &amp; Thư mục</span>
                 </button>
                 <button
                   type="button"

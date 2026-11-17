@@ -36,6 +36,7 @@ interface AdminDashboardProps {
   submissions: StudentSubmission[];
   folders: Folder[];
   sectionFocus?: 'overview' | 'users';
+  onNavigate?: (tab: string) => void;
   onDataResetOrRestored: () => void;
 }
 
@@ -48,6 +49,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   submissions,
   folders,
   sectionFocus = 'overview',
+  onNavigate,
   onDataResetOrRestored,
 }) => {
   const [usersList, setUsersList] = useState<User[]>([]);
@@ -313,7 +315,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
+          {onNavigate && (
+            <button
+              type="button"
+              onClick={() => onNavigate('exam_manager')}
+              className="px-3.5 py-2 rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-bold flex items-center gap-1.5"
+            >
+              <FolderTree className="w-4 h-4 text-teal-700" />
+              <span>Quản lý Đề thi &amp; Thư mục</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => void loadAdminData()}

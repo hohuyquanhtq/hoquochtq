@@ -27,6 +27,7 @@ import {
   normalizeExamCode,
   normalizeExamCodeCompact,
 } from '../utils/urlHelper';
+import { normalizeFolderId } from '../utils/folderTree';
 
 function cleanEnvStr(val: unknown): string {
   return typeof val === 'string' ? val.trim() : '';
@@ -463,9 +464,16 @@ export async function syncExamToFirestore(
   const batch = writeBatch(db);
 
   // 1. Private master exam
+  const examRef = doc(db, 'exams', safeId);
+  const existingMaster = await getDocFromServer(examRef).catch(() => getDoc(examRef).catch(() => null));
+  const existingData = existingMaster?.exists() ? existingMaster.data() : null;
+  const existingCreatedAt = existingData?.serverCreatedAt ?? null;
+  const normalizedFolderId = normalizeFolderId(exam.folderId);
+
   const validPublicCode = isValidSixDigitPublicCode(exam.publicCode) ? exam.publicCode.trim() : undefined;
   const masterPayload = stripUndefinedDeep({
     id: safeId,
+    examId: safeId,
     code: normalizedCode,
     ...(validPublicCode ? { publicCode: validPublicCode } : {}),
     title: exam.title.slice(0, 300),
@@ -476,7 +484,7 @@ export async function syncExamToFirestore(
     ...(exam.subjectName ? { subjectName: exam.subjectName.slice(0, 120) } : {}),
     grade: exam.grade,
     ...(exam.topic ? { topic: exam.topic } : {}),
-    folderId: exam.folderId ? exam.folderId : null,
+    folderId: normalizedFolderId,
     durationMinutes: Math.max(1, Math.min(600, exam.durationMinutes || 45)),
     totalQuestions: exam.questions?.length ?? exam.totalQuestions ?? 0,
     totalScore: exam.totalScore || 10.0,
@@ -501,15 +509,14 @@ export async function syncExamToFirestore(
       ? { assignedClassCodes: exam.assignedClassCodes.slice(0, 100) }
       : {}),
     ownerId: targetOwnerId,
-    authorId: exam.authorId || targetOwnerId,
+    authorId: existingData ? existingData.authorId : (exam.authorId || targetOwnerId),
+    createdBy: (typeof existingData?.createdBy === 'string' && existingData.createdBy) || exam.createdBy || exam.authorId || targetOwnerId,
+    updatedBy: user.uid || targetOwnerId,
     authorName: (exam.authorName || user.displayName || 'Giáo viên').slice(0, 150),
-    createdAt: exam.createdAt || nowIso,
+    createdAt: (typeof existingData?.createdAt === 'string' && existingData.createdAt) || exam.createdAt || nowIso,
     updatedAt: nowIso,
   });
 
-  const examRef = doc(db, 'exams', safeId);
-  const existingMaster = await getDoc(examRef).catch(() => null);
-  const existingCreatedAt = existingMaster?.exists() ? existingMaster.data()?.serverCreatedAt : null;
   batch.set(examRef, {
     ...masterPayload,
     serverCreatedAt: existingCreatedAt || serverTimestamp(),

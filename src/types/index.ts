@@ -179,6 +179,7 @@ export interface Question {
 
 export interface Folder {
   id: string;
+  folderId?: string;
   name: string;
   parentId?: string | null;
   description?: string;
@@ -186,6 +187,8 @@ export interface Folder {
   color?: string;
   ownerId?: string;
   authorId: string;
+  createdBy?: string;
+  updatedBy?: string;
   createdAt: string;
   updatedAt?: string;
   itemCount?: number;
@@ -207,6 +210,7 @@ export interface ExamVariant {
 
 export interface Exam {
   id: string;
+  examId?: string;
   title: string;
   description?: string;       // Mô tả ngắn của đề thi
   code: string;                 // Mã đề tham gia online, VD: "CHEM12A", "HSG2024"
@@ -249,6 +253,8 @@ export interface Exam {
   ownerId?: string;
   authorId: string;
   authorName: string;
+  createdBy?: string;
+  updatedBy?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -57,17 +57,20 @@
     },
     "TeacherFolder": {
       "title": "TeacherFolder",
-      "description": "Private teacher-owned folder for organizing Chemistry questions and exams.",
+      "description": "Private teacher/admin-owned folder for organizing exams and questions.",
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "folderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "name": { "type": "string", "minLength": 1, "maxLength": 150 },
-        "parentId": { "type": "string", "maxLength": 128 },
+        "parentId": { "type": ["string", "null"], "maxLength": 128 },
         "description": { "type": "string", "maxLength": 500 },
         "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
         "color": { "type": "string", "maxLength": 32 },
         "authorId": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
         "itemCount": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -151,6 +154,7 @@
       "type": "object",
       "properties": {
         "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
         "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
         "title": { "type": "string", "minLength": 1, "maxLength": 300 },
@@ -183,6 +187,8 @@
         "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
         "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "authorId": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
         "authorName": { "type": "string", "maxLength": 150 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }

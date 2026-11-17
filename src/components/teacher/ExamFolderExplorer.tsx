@@ -33,10 +33,12 @@ import {
   SortField,
   buildFolderTree,
   canMoveFolder,
+  filterDirectExamsInFolder,
   flattenFolderTree,
   getDescendantFolderIds,
   getFolderAncestors,
   getFolderPathLabel,
+  normalizeFolderId,
   normalizeParentId,
   sortExams,
   sortFolders,
@@ -54,7 +56,10 @@ export interface ExamFolderExplorerProps {
   folders: Folder[];
   submissions: StudentSubmission[];
   currentUserId?: string;
+  userRole?: 'admin' | 'teacher';
   mode?: 'all' | 'online';
+  activeFolderId?: string | null;
+  onActiveFolderChange?: (folderId: string | null) => void;
   autoOpenShareExamId?: string | null;
   onClearAutoOpenShare?: () => void;
   onCreateNew: (folderId?: string | null) => void;
@@ -64,6 +69,15 @@ export interface ExamFolderExplorerProps {
   onDeleteExam: (examId: string) => void;
   onExamUpdated?: (updatedExam: Exam) => void;
   onSaveFolders?: (folders: Folder[]) => void;
+  onCreateFolder?: (input: { name: string; parentId: string | null; description?: string }) => Promise<void>;
+  onRenameFolder?: (folder: Folder, updates: { name: string; description?: string }) => Promise<void>;
+  onMoveFolder?: (folder: Folder, targetParentId: string | null) => Promise<void>;
+  onDeleteFolder?: (folder: Folder) => Promise<void>;
+  onMoveExam?: (
+    exam: Exam,
+    targetFolderId: string | null,
+    updates?: { title?: string; description?: string }
+  ) => Promise<void>;
   onShareExam?: (exam: Exam) => void;
 }
 
@@ -72,7 +86,10 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   folders,
   submissions,
   currentUserId,
+  userRole,
   mode = 'all',
+  activeFolderId: activeFolderIdProp,
+  onActiveFolderChange,
   autoOpenShareExamId,
   onClearAutoOpenShare,
   onCreateNew,
@@ -82,9 +99,28 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   onDeleteExam,
   onExamUpdated,
   onSaveFolders,
+  onCreateFolder,
+  onRenameFolder,
+  onMoveFolder,
+  onDeleteFolder,
+  onMoveExam,
   onShareExam,
 }) => {
-  const [activeFolderId, setActiveFolderId] = useState<string | null>(null);
+  const [internalActiveFolderId, setInternalActiveFolderId] = useState<string | null>(null);
+  const currentFolderId =
+    activeFolderIdProp !== undefined
+      ? normalizeFolderId(activeFolderIdProp)
+      : internalActiveFolderId;
+
+  const updateActiveFolderId = (nextId: string | null) => {
+    const clean = normalizeFolderId(nextId);
+    if (onActiveFolderChange) {
+      onActiveFolderChange(clean);
+    } else {
+      setInternalActiveFolderId(clean);
+    }
+  };
+
   const [expandedFolderIds, setExpandedFolderIds] = useState<Set<string>>(new Set());
   const [showMobileTree, setShowMobileTree] = useState<boolean>(false);
 
@@ -99,7 +135,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
   const [activeSecurityExam, setActiveSecurityExam] = useState<Exam | null>(null);
-  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastState, setToastState] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Modals state
   const [folderModal, setFolderModal] = useState<
@@ -109,9 +145,13 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   >(null);
   const [folderNameInput, setFolderNameInput] = useState('');
   const [folderDescInput, setFolderDescInput] = useState('');
+  const [isSavingFolder, setIsSavingFolder] = useState(false);
+  const [folderModalError, setFolderModalError] = useState<string | null>(null);
 
   const [movingFolder, setMovingFolder] = useState<Folder | null>(null);
   const [moveFolderTargetId, setMoveFolderTargetId] = useState<string>('');
+  const [isMovingFolder, setIsMovingFolder] = useState(false);
+  const [moveFolderError, setMoveFolderError] = useState<string | null>(null);
 
   const [deletingFolder, setDeletingFolder] = useState<Folder | null>(null);
   const [deletingExam, setDeletingExam] = useState<Exam | null>(null);
@@ -121,6 +161,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   const [examDescInput, setExamDescInput] = useState('');
   const [examFolderTargetId, setExamFolderTargetId] = useState<string>('');
   const [isSavingMeta, setIsSavingMeta] = useState(false);
+  const [metaModalError, setMetaModalError] = useState<string | null>(null);
 
   useEffect(() => {
     setPublishFilter(mode === 'online' ? 'published' : 'all');
@@ -135,31 +176,50 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
     }
   }, [autoOpenShareExamId, exams, onClearAutoOpenShare]);
 
-  const showToast = (msg: string) => {
-    setToastMessage(msg);
-    setTimeout(() => setToastMessage(null), 3000);
+  const showToast = (message: string, type: 'success' | 'error' = 'success') => {
+    setToastState({ message, type });
+    setTimeout(() => setToastState(null), 3500);
   };
+
+  const canManageFolders = Boolean(
+    onCreateFolder || onRenameFolder || onMoveFolder || onDeleteFolder || onSaveFolders
+  );
 
   const folderIdSet = useMemo(() => new Set(folders.map((f) => f.id)), [folders]);
   const treeNodes = useMemo(() => buildFolderTree(folders, exams), [folders, exams]);
   const flatFolders = useMemo(() => flattenFolderTree(folders, exams), [folders, exams]);
   const breadcrumbs = useMemo(
-    () => getFolderAncestors(activeFolderId, folders),
-    [activeFolderId, folders]
+    () => getFolderAncestors(currentFolderId, folders),
+    [currentFolderId, folders]
+  );
+  const rootDirectExamCount = useMemo(
+    () => filterDirectExamsInFolder(exams, null, folderIdSet).length,
+    [exams, folderIdSet]
   );
 
-  // If activeFolderId was deleted externally, reset to root
+  // Keep active folder valid and auto-expand its ancestor nodes in the tree
   useEffect(() => {
-    if (activeFolderId && !folderIdSet.has(activeFolderId)) {
-      setActiveFolderId(null);
+    if (!currentFolderId) return;
+    if (folders.length > 0 && !folderIdSet.has(currentFolderId)) {
+      updateActiveFolderId(null);
+      return;
     }
-  }, [activeFolderId, folderIdSet]);
+    const ancestors = getFolderAncestors(currentFolderId, folders);
+    if (ancestors.length > 0) {
+      setExpandedFolderIds((prev) => {
+        const next = new Set(prev);
+        ancestors.forEach((a) => next.add(a.id));
+        return next;
+      });
+    }
+  }, [currentFolderId, folders, folderIdSet]);
 
   const navigateToFolder = (folderId: string | null) => {
-    setActiveFolderId(folderId);
+    const cleanId = normalizeFolderId(folderId);
+    updateActiveFolderId(cleanId);
     setShowMobileTree(false);
-    if (folderId) {
-      const ancestors = getFolderAncestors(folderId, folders);
+    if (cleanId) {
+      const ancestors = getFolderAncestors(cleanId, folders);
       setExpandedFolderIds((prev) => {
         const next = new Set(prev);
         ancestors.forEach((a) => next.add(a.id));
@@ -205,27 +265,15 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
       : folders.filter((f) => {
           const pId = normalizeParentId(f.parentId);
           const effectiveParent = pId && folderIdSet.has(pId) && pId !== f.id ? pId : null;
-          return effectiveParent === activeFolderId;
+          return effectiveParent === currentFolderId;
         });
     return sortFolders(baseList, sortField, sortDirection);
-  }, [folders, folderIdSet, activeFolderId, isSearching, searchLower, sortField, sortDirection]);
+  }, [folders, folderIdSet, currentFolderId, isSearching, searchLower, sortField, sortDirection]);
 
   const visibleExams = useMemo(() => {
-    const baseList = exams.filter((ex) => {
+    const filteredByStatusAndSearch = exams.filter((ex) => {
       if (publishFilter === 'published' && !ex.isPublished) return false;
       if (publishFilter === 'closed' && ex.isPublished) return false;
-
-      if (mode === 'online') {
-        if (isSearching) {
-          return (
-            ex.title.toLowerCase().includes(searchLower) ||
-            ex.code.toLowerCase().includes(searchLower) ||
-            (ex.publicCode || '').includes(searchLower) ||
-            (ex.description || '').toLowerCase().includes(searchLower)
-          );
-        }
-        return true;
-      }
 
       if (isSearching) {
         return (
@@ -236,14 +284,19 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
         );
       }
 
-      const rawFId = ex.folderId && folderIdSet.has(ex.folderId) ? ex.folderId : null;
-      return rawFId === activeFolderId;
+      return true;
     });
+
+    const baseList =
+      mode === 'all' && !isSearching
+        ? filterDirectExamsInFolder(filteredByStatusAndSearch, currentFolderId, folderIdSet)
+        : filteredByStatusAndSearch;
+
     return sortExams(baseList, sortField, sortDirection);
   }, [
     exams,
     folderIdSet,
-    activeFolderId,
+    currentFolderId,
     mode,
     publishFilter,
     isSearching,
@@ -259,114 +312,174 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   const openCreateFolderModal = (parentId: string | null) => {
     setFolderNameInput('');
     setFolderDescInput('');
-    setFolderModal({ mode: 'create', parentId });
+    setFolderModalError(null);
+    setFolderModal({ mode: 'create', parentId: normalizeParentId(parentId) });
   };
 
   const openRenameFolderModal = (folder: Folder) => {
     setFolderNameInput(folder.name);
     setFolderDescInput(folder.description || '');
+    setFolderModalError(null);
     setFolderModal({ mode: 'rename', folder });
   };
 
-  const handleSaveFolderModal = (e: React.FormEvent) => {
+  const handleSaveFolderModal = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!folderModal || !onSaveFolders) return;
+    if (!folderModal || !canManageFolders) return;
     const cleanName = folderNameInput.trim();
-    if (!cleanName) return;
-    const nowIso = new Date().toISOString();
-
-    if (folderModal.mode === 'create') {
-      const newFolder: Folder = {
-        id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
-        name: cleanName,
-        parentId: folderModal.parentId,
-        ...(folderDescInput.trim() ? { description: folderDescInput.trim() } : {}),
-        ownerId: currentUserId,
-        authorId: currentUserId || 'teacher_1',
-        createdAt: nowIso,
-        updatedAt: nowIso,
-        itemCount: 0,
-      };
-      onSaveFolders([...folders, newFolder]);
-      if (folderModal.parentId) {
-        setExpandedFolderIds((prev) => new Set(prev).add(folderModal.parentId!));
-      }
-      showToast(`Đã tạo thư mục "${cleanName}"`);
-    } else {
-      const updated = folders.map((f) =>
-        f.id === folderModal.folder.id
-          ? {
-              ...f,
-              name: cleanName,
-              description: folderDescInput.trim() || undefined,
-              updatedAt: nowIso,
-            }
-          : f
-      );
-      onSaveFolders(updated);
-      showToast(`Đã cập nhật thư mục "${cleanName}"`);
+    if (!cleanName) {
+      setFolderModalError('Vui lòng nhập tên thư mục.');
+      return;
     }
-    setFolderModal(null);
+
+    setFolderModalError(null);
+    setIsSavingFolder(true);
+    try {
+      const nowIso = new Date().toISOString();
+
+      if (folderModal.mode === 'create') {
+        const cleanParentId = normalizeParentId(folderModal.parentId);
+        if (onCreateFolder) {
+          await onCreateFolder({
+            name: cleanName,
+            parentId: cleanParentId,
+            description: folderDescInput.trim() || undefined,
+          });
+        } else if (onSaveFolders) {
+          const newFolder: Folder = {
+            id: `f_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+            name: cleanName,
+            parentId: cleanParentId,
+            ...(folderDescInput.trim() ? { description: folderDescInput.trim() } : {}),
+            ownerId: currentUserId,
+            authorId: currentUserId || 'teacher_1',
+            createdAt: nowIso,
+            updatedAt: nowIso,
+            itemCount: 0,
+          };
+          onSaveFolders([...folders, newFolder]);
+        }
+        if (cleanParentId) {
+          setExpandedFolderIds((prev) => new Set(prev).add(cleanParentId));
+        }
+        showToast(`Đã tạo thư mục "${cleanName}"`);
+      } else {
+        const cleanDesc = folderDescInput.trim() || undefined;
+        if (onRenameFolder) {
+          await onRenameFolder(folderModal.folder, {
+            name: cleanName,
+            description: cleanDesc,
+          });
+        } else if (onSaveFolders) {
+          const updated = folders.map((f) =>
+            f.id === folderModal.folder.id
+              ? {
+                  ...f,
+                  name: cleanName,
+                  description: cleanDesc,
+                  updatedAt: nowIso,
+                }
+              : f
+          );
+          onSaveFolders(updated);
+        }
+        showToast(`Đã cập nhật thư mục "${cleanName}"`);
+      }
+      setFolderModal(null);
+    } catch (err) {
+      setFolderModalError(
+        err instanceof Error ? err.message : 'Không thể lưu thư mục lên Firestore. Vui lòng thử lại.'
+      );
+    } finally {
+      setIsSavingFolder(false);
+    }
   };
 
   const openMoveFolderModal = (folder: Folder) => {
     setMovingFolder(folder);
     setMoveFolderTargetId(normalizeParentId(folder.parentId) || '');
+    setMoveFolderError(null);
   };
 
-  const handleConfirmMoveFolder = (e: React.FormEvent) => {
+  const handleConfirmMoveFolder = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!movingFolder || !onSaveFolders) return;
-    const nextParent = moveFolderTargetId ? moveFolderTargetId : null;
+    if (!movingFolder || !canManageFolders) return;
+    const nextParent = normalizeParentId(moveFolderTargetId);
     if (!canMoveFolder(movingFolder.id, nextParent, folders)) {
-      showToast('Không thể di chuyển thư mục vào chính nó hoặc thư mục con của nó.');
+      setMoveFolderError('Không thể di chuyển thư mục vào chính nó hoặc thư mục con của nó.');
       return;
     }
-    const nowIso = new Date().toISOString();
-    const updated = folders.map((f) =>
-      f.id === movingFolder.id ? { ...f, parentId: nextParent, updatedAt: nowIso } : f
-    );
-    onSaveFolders(updated);
-    if (nextParent) {
-      setExpandedFolderIds((prev) => new Set(prev).add(nextParent));
+
+    setMoveFolderError(null);
+    setIsMovingFolder(true);
+    try {
+      if (onMoveFolder) {
+        await onMoveFolder(movingFolder, nextParent);
+      } else if (onSaveFolders) {
+        const nowIso = new Date().toISOString();
+        const updated = folders.map((f) =>
+          f.id === movingFolder.id ? { ...f, parentId: nextParent, updatedAt: nowIso } : f
+        );
+        onSaveFolders(updated);
+      }
+      if (nextParent) {
+        setExpandedFolderIds((prev) => new Set(prev).add(nextParent));
+      }
+      showToast(`Đã di chuyển thư mục "${movingFolder.name}"`);
+      setMovingFolder(null);
+    } catch (err) {
+      setMoveFolderError(
+        err instanceof Error ? err.message : 'Không thể di chuyển thư mục. Vui lòng thử lại.'
+      );
+    } finally {
+      setIsMovingFolder(false);
     }
-    showToast(`Đã di chuyển thư mục "${movingFolder.name}"`);
-    setMovingFolder(null);
   };
 
   const handleConfirmDeleteFolder = async () => {
-    if (!deletingFolder || !onSaveFolders) return;
-    const targetId = deletingFolder.id;
-    const parentOfDeleted = normalizeParentId(deletingFolder.parentId);
-    const nowIso = new Date().toISOString();
+    if (!deletingFolder || !canManageFolders) return;
+    const targetFolder = deletingFolder;
+    const targetId = targetFolder.id;
+    const parentOfDeleted = normalizeParentId(targetFolder.parentId);
 
-    // Safely move direct subfolders up to parentOfDeleted so no tree orphan occurs
-    const nextFolders = folders
-      .filter((f) => f.id !== targetId)
-      .map((f) =>
-        normalizeParentId(f.parentId) === targetId
-          ? { ...f, parentId: parentOfDeleted, updatedAt: nowIso }
-          : f
+    try {
+      if (onDeleteFolder) {
+        await onDeleteFolder(targetFolder);
+      } else if (onSaveFolders) {
+        const nowIso = new Date().toISOString();
+        const nextFolders = folders
+          .filter((f) => f.id !== targetId)
+          .map((f) =>
+            normalizeParentId(f.parentId) === targetId
+              ? { ...f, parentId: parentOfDeleted, updatedAt: nowIso }
+              : f
+          );
+
+        const affectedExams = exams.filter((ex) => normalizeFolderId(ex.folderId) === targetId);
+        for (const ex of affectedExams) {
+          const movedExam: Exam = {
+            ...ex,
+            folderId: parentOfDeleted,
+            updatedAt: nowIso,
+          };
+          await syncExamToFirestore(movedExam, currentUserId);
+          onExamUpdated?.(movedExam);
+        }
+        onSaveFolders(nextFolders);
+      }
+
+      if (currentFolderId === targetId) {
+        updateActiveFolderId(parentOfDeleted);
+      }
+      showToast(`Đã xóa thư mục "${targetFolder.name}"`);
+      setDeletingFolder(null);
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Không thể xóa thư mục trên Firestore.',
+        'error'
       );
-
-    // Safely move direct exams inside this folder up to parentOfDeleted (keeping code & publicCode)
-    const affectedExams = exams.filter((ex) => ex.folderId === targetId);
-    for (const ex of affectedExams) {
-      const movedExam: Exam = {
-        ...ex,
-        folderId: parentOfDeleted,
-        updatedAt: nowIso,
-      };
-      onExamUpdated?.(movedExam);
-      await syncExamToFirestore(movedExam, currentUserId).catch(() => {});
+      setDeletingFolder(null);
     }
-
-    onSaveFolders(nextFolders);
-    if (activeFolderId === targetId) {
-      setActiveFolderId(parentOfDeleted);
-    }
-    showToast(`Đã xóa thư mục "${deletingFolder.name}"`);
-    setDeletingFolder(null);
   };
 
   // --- Exam Meta & Move Folder Handlers ---
@@ -374,32 +487,49 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
     setEditingExamMeta(exam);
     setExamTitleInput(exam.title);
     setExamDescInput(exam.description || '');
+    const cleanExistingFolder = normalizeFolderId(exam.folderId);
     setExamFolderTargetId(
-      exam.folderId && folderIdSet.has(exam.folderId) ? exam.folderId : ''
+      cleanExistingFolder && folderIdSet.has(cleanExistingFolder) ? cleanExistingFolder : ''
     );
+    setMetaModalError(null);
   };
 
   const handleSaveExamMeta = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingExamMeta || !examTitleInput.trim()) return;
+    setMetaModalError(null);
     setIsSavingMeta(true);
     try {
-      const nowIso = new Date().toISOString();
-      const updatedExam: Exam = {
-        ...editingExamMeta,
+      const targetFolder = normalizeFolderId(examFolderTargetId);
+      const updates = {
         title: examTitleInput.trim(),
-        description: examDescInput.trim() || undefined,
-        folderId: examFolderTargetId ? examFolderTargetId : null,
-        updatedAt: nowIso,
+        description: examDescInput.trim(),
       };
-      onExamUpdated?.(updatedExam);
-      await syncExamToFirestore(updatedExam, currentUserId);
+
+      if (onMoveExam) {
+        await onMoveExam(editingExamMeta, targetFolder, updates);
+      } else {
+        const nowIso = new Date().toISOString();
+        const updatedExam: Exam = {
+          ...editingExamMeta,
+          title: updates.title,
+          description: updates.description || undefined,
+          folderId: targetFolder,
+          updatedAt: nowIso,
+        };
+        await syncExamToFirestore(updatedExam, currentUserId);
+        onExamUpdated?.(updatedExam);
+      }
+
       showToast('Đã cập nhật thông tin & vị trí thư mục cho đề thi.');
       setEditingExamMeta(null);
     } catch (err) {
       console.warn('Could not update exam metadata:', err);
-      showToast('Đã lưu cục bộ, nhưng đồng bộ cloud gặp gián đoạn.');
-      setEditingExamMeta(null);
+      setMetaModalError(
+        err instanceof Error
+          ? err.message
+          : 'Không thể lưu thay đổi lên Cloud Firestore. Vui lòng kiểm tra kết nối và thử lại.'
+      );
     } finally {
       setIsSavingMeta(false);
     }
@@ -407,7 +537,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
 
   const renderTreeNodes = (nodes: FolderTreeNode[], depth: number): React.ReactNode =>
     nodes.map((node) => {
-      const isSelected = activeFolderId === node.folder.id;
+      const isSelected = currentFolderId === node.folder.id;
       const isExpanded = expandedFolderIds.has(node.folder.id);
       const hasChildren = node.children.length > 0;
 
@@ -451,7 +581,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               <span className="text-[11px] font-semibold text-slate-500 tabular-nums px-1">
                 {node.recursiveExamCount}
               </span>
-              {onSaveFolders && (
+              {canManageFolders && (
                 <button
                   type="button"
                   onClick={(e) => {
@@ -697,10 +827,18 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
 
   return (
     <div className="space-y-5">
-      {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 text-xs font-semibold">
-          <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{toastMessage}</span>
+      {toastState && (
+        <div
+          className={`fixed bottom-6 right-6 z-50 px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 text-xs font-semibold ${
+            toastState.type === 'error' ? 'bg-rose-700 text-white' : 'bg-slate-900 text-white'
+          }`}
+        >
+          <CheckCircle2
+            className={`w-4 h-4 shrink-0 ${
+              toastState.type === 'error' ? 'text-rose-200' : 'text-emerald-400'
+            }`}
+          />
+          <span>{toastState.message}</span>
         </div>
       )}
 
@@ -712,6 +850,8 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             <span>
               {mode === 'online'
                 ? 'Phòng thi trực tuyến & Mã tham gia'
+                : userRole === 'admin'
+                ? 'Quản trị Đề thi & Cây thư mục thống nhất'
                 : 'Hệ thống quản lý Đề thi theo cây thư mục'}
             </span>
           </div>
@@ -728,19 +868,19 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          {mode === 'all' && onSaveFolders && (
+          {mode === 'all' && canManageFolders && (
             <button
               type="button"
-              onClick={() => openCreateFolderModal(activeFolderId)}
+              onClick={() => openCreateFolderModal(currentFolderId)}
               className="min-h-[42px] px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5"
             >
               <FolderPlus className="w-4 h-4 text-amber-600" />
-              <span>{activeFolderId ? '+ Thư mục con' : '+ Tạo thư mục'}</span>
+              <span>{currentFolderId ? '+ Thư mục con' : '+ Tạo thư mục'}</span>
             </button>
           )}
           <button
             type="button"
-            onClick={() => onCreateNew(mode === 'all' ? activeFolderId : null)}
+            onClick={() => onCreateNew(mode === 'all' ? currentFolderId : null)}
             className="min-h-[42px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs inline-flex items-center gap-1.5"
           >
             <Plus className="w-4 h-4" />
@@ -767,7 +907,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <PanelLeft className="w-4 h-4 text-teal-600" />
                 <span>Cây thư mục</span>
               </button>
-              {onSaveFolders && (
+              {canManageFolders && (
                 <button
                   type="button"
                   onClick={() => openCreateFolderModal(null)}
@@ -785,7 +925,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               <div
                 onClick={() => navigateToFolder(null)}
                 className={`flex items-center justify-between px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors ${
-                  activeFolderId === null
+                  currentFolderId === null
                     ? 'bg-teal-600 text-white font-semibold'
                     : 'text-slate-800 hover:bg-slate-100 font-semibold'
                 }`}
@@ -793,19 +933,20 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <div className="flex items-center gap-2 min-w-0">
                   <FolderOpen
                     className={`w-4 h-4 shrink-0 ${
-                      activeFolderId === null ? 'text-white' : 'text-teal-600'
+                      currentFolderId === null ? 'text-white' : 'text-teal-600'
                     }`}
                   />
                   <span className="truncate">Đề thi (Thư mục gốc)</span>
                 </div>
                 <span
                   className={`text-[11px] tabular-nums px-1.5 py-0.5 rounded ${
-                    activeFolderId === null
+                    currentFolderId === null
                       ? 'bg-teal-700 text-white'
                       : 'bg-slate-100 text-slate-600'
                   }`}
+                  title="Số đề thi nằm trực tiếp ở Thư mục gốc"
                 >
-                  {exams.length}
+                  {rootDirectExamCount}
                 </span>
               </div>
 
@@ -833,41 +974,46 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
           <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
             {/* Breadcrumb (mode === 'all') */}
             {mode === 'all' && (
-              <nav
-                aria-label="Breadcrumb thư mục"
-                className="flex flex-wrap items-center gap-1.5 text-xs pb-2.5 border-b border-slate-100"
-              >
-                <button
-                  type="button"
-                  onClick={() => navigateToFolder(null)}
-                  className={`px-2 py-1 rounded-lg font-semibold transition-colors ${
-                    activeFolderId === null
-                      ? 'bg-teal-50 text-teal-800'
-                      : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                  }`}
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-100">
+                <nav
+                  aria-label="Breadcrumb thư mục"
+                  className="flex flex-wrap items-center gap-1.5 text-xs"
                 >
-                  Đề thi
-                </button>
-                {breadcrumbs.map((bc, idx) => {
-                  const isLast = idx === breadcrumbs.length - 1;
-                  return (
-                    <React.Fragment key={bc.id}>
-                      <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                      <button
-                        type="button"
-                        onClick={() => navigateToFolder(bc.id)}
-                        className={`px-2 py-1 rounded-lg font-semibold transition-colors max-w-[200px] truncate ${
-                          isLast
-                            ? 'bg-teal-50 text-teal-800'
-                            : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
-                        }`}
-                      >
-                        {bc.name}
-                      </button>
-                    </React.Fragment>
-                  );
-                })}
-              </nav>
+                  <button
+                    type="button"
+                    onClick={() => navigateToFolder(null)}
+                    className={`px-2 py-1 rounded-lg font-semibold transition-colors ${
+                      currentFolderId === null
+                        ? 'bg-teal-50 text-teal-800'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    Đề thi
+                  </button>
+                  {breadcrumbs.map((bc, idx) => {
+                    const isLast = idx === breadcrumbs.length - 1;
+                    return (
+                      <React.Fragment key={bc.id}>
+                        <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                        <button
+                          type="button"
+                          onClick={() => navigateToFolder(bc.id)}
+                          className={`px-2 py-1 rounded-lg font-semibold transition-colors max-w-[200px] truncate ${
+                            isLast
+                              ? 'bg-teal-50 text-teal-800'
+                              : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                          }`}
+                        >
+                          {bc.name}
+                        </button>
+                      </React.Fragment>
+                    );
+                  })}
+                </nav>
+                <span className="text-[11px] font-medium text-slate-500 truncate">
+                  Đang mở: <strong className="text-teal-700">{getFolderPathLabel(currentFolderId, folders)}</strong>
+                </span>
+              </div>
             )}
 
             {/* Search & Sort Controls */}
@@ -957,9 +1103,10 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
                 {visibleFolders.map((f) => {
                   const descendants = getDescendantFolderIds(f.id, folders);
-                  const recursiveCount = exams.filter(
-                    (ex) => ex.folderId && descendants.has(ex.folderId)
-                  ).length;
+                  const recursiveCount = exams.filter((ex) => {
+                    const cleanFid = normalizeFolderId(ex.folderId);
+                    return Boolean(cleanFid && descendants.has(cleanFid));
+                  }).length;
 
                   return (
                     <div
@@ -986,7 +1133,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                         </div>
                       </div>
 
-                      {onSaveFolders && (
+                      {canManageFolders && (
                         <div
                           className="flex items-center gap-0.5 shrink-0"
                           onClick={(e) => e.stopPropagation()}
@@ -1047,7 +1194,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 {!isSearching && (
                   <button
                     type="button"
-                    onClick={() => onCreateNew(mode === 'all' ? activeFolderId : null)}
+                    onClick={() => onCreateNew(mode === 'all' ? currentFolderId : null)}
                     className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold"
                   >
                     <Plus className="w-4 h-4" />
@@ -1080,13 +1227,14 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               </h3>
               <button
                 type="button"
+                disabled={isSavingFolder}
                 onClick={() => setFolderModal(null)}
                 className="p-1 rounded-lg text-slate-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleSaveFolderModal} className="p-5 space-y-4 text-xs">
+            <form onSubmit={(e) => void handleSaveFolderModal(e)} className="p-5 space-y-4 text-xs">
               {folderModal.mode === 'create' && (
                 <p className="text-slate-500">
                   Vị trí:{' '}
@@ -1094,6 +1242,11 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                     {getFolderPathLabel(folderModal.parentId, folders)}
                   </strong>
                 </p>
+              )}
+              {folderModalError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 font-semibold">
+                  {folderModalError}
+                </div>
               )}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Tên thư mục *</label>
@@ -1120,6 +1273,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSavingFolder}
                   onClick={() => setFolderModal(null)}
                   className="min-h-[38px] px-4 py-1.5 rounded-xl border border-slate-200 text-slate-700 font-semibold"
                 >
@@ -1127,9 +1281,14 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="min-h-[38px] px-4 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold"
+                  disabled={isSavingFolder}
+                  className="min-h-[38px] px-4 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-semibold"
                 >
-                  {folderModal.mode === 'create' ? 'Tạo thư mục' : 'Lưu thay đổi'}
+                  {isSavingFolder
+                    ? 'Đang lưu...'
+                    : folderModal.mode === 'create'
+                    ? 'Tạo thư mục'
+                    : 'Lưu thay đổi'}
                 </button>
               </div>
             </form>
@@ -1149,13 +1308,19 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               <h3 className="font-bold text-sm">Di chuyển thư mục &quot;{movingFolder.name}&quot;</h3>
               <button
                 type="button"
+                disabled={isMovingFolder}
                 onClick={() => setMovingFolder(null)}
                 className="p-1 rounded-lg text-slate-400 hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleConfirmMoveFolder} className="p-5 space-y-4 text-xs">
+            <form onSubmit={(e) => void handleConfirmMoveFolder(e)} className="p-5 space-y-4 text-xs">
+              {moveFolderError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 font-semibold">
+                  {moveFolderError}
+                </div>
+              )}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">
                   Chọn thư mục cha đích
@@ -1183,6 +1348,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isMovingFolder}
                   onClick={() => setMovingFolder(null)}
                   className="min-h-[38px] px-4 py-1.5 rounded-xl border border-slate-200 text-slate-700 font-semibold"
                 >
@@ -1190,9 +1356,10 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="min-h-[38px] px-4 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white font-semibold"
+                  disabled={isMovingFolder}
+                  className="min-h-[38px] px-4 py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-semibold"
                 >
-                  Di chuyển
+                  {isMovingFolder ? 'Đang chuyển...' : 'Di chuyển'}
                 </button>
               </div>
             </form>
@@ -1214,6 +1381,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               </h3>
               <button
                 type="button"
+                disabled={isSavingMeta}
                 onClick={() => setEditingExamMeta(null)}
                 className="p-1 rounded-lg text-slate-400 hover:text-white"
               >
@@ -1221,6 +1389,11 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               </button>
             </div>
             <form onSubmit={(e) => void handleSaveExamMeta(e)} className="p-5 space-y-4 text-xs">
+              {metaModalError && (
+                <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 font-semibold">
+                  {metaModalError}
+                </div>
+              )}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Tiêu đề đề thi *</label>
                 <input
@@ -1271,6 +1444,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
                 <button
                   type="button"
+                  disabled={isSavingMeta}
                   onClick={() => setEditingExamMeta(null)}
                   className="min-h-[38px] px-4 py-1.5 rounded-xl border border-slate-200 text-slate-700 font-semibold"
                 >

@@ -29,7 +29,7 @@ import {
   DEFAULT_SUBJECT_NAME,
   QUESTION_TYPE_SHORT_LABELS,
 } from '../../constants/subjects';
-import { flattenFolderTree } from '../../utils/folderTree';
+import { flattenFolderTree, getFolderPathLabel, normalizeFolderId } from '../../utils/folderTree';
 import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
 import { QuestionBankPickerModal, cloneQuestionsForExam } from './QuestionBankPickerModal';
@@ -295,7 +295,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       : `exam_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
     if (!canReusePending) {
-      const existingExams = StorageService.getExams();
+      const existingExams = StorageService.getExams(currentUserId || auth.currentUser?.uid);
       const isConflict = existingExams.some(
         (e) => e.id !== examId && normalizeExamCode(e.code) === cleanCode
       );
@@ -306,8 +306,10 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
     }
 
     const ownerId = currentUserId || auth.currentUser?.uid || 'teacher_1';
+    const actorUid = auth.currentUser?.uid || ownerId;
     const resolvedAuthorName = currentUserName || auth.currentUser?.displayName || APP_CONFIG.APP_AUTHOR;
     const nowIso = new Date().toISOString();
+    const normalizedTargetFolderId = normalizeFolderId(selectedFolderId);
 
     const selectedSubject =
       subjects.find((s) => s.id === subjectId) || {
@@ -317,6 +319,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
     const baseExam: Exam = {
       id: examId,
+      examId,
       title: title.trim(),
       ...(description.trim() ? { description: description.trim() } : {}),
       code: cleanCode,
@@ -324,7 +327,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       subjectName: selectedSubject.name,
       grade,
       topic,
-      folderId: selectedFolderId ? selectedFolderId : null,
+      folderId: normalizedTargetFolderId,
       durationMinutes,
       totalQuestions: questions.length,
       totalScore: 10.0,
@@ -351,6 +354,8 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       answerReviewEnabledAt: enabledAtIso,
       ownerId,
       authorId: ownerId,
+      createdBy: actorUid,
+      updatedBy: actorUid,
       authorName: resolvedAuthorName,
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -612,6 +617,9 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                   </option>
                 ))}
               </select>
+              <p className="text-[11px] text-teal-700 font-medium mt-1 truncate">
+                Vị trí lưu: {getFolderPathLabel(selectedFolderId || null, folders)}
+              </p>
             </div>
           </div>
 

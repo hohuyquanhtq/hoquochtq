@@ -56,13 +56,17 @@ import {
   deleteQuestionFromFirestore,
   deleteQuestionsBatchFromFirestore,
   saveFolderToFirestore,
-  deleteFolderFromFirestore,
+  createFolderInFirestore,
+  updateFolderInFirestore,
+  deleteFolderAndReparentInFirestore,
+  moveExamToFolderInFirestore,
   saveSubjectToFirestore,
   saveUploadRecordToFirestore,
   saveClassroomToFirestore,
   deleteClassroomFromFirestore,
   removeStudentEnrollmentFromFirestore,
 } from './services/workspaceService';
+import { canMoveFolder, normalizeFolderId } from './utils/folderTree';
 import { joinClassByCode } from './services/authService';
 import { gradeSubmission } from './utils/gradingEngine';
 import { useAuth } from './contexts/AuthContext';
@@ -75,7 +79,6 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { TeacherDashboard } from './components/teacher/TeacherDashboard';
 import { ExamUploader } from './components/teacher/ExamUploader';
 import { QuestionBank } from './components/teacher/QuestionBank';
-import { FolderManager } from './components/teacher/FolderManager';
 import { ExamCreator } from './components/teacher/ExamCreator';
 import { ExamManager } from './components/teacher/ExamManager';
 import { ExamResults } from './components/teacher/ExamResults';
@@ -155,7 +158,8 @@ export default function App() {
   const [pendingExamEntryAfterAuth, setPendingExamEntryAfterAuth] = useState<ExamUrlEntry | null>(null);
   const [selectedExamIdForResults, setSelectedExamIdForResults] = useState<string | null>(null);
 
-  // Preload questions & folder target for ExamCreator
+  // Preload questions & folder target for ExamCreator + persistent active folder explorer state
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [creatorInitialQuestions, setCreatorInitialQuestions] = useState<Question[]>([]);
   const [creatorInitialTitle, setCreatorInitialTitle] = useState<string>('');
   const [creatorInitialGrade, setCreatorInitialGrade] = useState<ChemGrade>('12');
@@ -191,6 +195,7 @@ export default function App() {
     setEnrollments([]);
     setAssignedExams([]);
     setSelectedExamIdForResults(null);
+    setCurrentFolderId(null);
     setCreatorInitialFolderId(null);
   }, []);
 
@@ -463,7 +468,7 @@ export default function App() {
     setCreatorInitialTitle(title);
     setCreatorInitialQuestions(parsedQuestions);
     setCreatorInitialGrade(grade);
-    setCreatorInitialFolderId(null);
+    setCreatorInitialFolderId(currentFolderId);
     setActiveTab('create_exam');
   };
 
@@ -478,24 +483,29 @@ export default function App() {
     const subjectLabel = distinctSubjects.length === 1 ? ` ${distinctSubjects[0]}` : '';
     setCreatorInitialTitle(`Đề thi chọn lọc${subjectLabel} (${selectedQuestions.length} câu)`);
     setCreatorInitialQuestions(selectedQuestions);
-    setCreatorInitialFolderId(null);
+    setCreatorInitialFolderId(currentFolderId);
     setActiveTab('create_exam');
   };
 
   const handleSaveExam = (newExam: Exam) => {
     if (!activeUid) return;
+    const resolvedFolderId = normalizeFolderId(newExam.folderId);
     const scopedExam: Exam = {
       ...newExam,
+      id: newExam.id,
+      examId: newExam.examId || newExam.id,
+      folderId: resolvedFolderId,
       ownerId: activeUid,
       authorId: activeUid,
+      createdBy: newExam.createdBy || activeUid,
+      updatedBy: activeUid,
       authorName: userProfile?.name || newExam.authorName || APP_CONFIG.APP_AUTHOR,
     };
     StorageService.addExam(scopedExam, activeUid);
     setExams(StorageService.getExams(activeUid));
-    void syncExamToFirestore(scopedExam, activeUid).catch((err) => {
-      console.warn('[HQTest] Could not sync saved exam to Firestore:', err);
-    });
-    setCreatorInitialFolderId(null);
+    // Preserve & activate the exact folder where the exam was saved so user lands directly in that subfolder
+    setCurrentFolderId(resolvedFolderId);
+    setCreatorInitialFolderId(resolvedFolderId);
     setCreatorInitialQuestions([]);
     setAutoOpenShareExamId(scopedExam.id);
     setActiveTab('exam_manager');
@@ -505,6 +515,8 @@ export default function App() {
     if (!activeUid) return;
     const scopedExam: Exam = {
       ...updatedExam,
+      examId: updatedExam.examId || updatedExam.id,
+      folderId: normalizeFolderId(updatedExam.folderId),
       ownerId: updatedExam.ownerId || activeUid,
     };
     StorageService.addExam(scopedExam, activeUid);
@@ -627,32 +639,102 @@ export default function App() {
     });
   };
 
-  const handleSaveFolders = (newFolders: Folder[]) => {
-    if (!activeUid) return;
-    const prevIds = new Set(folders.map((f) => f.id));
-    const nextIds = new Set(newFolders.map((f) => f.id));
-    const scopedFolders = newFolders.map((f) => ({
-      ...f,
-      ownerId: activeUid,
-      authorId: activeUid,
-    }));
-
-    StorageService.saveFolders(scopedFolders, activeUid);
-    setFolders(scopedFolders);
-
-    // Persist added/updated folders & delete removed folders
-    scopedFolders.forEach((f) => {
-      void saveFolderToFirestore(f, activeUid).catch((err) => {
-        console.warn('[HQTest] Could not sync folder to Firestore:', err);
-      });
+  const handleCreateFolder = async (input: {
+    name: string;
+    parentId: string | null;
+    description?: string;
+  }) => {
+    if (!activeUid) {
+      throw new Error('Bạn cần đăng nhập để tạo thư mục.');
+    }
+    const created = await createFolderInFirestore(input, activeUid);
+    setFolders((prev) => {
+      const next = [...prev, created];
+      StorageService.saveFolders(next, activeUid);
+      return next;
     });
-    prevIds.forEach((oldId) => {
-      if (!nextIds.has(oldId)) {
-        void deleteFolderFromFirestore(oldId).catch((err) => {
-          console.warn('[HQTest] Could not delete folder from Firestore:', err);
-        });
-      }
+  };
+
+  const handleRenameFolder = async (
+    folder: Folder,
+    updates: { name: string; description?: string }
+  ) => {
+    if (!activeUid) {
+      throw new Error('Bạn cần đăng nhập để cập nhật thư mục.');
+    }
+    const updated = await updateFolderInFirestore(
+      {
+        ...folder,
+        name: updates.name,
+        description: updates.description,
+      },
+      activeUid
+    );
+    setFolders((prev) => {
+      const next = prev.map((f) => (f.id === updated.id ? updated : f));
+      StorageService.saveFolders(next, activeUid);
+      return next;
     });
+  };
+
+  const handleMoveFolder = async (folder: Folder, targetParentId: string | null) => {
+    if (!activeUid) {
+      throw new Error('Bạn cần đăng nhập để di chuyển thư mục.');
+    }
+    const cleanTarget = normalizeFolderId(targetParentId);
+    if (!canMoveFolder(folder.id, cleanTarget, folders)) {
+      throw new Error('Không thể di chuyển thư mục vào chính nó hoặc thư mục con của nó.');
+    }
+    const updated = await updateFolderInFirestore(
+      {
+        ...folder,
+        parentId: cleanTarget,
+      },
+      activeUid
+    );
+    setFolders((prev) => {
+      const next = prev.map((f) => (f.id === updated.id ? updated : f));
+      StorageService.saveFolders(next, activeUid);
+      return next;
+    });
+  };
+
+  const handleDeleteFolder = async (folder: Folder) => {
+    if (!activeUid) {
+      throw new Error('Bạn cần đăng nhập để xóa thư mục.');
+    }
+    const parentOfDeleted = normalizeFolderId(folder.parentId);
+    const { folders: nextFolders, exams: nextExams } = await deleteFolderAndReparentInFirestore(
+      folder,
+      folders,
+      exams,
+      activeUid
+    );
+    StorageService.saveFolders(nextFolders, activeUid);
+    StorageService.saveExams(nextExams, activeUid);
+    setFolders(nextFolders);
+    setExams(nextExams);
+    if (currentFolderId === folder.id) {
+      setCurrentFolderId(parentOfDeleted);
+    }
+  };
+
+  const handleMoveExam = async (
+    exam: Exam,
+    targetFolderId: string | null,
+    updates?: { title?: string; description?: string }
+  ) => {
+    if (!activeUid) {
+      throw new Error('Bạn cần đăng nhập để di chuyển đề thi.');
+    }
+    const updatedExam = await moveExamToFolderInFirestore(
+      exam,
+      targetFolderId,
+      activeUid,
+      updates
+    );
+    StorageService.addExam(updatedExam, activeUid);
+    setExams(StorageService.getExams(activeUid));
   };
 
   const handleSaveClass = async (cls: Classroom) => {
@@ -1001,24 +1083,9 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveTab('exam_manager')}
-            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
-              activeTab === 'exam_manager'
-                ? 'bg-teal-600 text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
+            className="px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors bg-teal-600 text-white shadow-xs"
           >
-            Đề thi &amp; Cây thư mục ({exams.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setActiveTab('folder_manager')}
-            className={`px-4 py-2 min-h-[40px] rounded-xl text-sm font-semibold transition-colors ${
-              activeTab === 'folder_manager'
-                ? 'bg-teal-600 text-white shadow-xs'
-                : 'text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            Cấu trúc thư mục ({folders.length})
+            Đề thi &amp; Cây thư mục ({exams.length} đề · {folders.length} thư mục)
           </button>
           <button
             type="button"
@@ -1184,6 +1251,7 @@ export default function App() {
                   submissions={submissions}
                   folders={folders}
                   sectionFocus={activeTab === 'admin_users' ? 'users' : 'overview'}
+                  onNavigate={(tab) => setActiveTab(tab)}
                   onDataResetOrRestored={reloadDataFromStorage}
                 />
               ) : (
@@ -1244,16 +1312,6 @@ export default function App() {
               />
             )}
 
-            {activeTab === 'folder_manager' && (
-              <FolderManager
-                folders={folders}
-                questions={questions}
-                exams={exams}
-                onSaveFolders={handleSaveFolders}
-                onNavigateToExam={(id) => handleOpenExamResults(id)}
-              />
-            )}
-
             {activeTab === 'create_exam' && (
               <ExamCreator
                 key={`${creatorInitialFolderId || 'root'}_${creatorInitialQuestions.length}_${creatorInitialTitle}`}
@@ -1271,26 +1329,35 @@ export default function App() {
               />
             )}
 
-            {(activeTab === 'exam_manager' || activeTab === 'online_exams') && (
+            {(activeTab === 'exam_manager' || activeTab === 'folder_manager' || activeTab === 'online_exams') && (
               <ExamManager
                 exams={exams}
                 folders={folders}
                 submissions={submissions}
                 currentUserId={activeUid}
+                userRole={userProfile.role === 'admin' ? 'admin' : 'teacher'}
                 mode={activeTab === 'online_exams' ? 'online' : 'all'}
+                activeFolderId={currentFolderId}
+                onActiveFolderChange={setCurrentFolderId}
                 autoOpenShareExamId={autoOpenShareExamId}
                 onClearAutoOpenShare={() => setAutoOpenShareExamId(null)}
                 onCreateNew={(folderId) => {
+                  const targetFolder = normalizeFolderId(folderId);
+                  setCurrentFolderId(targetFolder);
                   setCreatorInitialQuestions([]);
                   setCreatorInitialTitle('Đề kiểm tra mới');
-                  setCreatorInitialFolderId(folderId || null);
+                  setCreatorInitialFolderId(targetFolder);
                   setActiveTab('create_exam');
                 }}
                 onOpenResults={handleOpenExamResults}
                 onTakeExamAsPreview={(ex) => handleStartExam(ex, userProfile.name, 'Giáo viên xem thử', activeUid)}
                 onTogglePublish={handleToggleExamPublish}
                 onExamUpdated={handleExamUpdated}
-                onSaveFolders={handleSaveFolders}
+                onCreateFolder={handleCreateFolder}
+                onRenameFolder={handleRenameFolder}
+                onMoveFolder={handleMoveFolder}
+                onDeleteFolder={handleDeleteFolder}
+                onMoveExam={handleMoveExam}
                 onDeleteExam={handleDeleteExam}
               />
             )}

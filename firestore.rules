@@ -176,10 +176,12 @@ service cloud.firestore {
           'id', 'ownerId', 'name', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'ownerId', 'name', 'parentId', 'description', 'grade', 'color',
-          'authorId', 'itemCount', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+          'id', 'folderId', 'ownerId', 'name', 'parentId', 'description', 'grade', 'color',
+          'authorId', 'createdBy', 'updatedBy', 'itemCount', 'createdAt', 'updatedAt',
+          'serverCreatedAt', 'serverUpdatedAt'
         ])
         && isValidId(data.id)
+        && (!('folderId' in data) || isValidId(data.folderId))
         && isValidId(data.ownerId)
         && data.name is string && data.name.size() >= 1 && data.name.size() <= 150
         && (!('parentId' in data) || data.parentId == null || (data.parentId is string && data.parentId.size() <= 128))
@@ -187,6 +189,8 @@ service cloud.firestore {
         && (!('grade' in data) || data.grade in ['10', '11', '12', 'chuyen_hsg'])
         && (!('color' in data) || (data.color is string && data.color.size() <= 32))
         && (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128))
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128))
         && (!('itemCount' in data) || (data.itemCount is number && data.itemCount >= 0 && data.itemCount <= 100000))
         && data.createdAt is string && data.createdAt.size() <= 64
         && data.updatedAt is string && data.updatedAt.size() <= 64
@@ -292,7 +296,7 @@ service cloud.firestore {
           'authorName', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'code', 'publicCode', 'title', 'description', 'subjectId', 'subjectName',
+          'id', 'examId', 'code', 'publicCode', 'title', 'description', 'subjectId', 'subjectName',
           'grade', 'topic', 'folderId',
           'durationMinutes', 'totalQuestions', 'totalScore', 'questions', 'rules',
           'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
@@ -300,10 +304,11 @@ service cloud.firestore {
           'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
           'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
           'answerReviewMinScore', 'answerReviewEnabledAt',
-          'ownerId', 'authorId', 'authorName', 'createdAt', 'updatedAt',
+          'ownerId', 'authorId', 'createdBy', 'updatedBy', 'authorName', 'createdAt', 'updatedAt',
           'serverCreatedAt', 'serverUpdatedAt'
         ])
         && isValidId(data.id)
+        && (!('examId' in data) || isValidId(data.examId))
         && isValidExamCode(data.code)
         && (!('publicCode' in data) || isValidPublicCode(data.publicCode))
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
@@ -337,6 +342,8 @@ service cloud.firestore {
         && (!('answerReviewEnabledAt' in data) || data.answerReviewEnabledAt == null || (data.answerReviewEnabledAt is string && data.answerReviewEnabledAt.size() <= 64))
         && isValidId(data.ownerId)
         && (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128))
+        && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
+        && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128))
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
         && data.createdAt is string && data.createdAt.size() <= 64
         && data.updatedAt is string && data.updatedAt.size() <= 64
@@ -679,19 +686,23 @@ service cloud.firestore {
       allow update: if isValidId(folderId)
         && isValidTeacherFolder(incoming())
         && incoming().id == existing().id
-        && incoming().serverCreatedAt == existing().serverCreatedAt
+        && (
+          ('serverCreatedAt' in existing() && incoming().serverCreatedAt == existing().serverCreatedAt) ||
+          (!('serverCreatedAt' in existing()) && incoming().serverCreatedAt == request.time)
+        )
         && incoming().serverUpdatedAt == request.time
         && (
           (isActiveTeacher()
             && isOwner(existing().ownerId)
             && incoming().ownerId == existing().ownerId
+            && (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy)
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'name', 'parentId', 'description', 'grade', 'color', 'itemCount',
-              'updatedAt', 'serverUpdatedAt'
+              'folderId', 'name', 'parentId', 'description', 'grade', 'color', 'authorId',
+              'createdBy', 'updatedBy', 'itemCount', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'ownerId', 'authorId', 'name', 'parentId', 'description', 'grade',
-            'color', 'itemCount', 'updatedAt', 'serverUpdatedAt'
+            'folderId', 'ownerId', 'authorId', 'createdBy', 'updatedBy', 'name', 'parentId',
+            'description', 'grade', 'color', 'itemCount', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
           ]))
         );
       allow delete: if isValidId(folderId) && (
@@ -846,14 +857,18 @@ service cloud.firestore {
       allow update: if isValidId(examId)
         && isValidExamMaster(incoming())
         && incoming().id == existing().id
-        && incoming().serverCreatedAt == existing().serverCreatedAt
+        && (
+          ('serverCreatedAt' in existing() && incoming().serverCreatedAt == existing().serverCreatedAt) ||
+          (!('serverCreatedAt' in existing()) && incoming().serverCreatedAt == request.time)
+        )
         && incoming().serverUpdatedAt == request.time
         && (
           (isActiveTeacher()
             && isOwner(existing().ownerId)
             && incoming().ownerId == existing().ownerId
+            && (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy)
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'code', 'publicCode', 'title', 'description', 'subjectId', 'subjectName',
+              'examId', 'code', 'publicCode', 'title', 'description', 'subjectId', 'subjectName',
               'grade', 'topic', 'folderId', 'durationMinutes',
               'totalQuestions', 'totalScore', 'questions', 'rules',
               'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
@@ -861,10 +876,10 @@ service cloud.firestore {
               'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
               'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
               'answerReviewMinScore', 'answerReviewEnabledAt',
-              'authorName', 'updatedAt', 'serverUpdatedAt'
+              'createdBy', 'updatedBy', 'authorName', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'ownerId', 'authorId', 'code', 'publicCode', 'title', 'description',
+            'examId', 'ownerId', 'authorId', 'createdBy', 'updatedBy', 'code', 'publicCode', 'title', 'description',
             'subjectId', 'subjectName', 'grade', 'topic', 'folderId',
             'durationMinutes', 'totalQuestions', 'totalScore', 'questions', 'rules',
             'shuffleQuestions', 'shuffleOptions', 'isPublished', 'openAt', 'closeAt',
@@ -872,7 +887,7 @@ service cloud.firestore {
             'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
             'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
             'answerReviewMinScore', 'answerReviewEnabledAt',
-            'authorName', 'updatedAt', 'serverUpdatedAt'
+            'authorName', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
           ]))
         );
       allow delete: if isValidId(examId) && (

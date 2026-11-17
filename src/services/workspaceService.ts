@@ -2,6 +2,7 @@ import {
   collection,
   doc,
   getDoc,
+  getDocFromServer,
   getDocs,
   query,
   where,
@@ -36,6 +37,7 @@ import {
   UploadRecord,
 } from '../types';
 import { normalizeExamCode } from '../utils/urlHelper';
+import { normalizeFolderId, normalizeParentId } from '../utils/folderTree';
 
 export interface TeacherWorkspaceData {
   questions: Question[];
@@ -93,8 +95,32 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
 
   const exams = eSnap.docs
-    .map((d) => d.data() as Exam)
+    .map((d) => {
+      const raw = d.data() as Exam;
+      return {
+        ...raw,
+        id: d.id,
+        examId: raw.examId || d.id,
+        folderId: normalizeFolderId(raw.folderId),
+        ownerId: raw.ownerId || uid,
+        createdBy: raw.createdBy || raw.authorId || raw.ownerId || uid,
+      } satisfies Exam;
+    })
     .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
+
+  const folders = fSnap.docs
+    .map((d) => {
+      const raw = d.data() as Folder;
+      return {
+        ...raw,
+        id: d.id,
+        folderId: raw.folderId || d.id,
+        parentId: normalizeParentId(raw.parentId),
+        ownerId: raw.ownerId || uid,
+        createdBy: raw.createdBy || raw.authorId || raw.ownerId || uid,
+      } satisfies Folder;
+    })
+    .sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 
   const questions = qSnap.docs
     .map((d) => d.data() as Question)
@@ -110,7 +136,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
 
   return {
     questions,
-    folders: fSnap.docs.map((d) => d.data() as Folder),
+    folders,
     subjects,
     exams,
     submissions,
@@ -120,6 +146,52 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
       .map((d) => d.data() as UploadRecord)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
   };
+}
+
+export async function fetchFoldersByParentFromFirestore(
+  uid: string,
+  parentId: string | null
+): Promise<Folder[]> {
+  if (firebaseInitError || !uid) return [];
+  const targetParent = normalizeParentId(parentId);
+  const fSnap = await getDocs(query(collection(db, 'folders'), where('ownerId', '==', uid)));
+  return fSnap.docs
+    .map((d) => {
+      const raw = d.data() as Folder;
+      return {
+        ...raw,
+        id: d.id,
+        folderId: raw.folderId || d.id,
+        parentId: normalizeParentId(raw.parentId),
+        ownerId: raw.ownerId || uid,
+        createdBy: raw.createdBy || raw.authorId || raw.ownerId || uid,
+      } satisfies Folder;
+    })
+    .filter((f) => f.parentId === targetParent)
+    .sort((a, b) => a.name.localeCompare(b.name, 'vi'));
+}
+
+export async function fetchExamsByFolderFromFirestore(
+  uid: string,
+  folderId: string | null
+): Promise<Exam[]> {
+  if (firebaseInitError || !uid) return [];
+  const targetFolder = normalizeFolderId(folderId);
+  const eSnap = await getDocs(query(collection(db, 'exams'), where('ownerId', '==', uid)));
+  return eSnap.docs
+    .map((d) => {
+      const raw = d.data() as Exam;
+      return {
+        ...raw,
+        id: d.id,
+        examId: raw.examId || d.id,
+        folderId: normalizeFolderId(raw.folderId),
+        ownerId: raw.ownerId || uid,
+        createdBy: raw.createdBy || raw.authorId || raw.ownerId || uid,
+      } satisfies Exam;
+    })
+    .filter((ex) => ex.folderId === targetFolder)
+    .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 }
 
 function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt?: unknown) {
@@ -263,18 +335,27 @@ export async function deleteSubjectFromFirestore(subjectId: string): Promise<voi
   }
 }
 
-function buildFolderDocPayload(f: Folder, ownerId: string, existingCreatedAt?: unknown) {
+function buildFolderDocPayload(
+  f: Folder,
+  ownerId: string,
+  existingCreatedAt?: unknown,
+  actorUid?: string
+) {
   const safeId = safeDocId(f.id);
   const nowIso = new Date().toISOString();
+  const normalizedParent = normalizeParentId(f.parentId);
   return stripUndefinedDeep({
     id: safeId,
+    folderId: safeId,
     ownerId,
-    name: (f.name || 'Thư mục mới').slice(0, 150),
-    parentId: f.parentId && f.parentId.trim() ? f.parentId.trim().slice(0, 128) : null,
-    ...(f.description ? { description: f.description.slice(0, 500) } : {}),
+    name: (f.name || 'Thư mục mới').trim().slice(0, 150),
+    parentId: normalizedParent ? safeDocId(normalizedParent) : null,
+    ...(f.description && f.description.trim() ? { description: f.description.trim().slice(0, 500) } : {}),
     ...(f.grade ? { grade: f.grade } : {}),
     ...(f.color ? { color: f.color.slice(0, 32) } : {}),
     authorId: f.authorId || ownerId,
+    createdBy: f.createdBy || f.authorId || ownerId,
+    updatedBy: actorUid || f.updatedBy || ownerId,
     ...(typeof f.itemCount === 'number' ? { itemCount: Math.max(0, f.itemCount) } : {}),
     createdAt: f.createdAt || nowIso,
     updatedAt: f.updatedAt || nowIso,
@@ -284,26 +365,202 @@ function buildFolderDocPayload(f: Folder, ownerId: string, existingCreatedAt?: u
 }
 
 export async function saveFolderToFirestore(folder: Folder, explicitOwnerId?: string): Promise<void> {
-  if (firebaseInitError || !auth.currentUser) return;
-  const ownerId = explicitOwnerId || auth.currentUser.uid;
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để lưu thư mục.');
+  }
+  const ownerId = explicitOwnerId || folder.ownerId || auth.currentUser.uid;
+  const actorUid = auth.currentUser.uid;
   const safeId = safeDocId(folder.id);
   const ref = doc(db, 'folders', safeId);
   try {
-    const existing = await getDoc(ref).catch(() => null);
-    await setDoc(ref, buildFolderDocPayload(folder, ownerId, existing?.exists() ? existing.data()?.serverCreatedAt : undefined));
+    const existing = await getDocFromServer(ref).catch(() => getDoc(ref).catch(() => null));
+    const existingData = existing?.exists() ? existing.data() : null;
+    const normalizedParent = normalizeParentId(folder.parentId);
+    const nowIso = new Date().toISOString();
+
+    if (existingData) {
+      const updatePayload = stripUndefinedDeep({
+        folderId: safeId,
+        ownerId: existingData.ownerId === ownerId ? existingData.ownerId : ownerId,
+        authorId: folder.authorId || existingData.authorId || ownerId,
+        createdBy: existingData.createdBy || folder.createdBy || existingData.authorId || ownerId,
+        updatedBy: actorUid,
+        name: (folder.name || 'Thư mục mới').trim().slice(0, 150),
+        parentId: normalizedParent ? safeDocId(normalizedParent) : null,
+        description: folder.description && folder.description.trim() ? folder.description.trim().slice(0, 500) : '',
+        ...(folder.grade ? { grade: folder.grade } : {}),
+        ...(folder.color ? { color: folder.color.slice(0, 32) } : {}),
+        ...(typeof folder.itemCount === 'number' ? { itemCount: Math.max(0, folder.itemCount) } : {}),
+        updatedAt: folder.updatedAt || nowIso,
+        ...(!existingData.serverCreatedAt ? { serverCreatedAt: serverTimestamp() } : {}),
+        serverUpdatedAt: serverTimestamp(),
+      });
+      await updateDoc(ref, updatePayload);
+      return;
+    }
+
+    await setDoc(ref, buildFolderDocPayload(folder, ownerId, undefined, actorUid));
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, `folders/${safeId}`);
   }
 }
 
+export async function createFolderInFirestore(
+  input: {
+    id?: string;
+    name: string;
+    parentId?: string | null;
+    description?: string;
+    grade?: Folder['grade'];
+    color?: string;
+  },
+  explicitOwnerId?: string
+): Promise<Folder> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để tạo thư mục.');
+  }
+  const ownerId = explicitOwnerId || auth.currentUser.uid;
+  const actorUid = auth.currentUser.uid;
+  const nowIso = new Date().toISOString();
+  const safeId = safeDocId(input.id || `f_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`);
+  const normalizedParent = normalizeParentId(input.parentId);
+  const folder: Folder = {
+    id: safeId,
+    folderId: safeId,
+    name: input.name.trim().slice(0, 150),
+    parentId: normalizedParent ? safeDocId(normalizedParent) : null,
+    ...(input.description && input.description.trim()
+      ? { description: input.description.trim().slice(0, 500) }
+      : {}),
+    ...(input.grade ? { grade: input.grade } : {}),
+    ...(input.color ? { color: input.color.slice(0, 32) } : {}),
+    ownerId,
+    authorId: ownerId,
+    createdBy: actorUid,
+    updatedBy: actorUid,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+    itemCount: 0,
+  };
+
+  const ref = doc(db, 'folders', safeId);
+  try {
+    await setDoc(ref, buildFolderDocPayload(folder, ownerId, undefined, actorUid));
+    return folder;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `folders/${safeId}`);
+  }
+}
+
+export async function updateFolderInFirestore(
+  folder: Folder,
+  explicitOwnerId?: string
+): Promise<Folder> {
+  const nowIso = new Date().toISOString();
+  const updated: Folder = {
+    ...folder,
+    id: safeDocId(folder.id),
+    folderId: safeDocId(folder.id),
+    parentId: normalizeParentId(folder.parentId),
+    ownerId: explicitOwnerId || folder.ownerId || auth.currentUser?.uid,
+    updatedBy: auth.currentUser?.uid || folder.updatedBy,
+    updatedAt: nowIso,
+  };
+  await saveFolderToFirestore(updated, explicitOwnerId);
+  return updated;
+}
+
 export async function deleteFolderFromFirestore(folderId: string): Promise<void> {
-  if (firebaseInitError || !auth.currentUser) return;
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để xóa thư mục.');
+  }
   const safeId = safeDocId(folderId);
   try {
     await deleteDoc(doc(db, 'folders', safeId));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, `folders/${safeId}`);
   }
+}
+
+export async function deleteFolderAndReparentInFirestore(
+  targetFolder: Folder,
+  allFolders: Folder[],
+  allExams: Exam[],
+  explicitOwnerId?: string
+): Promise<{ folders: Folder[]; exams: Exam[] }> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để xóa thư mục.');
+  }
+  const targetId = safeDocId(targetFolder.id);
+  const parentOfDeleted = normalizeParentId(targetFolder.parentId);
+  const nowIso = new Date().toISOString();
+  const ownerId = explicitOwnerId || targetFolder.ownerId || auth.currentUser.uid;
+  const actorUid = auth.currentUser.uid;
+
+  const directChildFolders = allFolders.filter(
+    (f) => f.id !== targetId && normalizeParentId(f.parentId) === targetId
+  );
+  const updatedChildren: Folder[] = [];
+  for (const child of directChildFolders) {
+    const reparented: Folder = {
+      ...child,
+      parentId: parentOfDeleted,
+      updatedBy: actorUid,
+      updatedAt: nowIso,
+    };
+    await saveFolderToFirestore(reparented, ownerId);
+    updatedChildren.push(reparented);
+  }
+
+  const directExams = allExams.filter((ex) => normalizeFolderId(ex.folderId) === targetId);
+  const updatedExamsMap = new Map<string, Exam>();
+  for (const ex of directExams) {
+    const movedExam: Exam = {
+      ...ex,
+      folderId: parentOfDeleted,
+      updatedBy: actorUid,
+      updatedAt: nowIso,
+    };
+    await syncExamToFirestore(movedExam, ownerId);
+    updatedExamsMap.set(movedExam.id, movedExam);
+  }
+
+  await deleteFolderFromFirestore(targetId);
+
+  const childMap = new Map(updatedChildren.map((f) => [f.id, f]));
+  const nextFolders = allFolders
+    .filter((f) => f.id !== targetId)
+    .map((f) => childMap.get(f.id) || f);
+  const nextExams = allExams.map((ex) => updatedExamsMap.get(ex.id) || ex);
+  return { folders: nextFolders, exams: nextExams };
+}
+
+export async function moveExamToFolderInFirestore(
+  exam: Exam,
+  targetFolderId: string | null,
+  explicitOwnerId?: string,
+  updates?: { title?: string; description?: string }
+): Promise<Exam> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để di chuyển đề thi.');
+  }
+  const nowIso = new Date().toISOString();
+  const ownerId = explicitOwnerId || exam.ownerId || auth.currentUser.uid;
+  const cleanFolderId = normalizeFolderId(targetFolderId);
+  const nextExam: Exam = {
+    ...exam,
+    examId: exam.examId || exam.id,
+    ...(updates?.title !== undefined ? { title: updates.title.trim() } : {}),
+    ...(updates?.description !== undefined
+      ? { description: updates.description.trim() || undefined }
+      : {}),
+    folderId: cleanFolderId,
+    ownerId,
+    updatedBy: auth.currentUser.uid,
+    updatedAt: nowIso,
+  };
+  await syncExamToFirestore(nextExam, ownerId);
+  return nextExam;
 }
 
 export async function saveUploadRecordToFirestore(
