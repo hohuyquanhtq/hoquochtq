@@ -8,6 +8,8 @@ import {
   User,
   UserRole,
   Question,
+  QuestionType,
+  CognitiveLevel,
   Exam,
   Folder,
   SubjectItem,
@@ -180,6 +182,15 @@ export default function App() {
   const [creatorInitialTitle, setCreatorInitialTitle] = useState<string>('');
   const [creatorInitialGrade, setCreatorInitialGrade] = useState<ChemGrade>('12');
   const [creatorInitialFolderId, setCreatorInitialFolderId] = useState<string | null>(null);
+  const [wordImportDefaults, setWordImportDefaults] = useState<
+    | {
+        subjectId?: string;
+        grade?: ChemGrade;
+        questionType?: QuestionType;
+        difficulty?: CognitiveLevel;
+      }
+    | undefined
+  >(undefined);
 
   // Direct Join via link/QR state
   const [directJoinExam, setDirectJoinExam] = useState<Exam | null>(null);
@@ -1467,6 +1478,7 @@ export default function App() {
                 subjects={mergedSubjects}
                 existingBankQuestions={questions}
                 currentUserId={activeUid}
+                defaultImportContext={wordImportDefaults}
                 onQuestionsPersistedToBank={handleWordQuestionsPersistedToBank}
                 onNavigateToQuestionBank={() => setActiveTab('question_bank')}
                 onSaveToQuestionBank={handleSaveQuestionsToBank}
@@ -1487,6 +1499,10 @@ export default function App() {
                 onDeleteQuestion={handleDeleteQuestion}
                 onBulkDeleteQuestions={handleBulkDeleteQuestions}
                 onCreateExamFromSelected={handleCreateExamFromSelected}
+                onOpenWordImport={(defaults) => {
+                  setWordImportDefaults(defaults);
+                  setActiveTab('upload_exam');
+                }}
               />
             )}
 

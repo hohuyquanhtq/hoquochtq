@@ -12,8 +12,12 @@ import {
 } from '../../types';
 import {
   CHEM_TOPIC_LABELS,
+  PRIMARY_QUESTION_TYPES,
+  QUESTION_TYPE_LABELS,
   generateQuestionCode,
+  resolveQuestionDifficulty,
   resolveQuestionSubject,
+  resolveQuestionType,
   slugifySubjectId,
 } from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
@@ -27,6 +31,12 @@ export interface QuestionFormModalProps {
   isOpen: boolean;
   mode: 'add' | 'edit';
   initialQuestion?: Question | null;
+  initialDefaults?: {
+    subjectId?: string;
+    grade?: ChemGrade;
+    questionType?: QuestionType;
+    difficulty?: CognitiveLevel;
+  };
   subjects: SubjectItem[];
   existingQuestions?: Question[];
   currentUserId?: string;
@@ -60,6 +70,7 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
   isOpen,
   mode,
   initialQuestion,
+  initialDefaults,
   subjects,
   currentUserId,
   onAddSubject,
@@ -91,6 +102,7 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
   const [shortAnswersRaw, setShortAnswersRaw] = useState<string>('');
   const [shortTolerance, setShortTolerance] = useState<string>('0.05');
   const [shortUnit, setShortUnit] = useState<string>('');
+  const [essayGuide, setEssayGuide] = useState<string>('');
   const [explanation, setExplanation] = useState<string>('');
   const [imageUrl, setImageUrl] = useState<string>('');
   const [source, setSource] = useState<string>('');
@@ -125,8 +137,11 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
       setLegacySubjectGradeKey(`${resolvedSub.id}__${initGrade}`);
       setLegacyLessonTopic(initialQuestion.lessonTopic || '');
       setTopic(initialQuestion.topic || 'hoa_dai_cuong');
-      setQType(initialQuestion.type || 'part1_single_choice');
-      setLevel(initialQuestion.level || 'nhan_biet');
+      const resolvedInitType = resolveQuestionType(initialQuestion);
+      setQType(
+        resolvedInitType === 'part1_multiple_choice' ? 'part1_single_choice' : resolvedInitType
+      );
+      setLevel(resolveQuestionDifficulty(initialQuestion));
       setCode(initialQuestion.code || '');
       setContent(initialQuestion.content || '');
       setOptions(
@@ -157,17 +172,36 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
           : '0.05'
       );
       setShortUnit(initialQuestion.shortAnswerConfig?.unit || '');
+      setEssayGuide(initialQuestion.essayGuide || '');
       setExplanation(initialQuestion.explanation || '');
       setImageUrl(initialQuestion.imageUrl || '');
       setSource(initialQuestion.source || '');
     } else {
-      // In add mode, start unselected so Khối lớp, Chương, Bài học are locked until Môn học is chosen
-      setCurriculum(EMPTY_CURRICULUM);
+      const matchedDefaultSubject = initialDefaults?.subjectId
+        ? subjects.find((s) => s.id === initialDefaults.subjectId)
+        : undefined;
+      setCurriculum(
+        matchedDefaultSubject
+          ? {
+              subjectId: matchedDefaultSubject.id,
+              subjectName: matchedDefaultSubject.name,
+              grade: initialDefaults?.grade || '',
+              chapterId: '',
+              chapterName: '',
+              lessonId: '',
+              lessonName: '',
+            }
+          : EMPTY_CURRICULUM
+      );
       setLegacySubjectGradeKey('');
       setLegacyLessonTopic('');
       setTopic('hoa_dai_cuong');
-      setQType('part1_single_choice');
-      setLevel('nhan_biet');
+      const seededType =
+        initialDefaults?.questionType === 'part1_multiple_choice'
+          ? 'part1_single_choice'
+          : initialDefaults?.questionType || 'part1_single_choice';
+      setQType(seededType);
+      setLevel(initialDefaults?.difficulty || 'nhan_biet');
       setCode('');
       setContent('');
       setOptions([
@@ -186,11 +220,12 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
       setShortAnswersRaw('');
       setShortTolerance('0.05');
       setShortUnit('');
+      setEssayGuide('');
       setExplanation('');
       setImageUrl('');
       setSource('');
     }
-  }, [isOpen, mode, initialQuestion, subjects]);
+  }, [isOpen, mode, initialQuestion, initialDefaults, subjects]);
 
   if (!isOpen) return null;
 
@@ -359,7 +394,9 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
       lessonName: curriculum.lessonName || undefined,
       lessonTopic: resolvedLessonTopic,
       type: qType,
+      questionType: qType,
       level,
+      difficulty: level,
       content: content.trim(),
       options:
         qType === 'part1_single_choice'
@@ -370,6 +407,7 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
             }))
           : undefined,
       correctOptionId: qType === 'part1_single_choice' ? correctOptionId : undefined,
+      correctOptionIds: undefined,
       statements:
         qType === 'part2_true_false'
           ? statements.map((s) => ({
@@ -388,6 +426,7 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
               ...(shortUnit.trim() ? { unit: shortUnit.trim() } : {}),
             }
           : undefined,
+      essayGuide: qType === 'essay' ? essayGuide.trim() || undefined : undefined,
       explanation: explanation.trim() || undefined,
       imageUrl: imageUrl.trim() || undefined,
       source: source.trim() || undefined,
@@ -478,26 +517,28 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
             )}
           </div>
 
-          {/* 5. Dạng câu hỏi + 6. Mức độ nhận thức + (Tùy chọn mã / phân môn Hóa) */}
+          {/* 4. Dạng câu hỏi (TRƯỚC Mức độ) + 5. Mức độ nhận thức + (Tùy chọn mã / phân môn Hóa) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                5. Dạng câu hỏi
+                Dạng câu hỏi *
               </label>
               <select
                 value={qType}
                 onChange={(e) => setQType(e.target.value as QuestionType)}
                 className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
               >
-                <option value="part1_single_choice">Phần I · 4 lựa chọn (A, B, C, D)</option>
-                <option value="part2_true_false">Phần II · Đúng - Sai (4 ý a, b, c, d)</option>
-                <option value="part3_short_answer">Phần III · Trả lời ngắn</option>
+                {PRIMARY_QUESTION_TYPES.map((qt) => (
+                  <option key={qt.id} value={qt.id}>
+                    {qt.label}
+                  </option>
+                ))}
               </select>
             </div>
 
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                6. Mức độ nhận thức
+                Mức độ nhận thức *
               </label>
               <select
                 value={level}
@@ -733,6 +774,29 @@ export const QuestionFormModal: React.FC<QuestionFormModalProps> = ({
                   />
                 </div>
               </div>
+            </div>
+          )}
+
+          {qType === 'essay' && (
+            <div className="space-y-2.5 p-4 rounded-xl bg-amber-50/60 border border-amber-200">
+              <label className="block text-xs font-bold text-amber-950">
+                8. Hướng dẫn chấm / Gợi ý đáp án Tự luận (tùy chọn)
+              </label>
+              <textarea
+                rows={4}
+                value={essayGuide}
+                onChange={(e) => setEssayGuide(e.target.value)}
+                placeholder="Nhập dàn ý đáp án, thang điểm thành phần, phương trình phản ứng hoặc các bước trình bày tự luận..."
+                className="w-full p-3 rounded-xl border border-amber-300 bg-white text-xs text-slate-900 leading-relaxed focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+              {showPreview && essayGuide.trim() && (
+                <div className="p-3 rounded-xl bg-white border border-amber-200 text-xs text-slate-800">
+                  <p className="text-[11px] font-semibold text-amber-800 mb-1">
+                    Xem trước hướng dẫn chấm:
+                  </p>
+                  <ChemRenderer text={essayGuide} />
+                </div>
+              )}
             </div>
           )}
 

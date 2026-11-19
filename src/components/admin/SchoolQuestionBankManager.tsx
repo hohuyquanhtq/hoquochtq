@@ -56,10 +56,11 @@ const LEVEL_LABELS: Record<CognitiveLevel, string> = {
 };
 
 const TYPE_LABELS: Record<QuestionType, string> = {
-  part1_single_choice: 'Phần I · Trắc nghiệm 4 lựa chọn',
-  part1_multiple_choice: 'Phần I · Nhiều lựa chọn',
-  part2_true_false: 'Phần II · Đúng / Sai',
-  part3_short_answer: 'Phần III · Trả lời ngắn',
+  part1_single_choice: 'Trắc nghiệm nhiều lựa chọn',
+  part1_multiple_choice: 'Trắc nghiệm nhiều lựa chọn (nhiều đáp án)',
+  part2_true_false: 'Trắc nghiệm đúng/sai',
+  part3_short_answer: 'Trắc nghiệm trả lời ngắn',
+  essay: 'Tự luận',
 };
 
 const GRADE_LABELS: Record<string, string> = {
@@ -1114,6 +1115,25 @@ export const SchoolQuestionBankManager: React.FC<SchoolQuestionBankManagerProps>
               </select>
 
               <select
+                value={selectedType}
+                onChange={(e) => {
+                  setSelectedType(e.target.value);
+                  setPage(1);
+                }}
+                className="w-full px-3 py-2 min-h-[42px] rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
+                aria-label="Lọc theo dạng câu hỏi"
+              >
+                <option value="all">Tất cả dạng câu hỏi</option>
+                <option value="part1_single_choice">Trắc nghiệm nhiều lựa chọn</option>
+                <option value="part2_true_false">Trắc nghiệm đúng/sai</option>
+                <option value="part3_short_answer">Trắc nghiệm trả lời ngắn</option>
+                <option value="essay">Tự luận</option>
+              </select>
+            </div>
+
+            {/* Row 3: Level + Date From + Date To + Sort */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+              <select
                 value={selectedLevel}
                 onChange={(e) => {
                   setSelectedLevel(e.target.value);
@@ -1124,26 +1144,6 @@ export const SchoolQuestionBankManager: React.FC<SchoolQuestionBankManagerProps>
               >
                 <option value="all">Tất cả mức độ nhận thức</option>
                 {Object.entries(LEVEL_LABELS).map(([k, label]) => (
-                  <option key={k} value={k}>
-                    {label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Row 3: Type + Date From + Date To + Sort */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-              <select
-                value={selectedType}
-                onChange={(e) => {
-                  setSelectedType(e.target.value);
-                  setPage(1);
-                }}
-                className="w-full px-3 py-2 min-h-[42px] rounded-xl border border-slate-300 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
-                aria-label="Lọc theo dạng câu hỏi"
-              >
-                <option value="all">Tất cả dạng câu hỏi</option>
-                {Object.entries(TYPE_LABELS).map(([k, label]) => (
                   <option key={k} value={k}>
                     {label}
                   </option>

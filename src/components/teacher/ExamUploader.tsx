@@ -50,7 +50,12 @@ import {
   COGNITIVE_LEVEL_SHORT_LABELS,
   DEFAULT_GDPT_2018_SUBJECTS,
   GRADE_LABELS,
+  PRIMARY_QUESTION_TYPES,
+  QUESTION_TYPE_LABELS,
+  QUESTION_TYPE_SHORT_LABELS,
+  resolveQuestionDifficulty,
   resolveQuestionSubject,
+  resolveQuestionType,
 } from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { ExamAnswerDashboard } from './ExamAnswerDashboard';
@@ -58,10 +63,18 @@ import { WordSaveToBankModal } from './WordSaveToBankModal';
 import { CurriculumCascadeSelector } from './CurriculumCascadeSelector';
 import { isolateAnswerBlock, deepScanWithGemini } from '../../utils/answerExtractionEngine';
 
+export interface WordImportDefaultContext {
+  subjectId?: string;
+  grade?: ChemGrade;
+  questionType?: QuestionType;
+  difficulty?: CognitiveLevel;
+}
+
 interface ExamUploaderProps {
   onSaveToQuestionBank?: (questions: Question[]) => void;
   onQuestionsPersistedToBank?: (savedQuestions: Question[], refreshedBank?: Question[]) => void;
   onNavigateToQuestionBank?: () => void;
+  defaultImportContext?: WordImportDefaultContext;
   subjects?: SubjectItem[];
   existingBankQuestions?: Question[];
   currentUserId?: string;
@@ -86,6 +99,7 @@ type UploaderViewTab =
   | 'part1'
   | 'part2'
   | 'part3'
+  | 'essay'
   | 'all_questions'
   | 'issues';
 
@@ -118,6 +132,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   onSaveToQuestionBank,
   onQuestionsPersistedToBank,
   onNavigateToQuestionBank,
+  defaultImportContext,
   subjects = DEFAULT_GDPT_2018_SUBJECTS,
   existingBankQuestions = [],
   currentUserId,
@@ -131,7 +146,13 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const step4Ref = useRef<HTMLElement>(null);
 
   const [inputText, setInputText] = useState('');
-  const [selectedGrade, setSelectedGrade] = useState<ChemGrade>('12');
+  const [selectedGrade, setSelectedGrade] = useState<ChemGrade>(
+    defaultImportContext?.grade || '12'
+  );
+  // Default Question Type from Question Bank Tab (used as fallback default only — NEVER forces mixed docs)
+  const [defaultQuestionType, setDefaultQuestionType] = useState<QuestionType | ''>(
+    defaultImportContext?.questionType || ''
+  );
   const [selectedFile, setSelectedFile] = useState<SelectedFileInfo | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -154,6 +175,16 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const [savedToBankSourceIds, setSavedToBankSourceIds] = useState<Set<string>>(new Set());
   const [saveModalQuestions, setSaveModalQuestions] = useState<Question[] | null>(null);
   const [unsavedOnlyFilterIds, setUnsavedOnlyFilterIds] = useState<Set<string> | null>(null);
+
+  useEffect(() => {
+    if (!defaultImportContext) return;
+    if (defaultImportContext.grade) {
+      setSelectedGrade(defaultImportContext.grade);
+    }
+    if (defaultImportContext.questionType !== undefined) {
+      setDefaultQuestionType(defaultImportContext.questionType || '');
+    }
+  }, [defaultImportContext]);
 
   // Keep selectedQuestionIds synced when parsedResult changes (select all on fresh parse; prune deleted IDs)
   const parsedQuestionSignature = parsedResult?.questions.map((q) => q.id).join('|') || '';
@@ -215,7 +246,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage('Đang phân loại câu hỏi Phần I, II, III và đối chiếu đáp án...');
         await yieldToNextFrame();
 
-        const { text, result } = await parseDocxExam(buffer, selectedGrade);
+        const { text, result } = await parseDocxExam(buffer, selectedGrade, {
+          defaultQuestionType: defaultQuestionType || undefined,
+        });
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab(result.totalQuestions > 0 ? 'answer_reconciliation' : 'all_questions');
@@ -240,7 +273,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage('Đang bóc tách câu hỏi trắc nghiệm & bảng đáp án PDF...');
         await yieldToNextFrame();
 
-        const { text, pdfMeta, result } = await parsePdfExam(buffer, selectedGrade);
+        const { text, pdfMeta, result } = await parsePdfExam(buffer, selectedGrade, {
+          defaultQuestionType: defaultQuestionType || undefined,
+        });
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab(result.totalQuestions > 0 ? 'answer_reconciliation' : 'all_questions');
@@ -276,7 +311,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
         const text = await file.text();
         setInputText(text);
-        const result = parseExamContent(text, selectedGrade);
+        const result = parseExamContent(text, selectedGrade, {
+          defaultQuestionType: defaultQuestionType || undefined,
+        });
         setParsedResult(result);
         setActiveViewTab('answer_reconciliation');
         setAnalysisProgress(100);
@@ -349,6 +386,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         selectedAnswerCandidateId: parsedResult?.selectedAnswerCandidateId,
         pdfMeta: parsedResult?.pdfMeta,
         extractedTables: parsedResult?.extractedTables,
+        defaultQuestionType: defaultQuestionType || undefined,
       });
       setParsedResult(result);
       setAnalysisProgress(100);
@@ -375,7 +413,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     });
     setInputText(sample.content);
     setSelectedGrade(sample.grade);
-    const result = parseExamContent(sample.content, sample.grade);
+    const result = parseExamContent(sample.content, sample.grade, {
+      defaultQuestionType: defaultQuestionType || undefined,
+    });
     setParsedResult(result);
     setActiveViewTab('answer_reconciliation');
     setAnalysisProgress(100);
@@ -402,7 +442,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       await yieldToNextFrame();
 
       if (type === 'docx') {
-        const { text, result } = await parseDocxExam(buffer, '12');
+        const { text, result } = await parseDocxExam(buffer, '12', {
+          defaultQuestionType: defaultQuestionType || undefined,
+        });
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab('answer_reconciliation');
@@ -410,7 +452,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage(`Hoàn tất bóc tách ${result.totalQuestions} câu hỏi từ ${name}.`);
         showToast(`Đã bóc tách file Word mẫu ${name} (${result.totalQuestions} câu)!`);
       } else {
-        const { text, pdfMeta, result } = await parsePdfExam(buffer, '12');
+        const { text, pdfMeta, result } = await parsePdfExam(buffer, '12', {
+          defaultQuestionType: defaultQuestionType || undefined,
+        });
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab('answer_reconciliation');
@@ -438,6 +482,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       selectedAnswerCandidateId: candidateId,
       pdfMeta: parsedResult.pdfMeta,
       extractedTables: parsedResult.extractedTables,
+      defaultQuestionType: defaultQuestionType || undefined,
     });
     setParsedResult({
       ...result,
@@ -581,17 +626,20 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const handleMoveQuestionType = (qId: string, newType: QuestionType) => {
     if (!parsedResult) return;
     const targetQ = parsedResult.questions.find((q) => q.id === qId);
-    if (!targetQ || targetQ.type === newType) return;
+    if (!targetQ || resolveQuestionType(targetQ) === newType) return;
     const reclassified = reclassifyQuestionType(targetQ, newType);
     const updatedQuestions = parsedResult.questions.map((q) => (q.id === qId ? reclassified : q));
     setParsedResult(recalculateParsedExamResult(parsedResult, updatedQuestions));
-    const label =
-      newType === 'part1_single_choice'
-        ? 'Phần I (4 lựa chọn)'
-        : newType === 'part2_true_false'
-        ? 'Phần II (Đúng/Sai)'
-        : 'Phần III (Trả lời ngắn)';
-    showToast(`Đã chuyển câu hỏi sang ${label}`);
+    showToast(`Đã chuyển câu hỏi sang ${QUESTION_TYPE_LABELS[newType]}`);
+  };
+
+  const handleChangeQuestionLevel = (qId: string, newLevel: CognitiveLevel) => {
+    if (!parsedResult) return;
+    const updatedQuestions = parsedResult.questions.map((q) =>
+      q.id === qId ? { ...q, level: newLevel, difficulty: newLevel } : q
+    );
+    setParsedResult(recalculateParsedExamResult(parsedResult, updatedQuestions));
+    showToast(`Đã đổi mức độ câu hỏi sang ${COGNITIVE_LEVEL_LABELS[newLevel]}`);
   };
 
   const getBlockingErrors = (): string | null => {
@@ -870,6 +918,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         selectedAnswerCandidateId: parsedResult?.selectedAnswerCandidateId,
         pdfMeta: parsedResult?.pdfMeta,
         extractedTables: parsedResult?.extractedTables,
+        defaultQuestionType: defaultQuestionType || undefined,
       });
       setParsedResult(result);
       setAnalysisProgress(100);
@@ -894,9 +943,13 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const displayedQuestions =
     parsedResult?.questions.filter((q) => {
       if (unsavedOnlyFilterIds && !unsavedOnlyFilterIds.has(q.id)) return false;
-      if (activeViewTab === 'part1') return q.type === 'part1_single_choice';
-      if (activeViewTab === 'part2') return q.type === 'part2_true_false';
-      if (activeViewTab === 'part3') return q.type === 'part3_short_answer';
+      const resolvedT = resolveQuestionType(q);
+      if (activeViewTab === 'part1') {
+        return resolvedT === 'part1_single_choice' || resolvedT === 'part1_multiple_choice';
+      }
+      if (activeViewTab === 'part2') return resolvedT === 'part2_true_false';
+      if (activeViewTab === 'part3') return resolvedT === 'part3_short_answer';
+      if (activeViewTab === 'essay') return resolvedT === 'essay';
       if (activeViewTab === 'issues') return q.parseStatus !== 'verified' || hasMissingAnswer(q);
       return true;
     }) || [];
@@ -1019,20 +1072,44 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </p>
           </div>
 
-          <div className="w-full sm:w-56 shrink-0">
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-              Khối lớp áp dụng
-            </label>
-            <select
-              value={selectedGrade}
-              onChange={(e) => setSelectedGrade(e.target.value as ChemGrade)}
-              className="w-full min-h-[44px] text-[15px] font-semibold px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
-            >
-              <option value="12">Lớp 12 THPT</option>
-              <option value="11">Lớp 11 THPT</option>
-              <option value="10">Lớp 10 THPT</option>
-              <option value="chuyen_hsg">Chuyên &amp; HSG</option>
-            </select>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full lg:w-auto lg:min-w-[440px] shrink-0">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Khối lớp áp dụng
+              </label>
+              <select
+                value={selectedGrade}
+                onChange={(e) => setSelectedGrade(e.target.value as ChemGrade)}
+                className="w-full min-h-[42px] text-sm font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+              >
+                <option value="12">Lớp 12 THPT</option>
+                <option value="11">Lớp 11 THPT</option>
+                <option value="10">Lớp 10 THPT</option>
+                <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                Dạng câu hỏi mặc định (lượt bóc tách)
+              </label>
+              <select
+                value={defaultQuestionType}
+                onChange={(e) => setDefaultQuestionType(e.target.value as QuestionType | '')}
+                title="Chỉ dùng làm giá trị mặc định cho câu không rõ cấu trúc — hệ thống vẫn tự nhận diện từng câu trong đề hỗn hợp"
+                className="w-full min-h-[42px] text-sm font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+              >
+                <option value="">Tự động nhận diện từng câu</option>
+                {PRIMARY_QUESTION_TYPES.map((qt) => (
+                  <option key={qt.id} value={qt.id}>
+                    {qt.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-slate-500 mt-1">
+                Chỉ làm mặc định khi câu mơ hồ, không ép đề hỗn hợp thành 1 dạng.
+              </p>
+            </div>
           </div>
         </div>
 
@@ -1452,7 +1529,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               </div>
 
               {/* Category Summary Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 tabular-nums">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 tabular-nums">
                 <button
                   type="button"
                   onClick={() => setActiveViewTab('part1')}
@@ -1462,7 +1539,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-teal-300'
                   }`}
                 >
-                  <p className="text-[13px] font-semibold text-teal-800">Phần I (4 lựa chọn A,B,C,D)</p>
+                  <p className="text-[12px] font-semibold text-teal-800">Trắc nghiệm nhiều L/C</p>
                   <p className="text-2xl font-bold text-slate-900 mt-1">{parsedResult.part1Count} câu</p>
                 </button>
 
@@ -1475,10 +1552,10 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-indigo-300'
                   }`}
                 >
-                  <p className="text-[13px] font-semibold text-indigo-800">Phần II (Đúng/Sai a,b,c,d)</p>
+                  <p className="text-[12px] font-semibold text-indigo-800">Đúng / Sai (a,b,c,d)</p>
                   <p className="text-2xl font-bold text-slate-900 mt-1">
                     {parsedResult.part2Count} câu{' '}
-                    <span className="text-sm font-medium text-indigo-700">
+                    <span className="text-xs font-medium text-indigo-700">
                       ({parsedResult.part2StatementsCount ?? parsedResult.part2Count * 4} ý)
                     </span>
                   </p>
@@ -1493,8 +1570,21 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-slate-400'
                   }`}
                 >
-                  <p className="text-[13px] font-semibold text-slate-700">Phần III (Trả lời ngắn)</p>
+                  <p className="text-[12px] font-semibold text-slate-700">Trả lời ngắn</p>
                   <p className="text-2xl font-bold text-slate-900 mt-1">{parsedResult.part3Count} câu</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveViewTab('essay')}
+                  className={`text-left p-3.5 rounded-xl border transition-colors ${
+                    activeViewTab === 'essay'
+                      ? 'bg-amber-50 border-amber-500'
+                      : 'bg-slate-50 border-slate-200 hover:border-amber-300'
+                  }`}
+                >
+                  <p className="text-[12px] font-semibold text-amber-800">Tự luận</p>
+                  <p className="text-2xl font-bold text-slate-900 mt-1">{parsedResult.essayCount ?? 0} câu</p>
                 </button>
 
                 <button
@@ -1506,7 +1596,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-emerald-300'
                   }`}
                 >
-                  <p className="text-[13px] font-semibold text-emerald-800">Đáp án đã nhận diện</p>
+                  <p className="text-[12px] font-semibold text-emerald-800">Đáp án đã nhận diện</p>
                   <p className="text-2xl font-bold text-emerald-700 mt-1">
                     {verifiedAnswerItems}
                     <span className="text-sm font-medium text-slate-600 ml-1">/ {totalAnswerItems}</span>
@@ -1516,14 +1606,14 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 <button
                   type="button"
                   onClick={() => setActiveViewTab(issueQuestions.length > 0 ? 'issues' : 'all_questions')}
-                  className={`text-left p-3.5 rounded-xl border transition-colors col-span-2 sm:col-span-1 ${
+                  className={`text-left p-3.5 rounded-xl border transition-colors ${
                     issueQuestions.length > 0
                       ? 'bg-amber-50 border-amber-300 hover:border-amber-500'
                       : 'bg-slate-50 border-slate-200 hover:border-slate-300'
                   }`}
                 >
                   <p
-                    className={`text-[13px] font-semibold ${
+                    className={`text-[12px] font-semibold ${
                       issueQuestions.length > 0 ? 'text-amber-800' : 'text-slate-600'
                     }`}
                   >
@@ -1697,9 +1787,11 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                           onChange={(e) => handleChangeSectionType(sec.id, e.target.value as QuestionType)}
                           className="flex-1 text-sm font-semibold px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
                         >
-                          <option value="part1_single_choice">Phần I: 4 lựa chọn (A,B,C,D)</option>
-                          <option value="part2_true_false">Phần II: Đúng / Sai (a,b,c,d)</option>
-                          <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
+                          {PRIMARY_QUESTION_TYPES.map((qt) => (
+                            <option key={qt.id} value={qt.id}>
+                              {qt.label}
+                            </option>
+                          ))}
                         </select>
                       </div>
                     </div>
@@ -1732,7 +1824,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                     : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                Trắc nghiệm A,B,C,D ({parsedResult.part1Count})
+                Trắc nghiệm nhiều L/C ({parsedResult.part1Count})
               </button>
 
               <button
@@ -1744,7 +1836,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                     : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                Đúng / Sai a,b,c,d ({parsedResult.part2Count})
+                Đúng / Sai ({parsedResult.part2Count})
               </button>
 
               <button
@@ -1757,6 +1849,18 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 }`}
               >
                 Trả lời ngắn ({parsedResult.part3Count})
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setActiveViewTab('essay')}
+                className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap ${
+                  activeViewTab === 'essay'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
+                }`}
+              >
+                Tự luận ({parsedResult.essayCount ?? 0})
               </button>
 
               <button
@@ -1932,15 +2036,11 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                             <span className="font-mono text-[13px] text-slate-500">{q.code}</span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
                             <span className="font-semibold text-teal-700">
-                              {q.type === 'part1_single_choice'
-                                ? 'Phần I (4 lựa chọn)'
-                                : q.type === 'part2_true_false'
-                                ? 'Phần II (Đúng / Sai)'
-                                : 'Phần III (Trả lời ngắn)'}
+                              {QUESTION_TYPE_SHORT_LABELS[resolveQuestionType(q)]}
                             </span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
                             <span className="text-xs font-semibold text-slate-600">
-                              {COGNITIVE_LEVEL_SHORT_LABELS[q.level] || q.level}
+                              {COGNITIVE_LEVEL_SHORT_LABELS[resolveQuestionDifficulty(q)] || q.level}
                             </span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
                             <span className="text-xs text-slate-600">
@@ -1969,21 +2069,41 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                             )}
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <select
-                              value={q.type}
+                              value={
+                                resolveQuestionType(q) === 'part1_multiple_choice'
+                                  ? 'part1_single_choice'
+                                  : resolveQuestionType(q)
+                              }
                               onChange={(e) => handleMoveQuestionType(q.id, e.target.value as QuestionType)}
-                              title="Chuyển câu hỏi sang phần khác"
-                              className="text-sm font-semibold px-3 min-h-[38px] rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                              title="Chỉnh dạng câu hỏi riêng cho câu này"
+                              className="text-xs font-semibold px-2.5 min-h-[36px] rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
                             >
-                              <option value="part1_single_choice">Phần I (4 L/C)</option>
-                              <option value="part2_true_false">Phần II (Đ/S)</option>
-                              <option value="part3_short_answer">Phần III (Ngắn)</option>
+                              {PRIMARY_QUESTION_TYPES.map((qt) => (
+                                <option key={qt.id} value={qt.id}>
+                                  {qt.shortLabel}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={resolveQuestionDifficulty(q)}
+                              onChange={(e) =>
+                                handleChangeQuestionLevel(q.id, e.target.value as CognitiveLevel)
+                              }
+                              title="Chỉnh mức độ nhận thức riêng cho câu này"
+                              className="text-xs font-semibold px-2.5 min-h-[36px] rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                            >
+                              {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
+                                <option key={lvl} value={lvl}>
+                                  {COGNITIVE_LEVEL_SHORT_LABELS[lvl]}
+                                </option>
+                              ))}
                             </select>
                             <button
                               type="button"
                               onClick={() => setEditingQuestion({ ...q })}
-                              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-600 hover:text-teal-700 hover:bg-teal-50 border border-slate-200 transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl text-slate-600 hover:text-teal-700 hover:bg-teal-50 border border-slate-200 transition-colors"
                               title="Chỉnh sửa câu hỏi & đáp án"
                             >
                               <Edit3 className="w-4 h-4" />
@@ -1991,7 +2111,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                             <button
                               type="button"
                               onClick={() => handleDeleteQuestion(q.id)}
-                              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition-colors"
+                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition-colors"
                               title="Xóa câu này"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -2091,6 +2211,21 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                           </div>
                         )}
 
+                        {q.type === 'essay' && (
+                          <div className="mt-3 pt-3 border-t border-slate-100 text-sm">
+                            {q.essayGuide ? (
+                              <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200 text-amber-950">
+                                <span className="font-bold text-amber-900">Hướng dẫn chấm Tự luận: </span>
+                                <ChemRenderer text={q.essayGuide} inline />
+                              </div>
+                            ) : (
+                              <span className="text-xs italic text-slate-500">
+                                Câu hỏi Tự luận (có thể nhập hướng dẫn chấm trong mục Chỉnh sửa)
+                              </span>
+                            )}
+                          </div>
+                        )}
+
                         {q.explanation && (
                           <div className="mt-3 p-3.5 rounded-xl bg-slate-50 text-slate-700 text-sm border border-slate-200">
                             <span className="font-bold text-slate-900">Hướng dẫn giải: </span>
@@ -2137,17 +2272,17 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </div>
 
             {/* Summary Numbers */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 tabular-nums">
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
                 <p className="text-[13px] text-slate-300">Tổng câu đã bóc tách</p>
                 <p className="text-2xl font-bold text-white mt-1">{parsedResult.totalQuestions} câu</p>
               </div>
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
-                <p className="text-[13px] text-slate-300">Phần I (4 lựa chọn)</p>
+                <p className="text-[13px] text-slate-300">Trắc nghiệm nhiều L/C</p>
                 <p className="text-2xl font-bold text-teal-300 mt-1">{parsedResult.part1Count} câu</p>
               </div>
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
-                <p className="text-[13px] text-slate-300">Phần II (Đúng/Sai)</p>
+                <p className="text-[13px] text-slate-300">Đúng / Sai</p>
                 <p className="text-2xl font-bold text-indigo-300 mt-1">
                   {parsedResult.part2Count} câu{' '}
                   <span className="text-sm font-normal text-slate-300">
@@ -2156,8 +2291,12 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 </p>
               </div>
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
-                <p className="text-[13px] text-slate-300">Phần III (Trả lời ngắn)</p>
+                <p className="text-[13px] text-slate-300">Trả lời ngắn</p>
                 <p className="text-2xl font-bold text-emerald-300 mt-1">{parsedResult.part3Count} câu</p>
+              </div>
+              <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
+                <p className="text-[13px] text-slate-300">Tự luận</p>
+                <p className="text-2xl font-bold text-amber-300 mt-1">{parsedResult.essayCount ?? 0} câu</p>
               </div>
             </div>
 
@@ -2221,43 +2360,10 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </div>
 
             <div className="p-6 overflow-y-auto flex-1 space-y-4 text-sm">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Dạng câu hỏi</label>
-                  <select
-                    value={editingQuestion.type}
-                    onChange={(e) =>
-                      setEditingQuestion(reclassifyQuestionType(editingQuestion, e.target.value as QuestionType))
-                    }
-                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                  >
-                    <option value="part1_single_choice">Phần I: Trắc nghiệm 4 lựa chọn (A, B, C, D)</option>
-                    <option value="part2_true_false">Phần II: Trắc nghiệm Đúng / Sai (a, b, c, d)</option>
-                    <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Mức độ nhận thức</label>
-                  <select
-                    value={editingQuestion.level}
-                    onChange={(e) =>
-                      setEditingQuestion({ ...editingQuestion, level: e.target.value as CognitiveLevel })
-                    }
-                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                  >
-                    {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
-                      <option key={lvl} value={lvl}>
-                        {COGNITIVE_LEVEL_LABELS[lvl]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
+              {/* 1. Môn học -> 2. Khối lớp -> 3. Chương / Bài học FIRST */}
               <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
                 <p className="text-xs font-bold text-slate-700">
-                  Phân loại riêng cho câu hỏi này (Môn học · Khối lớp · Chương · Bài học)
+                  1–3. Phân loại chương trình (Môn học · Khối lớp · Chương · Bài học)
                 </p>
                 <CurriculumCascadeSelector
                   value={{
@@ -2293,6 +2399,52 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                     })
                   }
                 />
+              </div>
+
+              {/* 4. Dạng câu hỏi BEFORE 5. Mức độ nhận thức */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">4. Dạng câu hỏi</label>
+                  <select
+                    value={
+                      resolveQuestionType(editingQuestion) === 'part1_multiple_choice'
+                        ? 'part1_single_choice'
+                        : resolveQuestionType(editingQuestion)
+                    }
+                    onChange={(e) =>
+                      setEditingQuestion(reclassifyQuestionType(editingQuestion, e.target.value as QuestionType))
+                    }
+                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                  >
+                    {PRIMARY_QUESTION_TYPES.map((qt) => (
+                      <option key={qt.id} value={qt.id}>
+                        {qt.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">5. Mức độ nhận thức</label>
+                  <select
+                    value={resolveQuestionDifficulty(editingQuestion)}
+                    onChange={(e) => {
+                      const nextLvl = e.target.value as CognitiveLevel;
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        level: nextLvl,
+                        difficulty: nextLvl,
+                      });
+                    }}
+                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                  >
+                    {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
+                      <option key={lvl} value={lvl}>
+                        {COGNITIVE_LEVEL_LABELS[lvl]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               </div>
 
               <div>
@@ -2411,6 +2563,28 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 </div>
               )}
 
+              {editingQuestion.type === 'essay' && (
+                <div className="space-y-2">
+                  <label className="block font-bold text-slate-700">
+                    Hướng dẫn chấm / Gợi ý đáp án Tự luận (tùy chọn):
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={editingQuestion.essayGuide || ''}
+                    onChange={(e) =>
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        essayGuide: e.target.value,
+                        parseStatus: 'verified',
+                        parseWarning: undefined,
+                      })
+                    }
+                    placeholder="Nhập dàn ý chấm điểm, các bước lập luận hoặc phương trình phản ứng..."
+                    className="w-full p-2.5 rounded-xl border border-amber-300 bg-amber-50/40 text-sm focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                  />
+                </div>
+              )}
+
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Hướng dẫn giải chi tiết</label>
                 <textarea
@@ -2505,6 +2679,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         existingBankQuestions={existingBankQuestions}
         subjects={subjects}
         defaultGrade={selectedGrade}
+        defaultSubjectId={defaultImportContext?.subjectId}
+        defaultQuestionType={defaultQuestionType || defaultImportContext?.questionType}
+        defaultDifficulty={defaultImportContext?.difficulty}
         sourceFileName={selectedFile?.name}
         currentUserId={currentUserId}
         onClose={() => setSaveModalQuestions(null)}

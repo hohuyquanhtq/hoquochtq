@@ -16,6 +16,8 @@ export interface SectionDetectionCandidate {
 export function removeDiacritics(str: string): string {
   return str
     .replace(/[đĐ]/g, 'd')
+    .replace(/Ⅳ/g, 'iv')
+    .replace(/ⅳ/g, 'iv')
     .replace(/Ⅲ/g, 'iii')
     .replace(/Ⅱ/g, 'ii')
     .replace(/Ⅰ/g, 'i')
@@ -57,6 +59,13 @@ function stripTrailingMetadata(norm: string): string {
  * Detects explicit question-type keywords in normalized header text
  */
 function matchExplicitTypeKeyword(normText: string): QuestionType | null {
+  // Part IV / Essay keywords (check before Part I so "phan tu luan" / "cau hoi tu luan" resolves cleanly)
+  if (
+    /\b(?:phan\s+tu\s+luan|cau\s+(?:hoi\s+)?tu\s+luan|bai\s+(?:tap\s+)?tu\s+luan|tu\s+luan)\b/i.test(normText)
+  ) {
+    return 'essay';
+  }
+
   // Part III: Short answer keywords (check before Part I so "trac nghiem tra loi ngan" doesn't match "trac nghiem")
   if (
     /\b(?:trac\s+nghiem\s+tra\s+loi\s+ngan|cau\s+(?:hoi\s+)?tra\s+loi\s+ngan|tra\s+loi\s+ngan|dien\s+khuyet|tra\s+loi\s+tu\s+do|dang\s+thuc\s+tra\s+loi\s+ngan)\b/i.test(normText)
@@ -146,26 +155,29 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
     return null;
   }
 
-  // 1. Check "PHẦN / MỤC <Roman/Arabic>" pattern (ordered III -> II -> I)
-  const phanMatch = norm.match(/^(?:phan|muc)\s+(?:(iii|3)|(ii|2)|(i|1))\b([\s.:–—\-\/]*)(.*)$/i);
+  // 1. Check "PHẦN / MỤC <Roman/Arabic>" pattern (ordered IV -> III -> II -> I)
+  const phanMatch = norm.match(/^(?:phan|muc)\s+(?:(iv|4)|(iii|3)|(ii|2)|(i|1))\b([\s.:–—\-\/]*)(.*)$/i);
   if (phanMatch) {
-    const isPart3 = !!phanMatch[1];
-    const isPart2 = !!phanMatch[2];
-    const sep = phanMatch[4] || '';
-    const rest = (phanMatch[5] || '').trim();
+    const isPart4 = !!phanMatch[1];
+    const isPart3 = !!phanMatch[2];
+    const isPart2 = !!phanMatch[3];
+    const sep = phanMatch[5] || '';
+    const rest = (phanMatch[6] || '').trim();
 
-    const defaultByRoman: QuestionType = isPart3
+    const defaultByRoman: QuestionType = isPart4
+      ? 'essay'
+      : isPart3
       ? 'part3_short_answer'
       : isPart2
       ? 'part2_true_false'
       : 'part1_single_choice';
 
-    // Bare header e.g. "PHẦN I", "PHẦN II.", "PHẦN III:" (after metadata stripped)
+    // Bare header e.g. "PHẦN I", "PHẦN II.", "PHẦN III:", "PHẦN IV" (after metadata stripped)
     if (!rest) {
       return {
         type: defaultByRoman,
         method: 'roman_header',
-        confidence: 0.96,
+        confidence: isPart4 ? 0.9 : 0.96,
         needsConfirmation: false,
         rawTitle: cleaned,
       };
@@ -173,7 +185,7 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
 
     // Reject prose without explicit exam-section keywords, e.g. "Phần I của thí nghiệm thu được..."
     const explicitType = matchExplicitTypeKeyword(rest);
-    const hasGenericExamHeader = /^(?:trac\s+nghiem|cac\s+cau\s+hoi|cau\s+hoi|lua\s+chon|phan\s+(?:thi|kiem\s+tra)|bai\s+tap|ly\s+thuyet)\b/i.test(rest);
+    const hasGenericExamHeader = /^(?:trac\s+nghiem|tu\s+luan|cac\s+cau\s+hoi|cau\s+hoi|lua\s+chon|phan\s+(?:thi|kiem\s+tra)|bai\s+tap|ly\s+thuyet)\b/i.test(rest);
     const hasDelimiter = /[.:–—\-\/]/.test(sep);
 
     if (looksLikeProseAfterHeader(rest)) {
@@ -185,7 +197,7 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
       return null;
     }
 
-    // Explicit type keyword takes priority (handles reordered exams like "PHẦN I: TRẢ LỜI NGẮN")
+    // Explicit type keyword takes priority (handles reordered exams like "PHẦN I: TRẢ LỜI NGẮN" or "PHẦN II: TỰ LUẬN")
     if (explicitType) {
       const mismatchedOrder = explicitType !== defaultByRoman;
       return {
@@ -197,7 +209,7 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
       };
     }
 
-    // Has delimiter + generic/short title (e.g. "PHẦN II: CÁC CÂU HỎI", "PHẦN I. TRẮC NGHIỆM")
+    // Has delimiter + generic/short title (e.g. "PHẦN II: CÁC CÂU HỎI", "PHẦN I. TRẮC NGHIỆM", "PHẦN IV. TỰ LUẬN")
     if (hasGenericExamHeader || (hasDelimiter && rest.split(/\s+/).length <= 7 && !/[.,;]$/.test(rest))) {
       return {
         type: defaultByRoman,
@@ -211,19 +223,22 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
     return null;
   }
 
-  // 2. Check standalone Roman numeral header without "PHẦN": e.g. "I. TRẮC NGHIỆM", "II. ĐÚNG SAI", "III. TRẢ LỜI NGẮN"
+  // 2. Check standalone Roman numeral header without "PHẦN": e.g. "I. TRẮC NGHIỆM", "II. ĐÚNG SAI", "III. TRẢ LỜI NGẮN", "IV. TỰ LUẬN"
   // Require strict Roman numeral boundary + delimiter AND exam-section keyword so chemistry prose like "I là chất rắn" or "II. Khi đun nóng..." is never matched.
-  const romanOnlyMatch = norm.match(/^(?:(iii)|(ii)|(i))\s*[.:–—\-]\s*(.+)$/i);
+  const romanOnlyMatch = norm.match(/^(?:(iv)|(iii)|(ii)|(i))\s*[.:–—\-]\s*(.+)$/i);
   if (romanOnlyMatch) {
-    const isPart3 = !!romanOnlyMatch[1];
-    const isPart2 = !!romanOnlyMatch[2];
-    const rest = (romanOnlyMatch[4] || '').trim();
+    const isPart4 = !!romanOnlyMatch[1];
+    const isPart3 = !!romanOnlyMatch[2];
+    const isPart2 = !!romanOnlyMatch[3];
+    const rest = (romanOnlyMatch[5] || '').trim();
 
     if (looksLikeProseAfterHeader(rest)) {
       return null;
     }
 
-    const defaultByRoman: QuestionType = isPart3
+    const defaultByRoman: QuestionType = isPart4
+      ? 'essay'
+      : isPart3
       ? 'part3_short_answer'
       : isPart2
       ? 'part2_true_false'
@@ -240,7 +255,7 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
       };
     }
 
-    if (/^(?:phan\s+)?(?:trac\s+nghiem|cau\s+trac\s+nghiem|dung\s*[-–\/]?\s*sai|tra\s+loi\s+ngan)\b/i.test(rest)) {
+    if (/^(?:phan\s+)?(?:trac\s+nghiem|cau\s+trac\s+nghiem|dung\s*[-–\/]?\s*sai|tra\s+loi\s+ngan|tu\s+luan)\b/i.test(rest)) {
       return {
         type: defaultByRoman,
         method: 'roman_header',
@@ -280,8 +295,8 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
     };
   }
 
-  // 5. Unknown/ambiguous section titles (e.g. "PHẦN IV: ...", "PHẦN A.", "PHẦN TỰ LUẬN", "MỤC B")
-  const ambiguousPhanMatch = norm.match(/^(?:phan|muc)\s+(?:iv|v|[a-z]|tu\s+luan|van\s+dung)\b([\s.:–—\-]*)(.*)$/i);
+  // 5. Unknown/ambiguous section titles (e.g. "PHẦN V: ...", "PHẦN A.", "MỤC B")
+  const ambiguousPhanMatch = norm.match(/^(?:phan|muc)\s+(?:v|[a-z]|van\s+dung)\b([\s.:–—\-]*)(.*)$/i);
   if (ambiguousPhanMatch) {
     const rest = (ambiguousPhanMatch[2] || '').trim();
     if (!looksLikeProseAfterHeader(rest) && norm.split(/\s+/).length <= 12) {
@@ -290,7 +305,7 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
         method: 'ambiguous',
         confidence: 0.4,
         needsConfirmation: true,
-        warning: `Tiêu đề phần "${cleaned}" không thuộc chuẩn PHẦN I/II/III — hệ thống sẽ tự suy luận theo cấu trúc câu hỏi bên trong, vui lòng xác nhận.`,
+        warning: `Tiêu đề phần "${cleaned}" không thuộc chuẩn PHẦN I/II/III/IV — hệ thống sẽ tự suy luận theo cấu trúc câu hỏi bên trong, vui lòng xác nhận.`,
         rawTitle: cleaned,
       };
     }

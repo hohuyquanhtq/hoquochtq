@@ -9,6 +9,8 @@ import {
   DEFAULT_SUBJECT_ID,
   DEFAULT_SUBJECT_NAME,
   generateQuestionCode,
+  resolveQuestionDifficulty,
+  resolveQuestionType,
 } from '../constants/subjects';
 import {
   extractQuestionImageUrls,
@@ -28,6 +30,8 @@ export interface PerQuestionClassification {
   chapterName?: string;
   lessonId?: string;
   lessonName?: string;
+  questionType?: QuestionType;
+  difficulty?: CognitiveLevel;
 }
 
 export interface WordBankClassificationInput {
@@ -127,7 +131,7 @@ function normalizeRichTextForSignature(raw?: string): string {
  * - Acceptable answers (for Part III)
  */
 export function buildQuestionDuplicateSignature(question: Question): string {
-  const typePart = question.type || 'part1_single_choice';
+  const typePart = resolveQuestionType(question);
   const contentPart = normalizeRichTextForSignature(question.content);
   const standaloneImgPart = question.imageUrl?.trim()
     ? `IMGURL:${hashStringDeterministic(question.imageUrl.trim())}`
@@ -164,6 +168,8 @@ export function buildQuestionDuplicateSignature(question: Question): string {
       .sort()
       .join('|');
     structurePart = `SHORT[${acceptable}]`;
+  } else if (typePart === 'essay') {
+    structurePart = `ESSAY[${normalizeRichTextForSignature(question.essayGuide || question.explanation)}]`;
   }
 
   return `${typePart}||${contentPart}||${standaloneImgPart}||IMGS[${allImgHashes}]||${structurePart}`;
@@ -233,6 +239,7 @@ const VALID_TYPES = new Set<QuestionType>([
   'part1_multiple_choice',
   'part2_true_false',
   'part3_short_answer',
+  'essay',
 ]);
 
 function inferLegacyTopic(lessonName?: string, chapterName?: string, fallback?: ChemTopic): ChemTopic {
@@ -272,14 +279,19 @@ export function validateQuestionBeforeFirestoreSave(question: Question): string 
   if (question.explanation && question.explanation.length > MAX_QUESTION_EXPLANATION_CHARS) {
     return 'Lời giải chi tiết vượt quá giới hạn độ dài lưu trữ.';
   }
-  if (!VALID_TYPES.has(question.type)) {
-    return `Dạng câu hỏi "${question.type}" không hợp lệ.`;
+  if (question.essayGuide && question.essayGuide.length > MAX_QUESTION_EXPLANATION_CHARS) {
+    return 'Hướng dẫn chấm tự luận vượt quá giới hạn độ dài lưu trữ.';
+  }
+  const resolvedType = resolveQuestionType(question);
+  if (!VALID_TYPES.has(resolvedType)) {
+    return `Dạng câu hỏi "${resolvedType}" không hợp lệ.`;
   }
   if (!VALID_GRADES.has(question.grade)) {
     return `Khối lớp "${question.grade}" không hợp lệ.`;
   }
-  if (!VALID_LEVELS.has(question.level)) {
-    return `Mức độ nhận thức "${question.level}" không hợp lệ.`;
+  const resolvedLevel = resolveQuestionDifficulty(question);
+  if (!VALID_LEVELS.has(resolvedLevel)) {
+    return `Mức độ nhận thức "${resolvedLevel}" không hợp lệ.`;
   }
   return null;
 }
@@ -364,18 +376,28 @@ export async function buildPreparedWordQuestionForBank(
         : raw.textbookSeries?.trim() || undefined;
   }
 
-  const level: CognitiveLevel =
-    classification.levelMode === 'apply_all'
-      ? classification.defaultLevel
-      : VALID_LEVELS.has(raw.level)
-      ? raw.level
-      : classification.defaultLevel;
+  const perAnyOverride = classification.perQuestionMetadata?.[raw.id];
+  const rawResolvedLevel = resolveQuestionDifficulty(raw);
+  const rawResolvedType = resolveQuestionType(raw);
+
+  // Per-question questionType & difficulty overrides ALWAYS take precedence so teacher can adjust individual questions before saving
   const type: QuestionType =
-    classification.typeMode === 'apply_all'
+    perAnyOverride?.questionType && VALID_TYPES.has(perAnyOverride.questionType)
+      ? perAnyOverride.questionType
+      : classification.typeMode === 'apply_all'
       ? classification.defaultType
-      : VALID_TYPES.has(raw.type)
-      ? raw.type
+      : VALID_TYPES.has(rawResolvedType)
+      ? rawResolvedType
       : classification.defaultType;
+
+  const level: CognitiveLevel =
+    perAnyOverride?.difficulty && VALID_LEVELS.has(perAnyOverride.difficulty)
+      ? perAnyOverride.difficulty
+      : classification.levelMode === 'apply_all'
+      ? classification.defaultLevel
+      : VALID_LEVELS.has(rawResolvedLevel)
+      ? rawResolvedLevel
+      : classification.defaultLevel;
 
   const topic = inferLegacyTopic(lessonName || lessonTopic, chapterName, raw.topic);
   const source =
@@ -397,21 +419,36 @@ export async function buildPreparedWordQuestionForBank(
 
   const newId = buildUniqueWordQuestionId(index);
 
-  // Clone nested question-type structures so source parsed objects are never mutated
-  const clonedOptions = optimized.options
-    ? optimized.options.map((o) => ({ ...o }))
+  const isMultipleChoice =
+    type === 'part1_single_choice' || type === 'part1_multiple_choice';
+  const isTrueFalse = type === 'part2_true_false';
+  const isShortAnswer = type === 'part3_short_answer';
+  const isEssay = type === 'essay';
+
+  // Clone nested question-type structures STRICTLY matching the resolved QuestionType
+  const clonedOptions =
+    isMultipleChoice && optimized.options
+      ? optimized.options.map((o) => ({ ...o }))
+      : undefined;
+  const clonedCorrectOptionId = isMultipleChoice ? optimized.correctOptionId : undefined;
+  const clonedCorrectOptionIds =
+    isMultipleChoice && Array.isArray(optimized.correctOptionIds)
+      ? [...optimized.correctOptionIds]
+      : undefined;
+  const clonedStatements =
+    isTrueFalse && optimized.statements
+      ? optimized.statements.map((s) => ({ ...s }))
+      : undefined;
+  const clonedShortAnswerConfig = isShortAnswer
+    ? optimized.shortAnswerConfig
+      ? {
+          ...optimized.shortAnswerConfig,
+          acceptableAnswers: [...(optimized.shortAnswerConfig.acceptableAnswers || [])],
+        }
+      : { acceptableAnswers: [], isNumeric: false, tolerance: 0.05 }
     : undefined;
-  const clonedCorrectOptionIds = Array.isArray(optimized.correctOptionIds)
-    ? [...optimized.correctOptionIds]
-    : undefined;
-  const clonedStatements = optimized.statements
-    ? optimized.statements.map((s) => ({ ...s }))
-    : undefined;
-  const clonedShortAnswerConfig = optimized.shortAnswerConfig
-    ? {
-        ...optimized.shortAnswerConfig,
-        acceptableAnswers: [...(optimized.shortAnswerConfig.acceptableAnswers || [])],
-      }
+  const clonedEssayGuide = isEssay
+    ? (optimized.essayGuide || optimized.explanation || '').trim() || undefined
     : undefined;
 
   const prepared: Question = {
@@ -419,6 +456,7 @@ export async function buildPreparedWordQuestionForBank(
     id: newId,
     code: resolvedCode,
     type,
+    questionType: type,
     subjectId,
     subjectName,
     grade,
@@ -430,10 +468,13 @@ export async function buildPreparedWordQuestionForBank(
     lessonTopic,
     textbookSeries,
     level,
+    difficulty: level,
     options: clonedOptions,
+    correctOptionId: clonedCorrectOptionId,
     correctOptionIds: clonedCorrectOptionIds,
     statements: clonedStatements,
     shortAnswerConfig: clonedShortAnswerConfig,
+    essayGuide: clonedEssayGuide,
     source: source.slice(0, 300),
     ownerId,
     authorId: ownerId,
@@ -442,7 +483,7 @@ export async function buildPreparedWordQuestionForBank(
     updatedAt: nowIso,
   };
 
-  // Strip undefined optional fields cleanly
+  // Strip undefined / cross-type optional fields cleanly
   if (!chapterId) delete prepared.chapterId;
   if (!chapterName) delete prepared.chapterName;
   if (!lessonId) delete prepared.lessonId;
@@ -450,9 +491,11 @@ export async function buildPreparedWordQuestionForBank(
   if (!lessonTopic) delete prepared.lessonTopic;
   if (!textbookSeries) delete prepared.textbookSeries;
   if (!clonedOptions) delete prepared.options;
+  if (!clonedCorrectOptionId) delete prepared.correctOptionId;
   if (!clonedCorrectOptionIds) delete prepared.correctOptionIds;
   if (!clonedStatements) delete prepared.statements;
   if (!clonedShortAnswerConfig) delete prepared.shortAnswerConfig;
+  if (!clonedEssayGuide) delete prepared.essayGuide;
 
   return prepared;
 }

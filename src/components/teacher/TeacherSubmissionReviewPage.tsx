@@ -969,6 +969,20 @@ export const TeacherSubmissionReviewPage: React.FC<TeacherSubmissionReviewPagePr
                       </div>
                     )}
 
+                    {/* Part IV Essay */}
+                    {q.type === 'essay' && (
+                      <div className="p-4 rounded-xl bg-emerald-50/40 border border-emerald-200 space-y-2.5 text-xs sm:text-sm">
+                        <span className="text-xs font-bold uppercase tracking-wider text-emerald-800 block">
+                          Bài làm tự luận của học sinh
+                        </span>
+                        <div className="p-3.5 rounded-xl bg-white border border-slate-200 text-slate-900 whitespace-pre-wrap leading-relaxed">
+                          {q.studentAnswer?.textAnswer?.trim() || (
+                            <span className="text-slate-400 italic">Học sinh chưa trình bày bài làm.</span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
                     {/* Part III Short Answer (Text & Numeric) */}
                     {q.type === 'part3_short_answer' && (
                       <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs sm:text-sm">

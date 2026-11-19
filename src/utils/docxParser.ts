@@ -52,12 +52,14 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
  */
 export async function parseDocxExam(
   arrayBuffer: ArrayBuffer,
-  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12',
+  options?: { defaultQuestionType?: QuestionType }
 ): Promise<{ text: string; result: ParsedExamResult }> {
   try {
     const res = await parseDocxWithEquations(arrayBuffer);
     if (res && res.fullMarkdownText && res.fullMarkdownText.trim().length > 20) {
       const result = parseExamContent(res.fullMarkdownText, defaultGrade, {
+        defaultQuestionType: options?.defaultQuestionType,
         equationWarnings: res.warnings,
         extractedTables: res.tables.map(t => ({
           id: t.id,
@@ -73,7 +75,12 @@ export async function parseDocxExam(
   }
 
   const fallbackText = await extractTextFromDocx(arrayBuffer);
-  return { text: fallbackText, result: parseExamContent(fallbackText, defaultGrade) };
+  return {
+    text: fallbackText,
+    result: parseExamContent(fallbackText, defaultGrade, {
+      defaultQuestionType: options?.defaultQuestionType,
+    }),
+  };
 }
 
 /**
@@ -94,7 +101,8 @@ export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<stri
  */
 export async function parsePdfExam(
   arrayBuffer: ArrayBuffer,
-  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12',
+  options?: { defaultQuestionType?: QuestionType }
 ): Promise<{ text: string; pdfMeta: PdfExtractionMeta; result: ParsedExamResult }> {
   const detailed = await extractTextFromPdfDetailed(arrayBuffer);
   const pdfMeta: PdfExtractionMeta = {
@@ -104,7 +112,10 @@ export async function parsePdfExam(
     isLikelyScanned: detailed.isLikelyScanned,
     warning: detailed.warning,
   };
-  const result = parseExamContent(detailed.text, defaultGrade, { pdfMeta });
+  const result = parseExamContent(detailed.text, defaultGrade, {
+    pdfMeta,
+    defaultQuestionType: options?.defaultQuestionType,
+  });
   return { text: detailed.text, pdfMeta, result };
 }
 
@@ -305,6 +316,53 @@ export function extractPart3Data(fullText: string): {
   return { prompt, inlineAnswer };
 }
 
+/**
+ * Heuristic detector for Vietnamese open-ended essay prompts when no explicit section header is present.
+ * Distinguishes open-ended essay tasks (chứng minh, giải thích, viết PTHH, trình bày, phân tích...)
+ * from numeric short-answer questions (làm tròn đến..., giá trị của m là...).
+ */
+export function looksLikeEssayPrompt(rawText: string): boolean {
+  const text = (rawText || '').trim();
+  if (!text) return false;
+
+  const strongNumericShortAnswerCue =
+    /(?:làm\s+tròn\s+(?:đến|tới)|kết\s+quả\s+làm\s+tròn|điền\s+(?:số|kết\s+quả)|giá\s+trị\s+của\s+[a-zA-Z]\s+(?:là|bằng)\s+bao\s+nhiêu|bằng\s+bao\s+nhiêu\s*\(?[^?]{0,25}\)?\s*\??\s*$)/i.test(
+      text
+    );
+
+  const essayActionCue =
+    /\b(?:trình\s+bày|chứng\s+minh|giải\s+thích|viết\s+(?:các\s+)?phương\s+trình|hoàn\s+thành\s+(?:sơ\s+đồ|chuỗi)\s+phản\s+ứng|phân\s+tích|so\s+sánh|nêu\s+(?:hiện\s+tượng|phương\s+pháp|vai\s+trò|ý\s+nghĩa)|nhận\s+biết\s+các\s+(?:dung\s+dịch|chất|lọ)|bằng\s+phương\s+pháp\s+hóa\s+học|lập\s+công\s+thức|hãy\s+(?:nêu|vẽ|viết|giải\s+thích|trình\s+bày|phân\s+tích|chứng\s+minh)|cảm\s+nhận|nghị\s+luận|tự\s+luận|hướng\s+dẫn\s+chấm)\b/i.test(
+      text
+    );
+
+  if (essayActionCue && !strongNumericShortAnswerCue) {
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Extracts essay prompt and optional inline grading guide ("Hướng dẫn chấm:", "Gợi ý giải:", "Lời giải:").
+ */
+export function extractEssayData(fullText: string): {
+  prompt: string;
+  essayGuide?: string;
+} {
+  let prompt = fullText.trim();
+  let essayGuide: string | undefined = undefined;
+
+  const guideMatch = prompt.match(
+    /(?:^|\n)\s*(?:\*{0,2})(?:Hướng\s*dẫn\s*chấm|Gợi\s*ý\s*(?:đáp\s*án|trả\s*lời|giải)?|Lời\s*giải|Đáp\s*án\s*tự\s*luận)(?:\*{0,2})\s*[:\-–—]\s*([\s\S]+)$/i
+  );
+  if (guideMatch) {
+    essayGuide = guideMatch[1].trim();
+    prompt = prompt.slice(0, guideMatch.index).trim();
+  }
+
+  return { prompt: prompt || fullText.trim(), essayGuide };
+}
+
 interface InternalSectionTracker {
   id: string;
   rawTitle: string;
@@ -328,25 +386,40 @@ interface RawQuestionBlock {
 export function reclassifyQuestionType(q: Question, targetType: QuestionType): Question {
   const sourceText = q.rawSourceText || rebuildSourceFromQuestion(q);
   const now = new Date().toISOString();
-  const prefix = targetType === 'part1_single_choice' ? 'P1' : targetType === 'part2_true_false' ? 'P2' : 'P3';
+  const prefix =
+    targetType === 'part1_single_choice' || targetType === 'part1_multiple_choice'
+      ? 'P1'
+      : targetType === 'part2_true_false'
+      ? 'P2'
+      : targetType === 'essay'
+      ? 'TL'
+      : 'P3';
   const promptNumMatch = q.code.match(/_C(\d+)$/i);
   const promptNum = promptNumMatch ? promptNumMatch[1] : '1';
   const newCode = `H_${q.grade}_${prefix}_C${promptNum}`;
+  const resolvedLevel = q.difficulty || q.level || 'nhan_biet';
 
-  if (targetType === 'part1_single_choice') {
+  if (targetType === 'part1_single_choice' || targetType === 'part1_multiple_choice') {
     const mc = extractPart1Options(sourceText);
     const correctOptId = q.correctOptionId || mc.correctOptionId;
-    const options = mc.options.map(o => ({ ...o, isCorrect: correctOptId ? o.id === correctOptId : o.isCorrect }));
+    const options =
+      mc.options.length > 0
+        ? mc.options.map(o => ({ ...o, isCorrect: correctOptId ? o.id === correctOptId : o.isCorrect }))
+        : q.options || [];
     const isOk = options.length >= 2 && !!correctOptId;
     return {
       ...q,
       code: newCode,
-      type: 'part1_single_choice',
-      content: mc.prompt || sourceText,
+      type: targetType,
+      questionType: targetType,
+      level: resolvedLevel,
+      difficulty: resolvedLevel,
+      content: mc.options.length > 0 ? mc.prompt || sourceText : q.content || sourceText,
       options,
       correctOptionId: correctOptId,
       statements: undefined,
       shortAnswerConfig: undefined,
+      essayGuide: undefined,
       rawSourceText: sourceText,
       parseStatus: isOk ? 'verified' : 'needs_review',
       parseWarning: options.length < 2
@@ -369,11 +442,16 @@ export function reclassifyQuestionType(q: Question, targetType: QuestionType): Q
       ...q,
       code: newCode,
       type: 'part2_true_false',
-      content: tf.prompt || sourceText,
+      questionType: 'part2_true_false',
+      level: resolvedLevel,
+      difficulty: resolvedLevel,
+      content: tf.statements.length > 0 ? tf.prompt || sourceText : q.content || sourceText,
       options: undefined,
       correctOptionId: undefined,
+      correctOptionIds: undefined,
       statements,
       shortAnswerConfig: undefined,
+      essayGuide: undefined,
       rawSourceText: sourceText,
       parseStatus: statements.length >= 2 && allAssigned ? 'verified' : 'needs_review',
       parseWarning: statements.length < 2
@@ -386,6 +464,31 @@ export function reclassifyQuestionType(q: Question, targetType: QuestionType): Q
     };
   }
 
+  if (targetType === 'essay') {
+    const { prompt, essayGuide } = extractEssayData(sourceText);
+    const resolvedGuide = q.essayGuide || essayGuide || q.explanation;
+    return {
+      ...q,
+      code: newCode,
+      type: 'essay',
+      questionType: 'essay',
+      level: resolvedLevel,
+      difficulty: resolvedLevel,
+      content: prompt || q.content || sourceText,
+      options: undefined,
+      correctOptionId: undefined,
+      correctOptionIds: undefined,
+      statements: undefined,
+      shortAnswerConfig: undefined,
+      essayGuide: resolvedGuide,
+      rawSourceText: sourceText,
+      parseStatus: 'verified',
+      parseWarning: undefined,
+      teacherVerified: true,
+      updatedAt: now,
+    };
+  }
+
   // targetType === 'part3_short_answer' — never generate fake A/B/C/D options
   const { prompt, inlineAnswer } = extractPart3Data(sourceText);
   const existingAns = q.shortAnswerConfig?.acceptableAnswers?.[0] || inlineAnswer || '';
@@ -394,10 +497,15 @@ export function reclassifyQuestionType(q: Question, targetType: QuestionType): Q
     ...q,
     code: newCode,
     type: 'part3_short_answer',
+    questionType: 'part3_short_answer',
+    level: resolvedLevel,
+    difficulty: resolvedLevel,
     content: prompt,
     options: undefined,
     correctOptionId: undefined,
+    correctOptionIds: undefined,
     statements: undefined,
+    essayGuide: undefined,
     shortAnswerConfig: {
       acceptableAnswers: hasAnswer
         ? (q.shortAnswerConfig?.acceptableAnswers?.length
@@ -437,14 +545,18 @@ export function recalculateParsedExamResult(
   sectionsOverride?: DetectedExamSection[],
   sectionsConfirmed?: boolean
 ): ParsedExamResult {
-  const part1Questions = questions.filter(q => q.type === 'part1_single_choice');
+  const part1Questions = questions.filter(
+    q => q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice'
+  );
   const part2Questions = questions.filter(q => q.type === 'part2_true_false');
   const part3Questions = questions.filter(q => q.type === 'part3_short_answer');
+  const essayQuestions = questions.filter(q => q.type === 'essay');
 
   const part1Count = part1Questions.length;
   const part2Count = part2Questions.length;
   const part2StatementsCount = part2Questions.reduce((sum, q) => sum + (q.statements?.length || 0), 0);
   const part3Count = part3Questions.length;
+  const essayCount = essayQuestions.length;
 
   // Rebuild answerItems cleanly while preserving existing verified answers by questionId
   const existingItemMap = new Map(base.answerItems.map(it => [`${it.questionId}_${it.subQuestion || ''}`, it]));
@@ -454,7 +566,7 @@ export function recalculateParsedExamResult(
   let p3Idx = 1;
 
   for (const q of questions) {
-    if (q.type === 'part1_single_choice') {
+    if (q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') {
       const qNum = p1Idx++;
       const prev = existingItemMap.get(`${q.id}_`);
       const ans = q.correctOptionId || prev?.correctAnswer || '';
@@ -498,7 +610,7 @@ export function recalculateParsedExamResult(
           notes: st.statement?.slice(0, 50),
         });
       });
-    } else {
+    } else if (q.type === 'part3_short_answer') {
       const qNum = p3Idx++;
       const prev = existingItemMap.get(`${q.id}_`);
       const ans = q.shortAnswerConfig?.acceptableAnswers?.[0] || prev?.correctAnswer || '';
@@ -517,6 +629,7 @@ export function recalculateParsedExamResult(
         notes: prev?.notes,
       });
     }
+    // Essay questions are open-ended and graded via rubric/essayGuide (not part of objective auto-answer matrix)
   }
 
   const part1FoundCount = answerItems.filter(it => it.section === 'part1' && it.recognitionStatus === 'verified' && it.correctAnswer).length;
@@ -528,9 +641,10 @@ export function recalculateParsedExamResult(
   const part3TotalCount = answerItems.filter(it => it.section === 'part3').length;
 
   const questionsWithAnswers = questions.filter(q => {
-    if (q.type === 'part1_single_choice') return !!q.correctOptionId;
+    if (q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') return !!q.correctOptionId;
     if (q.type === 'part2_true_false') return q.statements && q.statements.length > 0 && q.teacherVerified;
     if (q.type === 'part3_short_answer') return q.shortAnswerConfig && q.shortAnswerConfig.acceptableAnswers.length > 0;
+    if (q.type === 'essay') return true;
     return false;
   }).length;
 
@@ -554,6 +668,7 @@ export function recalculateParsedExamResult(
     part2Count,
     part2StatementsCount,
     part3Count,
+    essayCount,
     questionsWithAnswers,
     questionsMissingAnswers: questions.length - questionsWithAnswers,
     questionsWithWarnings: questions.filter(q => q.parseStatus !== 'verified').length,
@@ -565,7 +680,9 @@ export function recalculateParsedExamResult(
     part2StatementsTotalCount,
     part3FoundCount,
     part3TotalCount,
-    allAnswersVerified: answerItems.length > 0 && answerItems.every(it => it.recognitionStatus === 'verified'),
+    allAnswersVerified:
+      (answerItems.length > 0 && answerItems.every(it => it.recognitionStatus === 'verified')) ||
+      (answerItems.length === 0 && essayCount > 0),
     detectedSections: updatedSections,
     hasAmbiguousSections,
     sectionsConfirmed: sectionsConfirmed !== undefined ? sectionsConfirmed : !hasAmbiguousSections,
@@ -601,6 +718,7 @@ export function parseExamContent(
   rawText: string,
   defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12',
   extraMeta?: {
+    defaultQuestionType?: QuestionType;
     equationWarnings?: DocxEquationWarning[];
     selectedAnswerCandidateId?: string;
     pdfMeta?: PdfExtractionMeta;
@@ -747,13 +865,19 @@ export function parseExamContent(
   flushActiveBlock();
 
   // 5. Structure each question block into Question object, respecting explicit section headers
+  // while auto-detecting each question's true QuestionType (never forcing mixed docs into one type!)
   const questions: Question[] = [];
   let p1Counter = 0;
   let p2Counter = 0;
   let p3Counter = 0;
+  let essayCounter = 0;
+  const fallbackDefaultType = extraMeta?.defaultQuestionType;
 
   // Track structural mismatch stats per section
-  const sectionMismatchCounts = new Map<string, { total: number; mc: number; tf: number; sa: number }>();
+  const sectionMismatchCounts = new Map<
+    string,
+    { total: number; mc: number; tf: number; sa: number; essay: number }
+  >();
 
   for (let bIdx = 0; bIdx < questionBlocks.length; bIdx++) {
     const block = questionBlocks[bIdx];
@@ -767,25 +891,38 @@ export function parseExamContent(
     const mcResult = extractPart1Options(rawContent);
     const hasMCOptions = mcResult.options.length >= 2;
 
+    const p3Probe = extractPart3Data(rawContent);
+    const isEssayLike = !hasMCOptions && !hasTFStatements && looksLikeEssayPrompt(rawContent);
+
     if (!sectionMismatchCounts.has(block.sectionId)) {
-      sectionMismatchCounts.set(block.sectionId, { total: 0, mc: 0, tf: 0, sa: 0 });
+      sectionMismatchCounts.set(block.sectionId, { total: 0, mc: 0, tf: 0, sa: 0, essay: 0 });
     }
     const secStat = sectionMismatchCounts.get(block.sectionId)!;
     secStat.total++;
     if (hasMCOptions) secStat.mc++;
     else if (hasTFStatements) secStat.tf++;
+    else if (isEssayLike) secStat.essay++;
     else secStat.sa++;
 
-    // Resolve Question Type:
+    // Resolve Question Type per question:
     let finalType: QuestionType;
     let structureMismatchWarning: string | undefined;
 
     if (!secTracker || secTracker.candidateType === 'ambiguous') {
-      // No clear header or ambiguous header -> infer strictly from internal question structure
+      // No clear header or ambiguous header -> infer strictly from internal question structure;
+      // only consult fallbackDefaultType when the question has NO clear MC/TF/short-answer/essay signature.
       if (hasTFStatements && !hasMCOptions) {
         finalType = 'part2_true_false';
       } else if (hasMCOptions) {
         finalType = 'part1_single_choice';
+      } else if (p3Probe.inlineAnswer) {
+        finalType = 'part3_short_answer';
+      } else if (isEssayLike) {
+        finalType = 'essay';
+      } else if (fallbackDefaultType === 'essay') {
+        finalType = 'essay';
+      } else if (fallbackDefaultType === 'part3_short_answer') {
+        finalType = 'part3_short_answer';
       } else {
         finalType = 'part3_short_answer';
       }
@@ -813,6 +950,18 @@ export function parseExamContent(
         // Keep grouped inside Part II (never split a/b/c/d into separate questions)
         finalType = 'part2_true_false';
       }
+    } else if (secTracker.candidateType === 'essay') {
+      if (hasMCOptions && !hasTFStatements) {
+        finalType = 'part1_single_choice';
+        structureMismatchWarning = `Câu ${promptNum} nằm trong "${secTracker.rawTitle}" nhưng có lựa chọn A, B, C, D`;
+        secTracker.needsConfirmation = true;
+      } else if (hasTFStatements && !hasMCOptions) {
+        finalType = 'part2_true_false';
+        structureMismatchWarning = `Câu ${promptNum} nằm trong "${secTracker.rawTitle}" nhưng có mệnh đề Đúng/Sai (a, b, c, d)`;
+        secTracker.needsConfirmation = true;
+      } else {
+        finalType = 'essay';
+      }
     } else {
       // Part III Short Answer scope: classify as part3_short_answer, never fabricate A/B/C/D options
       if (hasMCOptions && !hasTFStatements) {
@@ -825,7 +974,14 @@ export function parseExamContent(
       finalType = 'part3_short_answer';
     }
 
-    const prefix = finalType === 'part1_single_choice' ? 'P1' : finalType === 'part2_true_false' ? 'P2' : 'P3';
+    const prefix =
+      finalType === 'part1_single_choice'
+        ? 'P1'
+        : finalType === 'part2_true_false'
+        ? 'P2'
+        : finalType === 'essay'
+        ? 'TL'
+        : 'P3';
     const qId = `q_${Date.now()}_${prefix}_${promptNum}_${bIdx}_${Math.random().toString(36).substring(2, 6)}`;
     const qCode = `H_${defaultGrade}_${prefix}_C${promptNum}`;
 
@@ -849,14 +1005,17 @@ export function parseExamContent(
           : !correctOptId
           ? 'Chưa có đáp án chính thức'
           : undefined);
+      const assignedLevel = p1Counter <= 6 ? 'nhan_biet' : 'thong_hieu';
 
       question = {
         id: qId,
         code: qCode,
         type: 'part1_single_choice',
+        questionType: 'part1_single_choice',
         grade: defaultGrade,
         topic: 'hoa_dai_cuong',
-        level: p1Counter <= 6 ? 'nhan_biet' : 'thong_hieu',
+        level: assignedLevel,
+        difficulty: assignedLevel,
         content: mcResult.prompt || rawContent,
         options: mcResult.options,
         correctOptionId: correctOptId,
@@ -896,9 +1055,11 @@ export function parseExamContent(
         id: qId,
         code: qCode,
         type: 'part2_true_false',
+        questionType: 'part2_true_false',
         grade: defaultGrade,
         topic: 'hoa_vo_co',
         level: 'van_dung',
+        difficulty: 'van_dung',
         content: tfResult.prompt || rawContent,
         statements: tfResult.statements,
         recognitionSource: detectedTF ? 'answer_table' : 'question_content',
@@ -911,10 +1072,39 @@ export function parseExamContent(
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+    } else if (finalType === 'essay') {
+      essayCounter++;
+      const { prompt: essayPrompt, essayGuide } = extractEssayData(rawContent);
+      const assignedLevel = essayCounter <= 1 ? 'thong_hieu' : 'van_dung';
+
+      question = {
+        id: qId,
+        code: qCode,
+        type: 'essay',
+        questionType: 'essay',
+        grade: defaultGrade,
+        topic: 'hoa_dai_cuong',
+        level: assignedLevel,
+        difficulty: assignedLevel,
+        content: essayPrompt,
+        options: undefined,
+        statements: undefined,
+        shortAnswerConfig: undefined,
+        ...(essayGuide ? { essayGuide } : {}),
+        recognitionSource: essayGuide ? 'question_content' : undefined,
+        teacherVerified: !structureMismatchWarning,
+        parseStatus: !structureMismatchWarning ? 'verified' : 'needs_review',
+        parseWarning: structureMismatchWarning,
+        authorId: 'teacher_curr',
+        sectionId: block.sectionId,
+        rawSourceText: rawContent,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
     } else {
       p3Counter++;
       const detectedShort = answerKeys.part3.get(p3Counter) || answerKeys.part3.get(promptNum);
-      const { prompt: cleanPrompt, inlineAnswer } = extractPart3Data(rawContent);
+      const { prompt: cleanPrompt, inlineAnswer } = p3Probe;
 
       const finalVal = detectedShort?.answer || inlineAnswer || '';
       const hasAnswer = !!finalVal;
@@ -923,9 +1113,11 @@ export function parseExamContent(
         id: qId,
         code: qCode,
         type: 'part3_short_answer',
+        questionType: 'part3_short_answer',
         grade: defaultGrade,
         topic: 'hoa_thuc_nghiem',
         level: 'van_dung_cao',
+        difficulty: 'van_dung_cao',
         content: cleanPrompt,
         options: undefined,
         statements: undefined,
@@ -953,6 +1145,9 @@ export function parseExamContent(
     const expKey = `${question.type}_${promptNum}`;
     if (answerKeys.explanations.has(expKey)) {
       question.explanation = answerKeys.explanations.get(expKey);
+      if (question.type === 'essay' && !question.essayGuide) {
+        question.essayGuide = question.explanation;
+      }
     }
 
     questions.push(question);
@@ -965,14 +1160,16 @@ export function parseExamContent(
 
     let resolvedType: QuestionType;
     if (sec.candidateType === 'ambiguous') {
-      if (stat && stat.tf >= stat.mc && stat.tf >= stat.sa && stat.tf > 0) {
+      if (stat && stat.tf >= stat.mc && stat.tf >= stat.sa && stat.tf >= stat.essay && stat.tf > 0) {
         resolvedType = 'part2_true_false';
-      } else if (stat && stat.mc >= stat.sa && stat.mc > 0) {
+      } else if (stat && stat.mc >= stat.sa && stat.mc >= stat.essay && stat.mc > 0) {
         resolvedType = 'part1_single_choice';
+      } else if (stat && stat.essay >= stat.sa && stat.essay > 0) {
+        resolvedType = 'essay';
       } else if (secQs.length > 0) {
         resolvedType = secQs[0].type;
       } else {
-        resolvedType = 'part1_single_choice';
+        resolvedType = fallbackDefaultType || 'part1_single_choice';
       }
     } else {
       resolvedType = sec.candidateType;
@@ -1002,37 +1199,45 @@ export function parseExamContent(
   });
 
   // 6. Summary Statistics
-  const part1Count = questions.filter(q => q.type === 'part1_single_choice').length;
+  const part1Count = questions.filter(
+    q => q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice'
+  ).length;
   const part2Count = questions.filter(q => q.type === 'part2_true_false').length;
   const part2StatementsCount = questions
     .filter(q => q.type === 'part2_true_false')
     .reduce((sum, q) => sum + (q.statements?.length || 0), 0);
   const part3Count = questions.filter(q => q.type === 'part3_short_answer').length;
+  const essayCount = questions.filter(q => q.type === 'essay').length;
 
   const questionsWithAnswers = questions.filter(q => {
-    if (q.type === 'part1_single_choice') return !!q.correctOptionId;
+    if (q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') return !!q.correctOptionId;
     if (q.type === 'part2_true_false') return q.statements && q.statements.length > 0 && q.teacherVerified;
     if (q.type === 'part3_short_answer') return q.shortAnswerConfig && q.shortAnswerConfig.acceptableAnswers.length > 0;
+    if (q.type === 'essay') return true;
     return false;
   }).length;
 
   const questionsMissingAnswers = questions.length - questionsWithAnswers;
   const questionsWithWarnings = questions.filter(q => q.parseStatus !== 'verified').length;
 
-  // 7. Reconcile with 3-section Answer Recognition Items
+  // 7. Reconcile with 3-section Answer Recognition Items (objective questions)
   const {
     items: answerItems,
     part1Found: part1FoundCount,
     part2StatementsFound: part2StatementsFoundCount,
     part3Found: part3FoundCount,
-  } = buildAnswerRecognitionItems(questions, answerKeys);
+  } = buildAnswerRecognitionItems(
+    questions.filter(q => q.type !== 'essay'),
+    answerKeys
+  );
 
   const part1TotalCount = answerItems.filter(item => item.section === 'part1').length;
   const part2StatementsTotalCount = answerItems.filter(item => item.section === 'part2').length;
   const part3TotalCount = answerItems.filter(item => item.section === 'part3').length;
 
   const allAnswersVerified =
-    answerItems.length > 0 && answerItems.every(item => item.recognitionStatus === 'verified');
+    (answerItems.length > 0 && answerItems.every(item => item.recognitionStatus === 'verified')) ||
+    (answerItems.length === 0 && essayCount > 0);
   const hasAmbiguousSections = detectedSections.some(s => s.needsConfirmation);
 
   const eqWarnings = extraMeta?.equationWarnings || [];
@@ -1071,6 +1276,7 @@ export function parseExamContent(
     part2Count,
     part2StatementsCount,
     part3Count,
+    essayCount,
     questionsWithAnswers,
     questionsMissingAnswers,
     questionsWithWarnings,

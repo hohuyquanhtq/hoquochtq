@@ -99,19 +99,72 @@ export const COGNITIVE_LEVEL_SHORT_LABELS: Record<CognitiveLevel, string> = {
   van_dung_cao: 'Vận dụng cao',
 };
 
+export const PRIMARY_QUESTION_TYPES: {
+  id: QuestionType;
+  label: string;
+  shortLabel: string;
+}[] = [
+  {
+    id: 'part1_single_choice',
+    label: 'Trắc nghiệm nhiều lựa chọn',
+    shortLabel: 'Trắc nghiệm nhiều lựa chọn',
+  },
+  {
+    id: 'part2_true_false',
+    label: 'Trắc nghiệm đúng/sai',
+    shortLabel: 'Đúng / Sai',
+  },
+  {
+    id: 'part3_short_answer',
+    label: 'Trắc nghiệm trả lời ngắn',
+    shortLabel: 'Trả lời ngắn',
+  },
+  {
+    id: 'essay',
+    label: 'Tự luận',
+    shortLabel: 'Tự luận',
+  },
+];
+
 export const QUESTION_TYPE_LABELS: Record<QuestionType, string> = {
-  part1_single_choice: 'Phần I · Trắc nghiệm 4 lựa chọn',
-  part1_multiple_choice: 'Phần I · Trắc nghiệm nhiều lựa chọn',
-  part2_true_false: 'Phần II · Đúng - Sai 4 ý',
-  part3_short_answer: 'Phần III · Trả lời ngắn',
+  part1_single_choice: 'Trắc nghiệm nhiều lựa chọn',
+  part1_multiple_choice: 'Trắc nghiệm nhiều lựa chọn (nhiều đáp án)',
+  part2_true_false: 'Trắc nghiệm đúng/sai',
+  part3_short_answer: 'Trắc nghiệm trả lời ngắn',
+  essay: 'Tự luận',
 };
 
 export const QUESTION_TYPE_SHORT_LABELS: Record<QuestionType, string> = {
-  part1_single_choice: 'Phần I',
-  part1_multiple_choice: 'Phần I (Nhiều chọn)',
-  part2_true_false: 'Phần II',
-  part3_short_answer: 'Phần III',
+  part1_single_choice: 'Trắc nghiệm nhiều lựa chọn',
+  part1_multiple_choice: 'Trắc nghiệm (nhiều đáp án)',
+  part2_true_false: 'Đúng / Sai',
+  part3_short_answer: 'Trả lời ngắn',
+  essay: 'Tự luận',
 };
+
+export function resolveQuestionType(
+  q: Pick<Question, 'type' | 'questionType'>
+): QuestionType {
+  return q.type || q.questionType || 'part1_single_choice';
+}
+
+export function resolveQuestionDifficulty(
+  q: Pick<Question, 'level' | 'difficulty'>
+): CognitiveLevel {
+  return q.level || q.difficulty || 'nhan_biet';
+}
+
+export function matchesQuestionTypeFilter(
+  q: Pick<Question, 'type' | 'questionType'>,
+  filterValue: string
+): boolean {
+  if (!filterValue || filterValue === 'all') return true;
+  const resolved = resolveQuestionType(q);
+  if (filterValue === 'part1_single_choice') {
+    return resolved === 'part1_single_choice' || resolved === 'part1_multiple_choice';
+  }
+  return resolved === filterValue;
+}
 
 export function slugifySubjectId(name: string): string {
   const ascii = name
@@ -189,11 +242,13 @@ export function generateQuestionCode(params: {
   const prefix = (subj?.codePrefix || 'CH').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
   const gradeCode = params.grade === 'chuyen_hsg' ? 'HSG' : params.grade || '12';
   const typeCode =
-    params.type === 'part1_single_choice'
+    params.type === 'part1_single_choice' || params.type === 'part1_multiple_choice'
       ? 'TN'
       : params.type === 'part2_true_false'
       ? 'DS'
-      : 'TL';
+      : params.type === 'essay'
+      ? 'TUL'
+      : 'TLN';
   const rand = Math.floor(100 + Math.random() * 900);
   return `${prefix}${gradeCode}_${typeCode}_${rand}`;
 }

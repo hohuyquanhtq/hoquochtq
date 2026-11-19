@@ -13,7 +13,14 @@ import type {
   QuestionType,
   User,
 } from '../types/index.ts';
-import { DEFAULT_GDPT_2018_SUBJECTS, DEFAULT_SUBJECT_ID, DEFAULT_SUBJECT_NAME } from '../constants/subjects.ts';
+import {
+  DEFAULT_GDPT_2018_SUBJECTS,
+  DEFAULT_SUBJECT_ID,
+  DEFAULT_SUBJECT_NAME,
+  matchesQuestionTypeFilter,
+  resolveQuestionDifficulty,
+  resolveQuestionType,
+} from '../constants/subjects.ts';
 
 const SUBJECT_NAME_MAP = new Map<string, string>(
   DEFAULT_GDPT_2018_SUBJECTS.map((s) => [s.id, s.name])
@@ -25,6 +32,7 @@ const TYPE_ORDER: QuestionType[] = [
   'part1_multiple_choice',
   'part2_true_false',
   'part3_short_answer',
+  'essay',
 ];
 const GRADE_ORDER = ['10', '11', '12', 'chuyen_hsg'];
 
@@ -221,15 +229,13 @@ export function computeSchoolQuestionBankStats(
     const grade = item.grade || '12';
     gradeCounts.set(grade, (gradeCounts.get(grade) || 0) + 1);
 
-    // By Level
-    if (item.level) {
-      levelCounts.set(item.level, (levelCounts.get(item.level) || 0) + 1);
-    }
+    // By Level / Difficulty
+    const resolvedLevel = resolveQuestionDifficulty(item);
+    levelCounts.set(resolvedLevel, (levelCounts.get(resolvedLevel) || 0) + 1);
 
-    // By Type
-    if (item.type) {
-      typeCounts.set(item.type, (typeCounts.get(item.type) || 0) + 1);
-    }
+    // By Type / QuestionType
+    const resolvedType = resolveQuestionType(item);
+    typeCounts.set(resolvedType, (typeCounts.get(resolvedType) || 0) + 1);
 
     // By Chapter / Lesson
     const ch = resolveQuestionChapter(item);
@@ -425,8 +431,11 @@ export function filterAndPaginateSchoolQuestions(
     if (teacherSet && !teacherSet.has(item.ownerUid)) return false;
     if (subjectSet && !subjectSet.has(item.resolvedSubjectId)) return false;
     if (gradeSet && !gradeSet.has(item.grade)) return false;
-    if (levelSet && !levelSet.has(item.level)) return false;
-    if (typeSet && !typeSet.has(item.type)) return false;
+    if (levelSet && !levelSet.has(resolveQuestionDifficulty(item))) return false;
+    if (typeSet) {
+      const matchedAnyType = Array.from(typeSet).some((t) => matchesQuestionTypeFilter(item, t));
+      if (!matchedAnyType) return false;
+    }
 
     if (textbookNorm) {
       const itemTb = normalizeTextForSearch(item.resolvedTextbookSeries || item.textbookSeries || '');

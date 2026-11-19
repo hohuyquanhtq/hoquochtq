@@ -44,6 +44,7 @@ import {
   MAX_QUESTION_IMAGE_URL_CHARS,
   safeTruncatePreservingImages,
 } from '../utils/wordImageOptimizer';
+import { resolveQuestionDifficulty, resolveQuestionType } from '../constants/subjects';
 
 export interface TeacherWorkspaceData {
   questions: Question[];
@@ -65,6 +66,19 @@ export interface StudentWorkspaceData {
 
 function safeDocId(raw: string): string {
   return (raw || `doc_${Date.now()}`).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+}
+
+function normalizeLoadedQuestion(raw: Question, docId?: string): Question {
+  const resolvedType = resolveQuestionType(raw);
+  const resolvedLevel = resolveQuestionDifficulty(raw);
+  return {
+    ...raw,
+    id: docId || raw.id,
+    type: resolvedType,
+    questionType: resolvedType,
+    level: resolvedLevel,
+    difficulty: resolvedLevel,
+  };
 }
 
 // ============================================================================
@@ -129,7 +143,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     .sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 
   const questions = qSnap.docs
-    .map((d) => d.data() as Question)
+    .map((d) => normalizeLoadedQuestion(d.data() as Question, d.id))
     .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 
   const classes = cSnap.docs
@@ -209,7 +223,7 @@ export async function fetchTeacherQuestionsFromFirestore(uid: string): Promise<Q
   }
   const qSnap = await getDocs(query(collection(db, 'questions'), where('ownerId', '==', uid)));
   return qSnap.docs
-    .map((d) => ({ ...(d.data() as Question), id: d.id }))
+    .map((d) => normalizeLoadedQuestion(d.data() as Question, d.id))
     .sort(
       (a, b) =>
         new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
@@ -219,10 +233,22 @@ export async function fetchTeacherQuestionsFromFirestore(uid: string): Promise<Q
 function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt?: unknown) {
   const safeId = safeDocId(q.id);
   const nowIso = new Date().toISOString();
+  const resolvedType = resolveQuestionType(q);
+  const resolvedLevel = resolveQuestionDifficulty(q);
+  const isMultipleChoice =
+    resolvedType === 'part1_single_choice' || resolvedType === 'part1_multiple_choice';
+  const isTrueFalse = resolvedType === 'part2_true_false';
+  const isShortAnswer = resolvedType === 'part3_short_answer';
+  const isEssay = resolvedType === 'essay';
+
   const safeContent = safeTruncatePreservingImages(q.content || '', MAX_QUESTION_CONTENT_CHARS);
   const safeExplanation = q.explanation
     ? safeTruncatePreservingImages(q.explanation, MAX_QUESTION_EXPLANATION_CHARS)
     : undefined;
+  const safeEssayGuide =
+    isEssay && q.essayGuide && q.essayGuide.trim()
+      ? safeTruncatePreservingImages(q.essayGuide.trim(), MAX_QUESTION_EXPLANATION_CHARS)
+      : undefined;
   const safeImageUrl =
     q.imageUrl && q.imageUrl.trim()
       ? safeTruncatePreservingImages(q.imageUrl.trim(), MAX_QUESTION_IMAGE_URL_CHARS)
@@ -233,7 +259,8 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     ownerId,
     code: (q.code || `Q_${safeId.slice(-6)}`).slice(0, 64),
     content: safeContent,
-    type: q.type || 'part1_single_choice',
+    type: resolvedType,
+    questionType: resolvedType,
     ...(q.subjectId ? { subjectId: q.subjectId.slice(0, 64) } : {}),
     ...(q.subjectName ? { subjectName: q.subjectName.slice(0, 120) } : {}),
     grade: q.grade || '12',
@@ -243,15 +270,19 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     ...(q.lessonId && q.lessonId.trim() ? { lessonId: safeDocId(q.lessonId.trim()) } : {}),
     ...(q.lessonName && q.lessonName.trim() ? { lessonName: q.lessonName.trim().slice(0, 250) } : {}),
     ...(q.lessonTopic && q.lessonTopic.trim() ? { lessonTopic: q.lessonTopic.trim().slice(0, 200) } : {}),
-    level: q.level || 'nhan_biet',
+    level: resolvedLevel,
+    difficulty: resolvedLevel,
     ...(q.folderId ? { folderId: q.folderId.slice(0, 128) } : {}),
-    ...(q.options ? { options: q.options.slice(0, 8) } : {}),
-    ...(q.correctOptionId ? { correctOptionId: q.correctOptionId.slice(0, 8) } : {}),
-    ...(Array.isArray(q.correctOptionIds) && q.correctOptionIds.length > 0
+    ...(isMultipleChoice && q.options ? { options: q.options.slice(0, 8) } : {}),
+    ...(isMultipleChoice && q.correctOptionId
+      ? { correctOptionId: q.correctOptionId.slice(0, 8) }
+      : {}),
+    ...(isMultipleChoice && Array.isArray(q.correctOptionIds) && q.correctOptionIds.length > 0
       ? { correctOptionIds: q.correctOptionIds.slice(0, 8) }
       : {}),
-    ...(q.statements ? { statements: q.statements.slice(0, 8) } : {}),
-    ...(q.shortAnswerConfig ? { shortAnswerConfig: q.shortAnswerConfig } : {}),
+    ...(isTrueFalse && q.statements ? { statements: q.statements.slice(0, 8) } : {}),
+    ...(isShortAnswer && q.shortAnswerConfig ? { shortAnswerConfig: q.shortAnswerConfig } : {}),
+    ...(safeEssayGuide ? { essayGuide: safeEssayGuide } : {}),
     ...(safeImageUrl ? { imageUrl: safeImageUrl } : {}),
     ...(safeExplanation ? { explanation: safeExplanation } : {}),
     ...(q.source ? { source: q.source.slice(0, 300) } : {}),
@@ -323,14 +354,23 @@ export async function createNewQuestionInFirestoreStrict(
 
   try {
     await setDoc(ref, payload);
-    return {
-      ...q,
-      id: safeId,
-      ownerId,
-      authorId: ownerId,
-      createdAt: String(payload.createdAt || q.createdAt || new Date().toISOString()),
-      updatedAt: String(payload.updatedAt || new Date().toISOString()),
-    };
+    const resolvedType = resolveQuestionType(q);
+    const resolvedLevel = resolveQuestionDifficulty(q);
+    return normalizeLoadedQuestion(
+      {
+        ...q,
+        id: safeId,
+        type: resolvedType,
+        questionType: resolvedType,
+        level: resolvedLevel,
+        difficulty: resolvedLevel,
+        ownerId,
+        authorId: ownerId,
+        createdAt: String(payload.createdAt || q.createdAt || new Date().toISOString()),
+        updatedAt: String(payload.updatedAt || new Date().toISOString()),
+      },
+      safeId
+    );
   } catch (error) {
     throw new Error(formatFirestoreWriteError(error, `questions/${safeId}`));
   }
@@ -1004,7 +1044,7 @@ export async function fetchCloudAuditDataForAdmin(): Promise<LegacyCloudAuditRes
 
   return {
     allExams: eSnap.docs.map((d) => d.data() as Exam),
-    allQuestions: qSnap.docs.map((d) => d.data() as Question),
+    allQuestions: qSnap.docs.map((d) => normalizeLoadedQuestion(d.data() as Question, d.id)),
     allFolders: fSnap.docs.map((d) => d.data() as Folder),
     allSubmissions: sSnap.docs.map((d) => d.data() as StudentSubmission),
   };

@@ -1,17 +1,19 @@
 import { DetectedExamSection, Exam, Question, QuestionType, StudentAnswer } from '../types';
 
 export const DEFAULT_SECTION_TITLES: Record<QuestionType, string> = {
-  part1_single_choice: 'PHẦN I. TRẮC NGHIỆM 4 LỰA CHỌN',
+  part1_single_choice: 'PHẦN I. TRẮC NGHIỆM NHIỀU LỰA CHỌN',
   part1_multiple_choice: 'PHẦN I. TRẮC NGHIỆM NHIỀU LỰA CHỌN',
   part2_true_false: 'PHẦN II. TRẮC NGHIỆM ĐÚNG/SAI',
-  part3_short_answer: 'PHẦN III. TRẢ LỜI NGẮN',
+  part3_short_answer: 'PHẦN III. TRẮC NGHIỆM TRẢ LỜI NGẮN',
+  essay: 'PHẦN IV. TỰ LUẬN',
 };
 
 export const SHORT_PART_BADGES: Record<QuestionType, string> = {
-  part1_single_choice: 'Phần I: 4 Lựa chọn',
+  part1_single_choice: 'Phần I: Nhiều lựa chọn',
   part1_multiple_choice: 'Phần I: Nhiều lựa chọn',
   part2_true_false: 'Phần II: Đúng / Sai',
   part3_short_answer: 'Phần III: Trả lời ngắn',
+  essay: 'Phần IV: Tự luận',
 };
 
 export type QuestionCompletionStatus = 'unanswered' | 'partial' | 'completed';
@@ -97,6 +99,19 @@ function parsePartTypeFromHint(hint?: string): QuestionType | null {
     return 'part3_short_answer';
   }
 
+  if (
+    norm === 'essay' ||
+    norm === 'part4' ||
+    norm === 'part_4' ||
+    norm === 'p4' ||
+    norm === 'iv' ||
+    norm === '4' ||
+    /^phan\s*(iv|4)\b/.test(norm) ||
+    /tu\s*luan|essay/.test(norm)
+  ) {
+    return 'essay';
+  }
+
   return null;
 }
 
@@ -106,19 +121,19 @@ function isMachineOrBareHeader(text?: string): boolean {
   if (!trimmed) return true;
   if (trimmed === SYNTHETIC_PLACEHOLDER_TITLE) return true;
   if (/^(?:sec|part|p)_?\d+$/i.test(trimmed)) return true;
-  if (/^(?:part1_single_choice|part2_true_false|part3_short_answer)$/i.test(trimmed)) return true;
-  if (/^(?:I|II|III|1|2|3)$/i.test(trimmed)) return true;
-  // Bare "PHẦN I", "Phần II:", "PHẦN III." without any custom descriptive title
+  if (/^(?:part1_single_choice|part2_true_false|part3_short_answer|essay)$/i.test(trimmed)) return true;
+  if (/^(?:I|II|III|IV|1|2|3|4)$/i.test(trimmed)) return true;
+  // Bare "PHẦN I", "Phần II:", "PHẦN III.", "PHẦN IV" without any custom descriptive title
   const norm = stripAccentsLower(trimmed);
-  if (/^phan\s*(?:i{1,3}|1|2|3)\s*[:.\-–—]*$/.test(norm)) return true;
+  if (/^phan\s*(?:i{1,3}|iv|1|2|3|4)\s*[:.\-–—]*$/.test(norm)) return true;
   return false;
 }
 
 /**
- * Resolves the canonical QuestionType (Part I / II / III) using priority:
+ * Resolves the canonical QuestionType (Part I / II / III / Essay) using priority:
  * 1. Explicit section / part metadata on the question
- * 2. Question type (question.type)
- * 3. Question structure (statements / shortAnswerConfig / options)
+ * 2. Question type (question.type / question.questionType)
+ * 3. Question structure (statements / shortAnswerConfig / essayGuide / options)
  */
 export function resolveQuestionPartType(q: Question, detectedSec?: DetectedExamSection): QuestionType {
   const rec = q as Question & Record<string, unknown>;
@@ -132,18 +147,21 @@ export function resolveQuestionPartType(q: Question, detectedSec?: DetectedExamS
   const hintedType = parsePartTypeFromHint(sectionHint);
   if (hintedType) return hintedType;
 
+  const explicitType = q.type || q.questionType;
   if (
-    q.type === 'part1_single_choice' ||
-    q.type === 'part1_multiple_choice' ||
-    q.type === 'part2_true_false' ||
-    q.type === 'part3_short_answer'
+    explicitType === 'part1_single_choice' ||
+    explicitType === 'part1_multiple_choice' ||
+    explicitType === 'part2_true_false' ||
+    explicitType === 'part3_short_answer' ||
+    explicitType === 'essay'
   ) {
-    return q.type;
+    return explicitType;
   }
 
   if (detectedSec?.detectedType) return detectedSec.detectedType;
   if (Array.isArray(q.statements) && q.statements.length > 0) return 'part2_true_false';
   if (q.shortAnswerConfig) return 'part3_short_answer';
+  if (q.essayGuide) return 'essay';
   return 'part1_single_choice';
 }
 
@@ -316,6 +334,21 @@ export function getQuestionProgress(q: Question, answer?: StudentAnswer): Questi
       isFlagged,
       answeredUnits: fallbackAnswered,
       totalUnits: 4,
+      invalidInput: false,
+    };
+  }
+
+  // Part IV: Essay
+  if (partType === 'essay') {
+    const rawEssay = (answer?.textAnswer ?? '').trim();
+    const isCompleted = rawEssay.length > 0;
+    return {
+      status: isCompleted ? 'completed' : 'unanswered',
+      isCompleted,
+      isPartial: false,
+      isFlagged,
+      answeredUnits: isCompleted ? 1 : 0,
+      totalUnits: 1,
       invalidInput: false,
     };
   }

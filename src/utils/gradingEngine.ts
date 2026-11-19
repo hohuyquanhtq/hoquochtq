@@ -281,6 +281,29 @@ export function evaluateExamAttemptDetails(
       };
     }
 
+    if (q.type === 'essay') {
+      const text = (studentAns?.textAnswer || '').trim();
+      const isAnswered = text.length > 0;
+      const status: QuestionResultStatus = isAnswered ? 'correct' : 'unanswered';
+      if (!isAnswered) {
+        unansweredCount++;
+        unansweredQuestionOrders.push(orderIndex);
+      } else {
+        correctCount++;
+      }
+
+      return {
+        questionId: q.id,
+        questionCode: q.code || `Q${orderIndex}`,
+        orderIndex,
+        type: q.type,
+        status,
+        earnedScore: 0,
+        maxScore: 0,
+        textAnswer: text || undefined,
+      };
+    }
+
     // part3_short_answer
     const text = (studentAns?.textAnswer || '').trim();
     const isAnswered = text.length > 0;

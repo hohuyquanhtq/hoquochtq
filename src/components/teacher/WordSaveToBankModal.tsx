@@ -30,11 +30,16 @@ import {
 } from '../../types';
 import {
   COGNITIVE_LEVEL_LABELS,
+  COGNITIVE_LEVEL_SHORT_LABELS,
   DEFAULT_GDPT_2018_SUBJECTS,
   DEFAULT_SUBJECT_ID,
   DEFAULT_SUBJECT_NAME,
+  PRIMARY_QUESTION_TYPES,
+  QUESTION_TYPE_LABELS,
   QUESTION_TYPE_SHORT_LABELS,
+  resolveQuestionDifficulty,
   resolveQuestionSubject,
+  resolveQuestionType,
 } from '../../constants/subjects';
 import { auth } from '../../services/firebase';
 import {
@@ -62,6 +67,9 @@ export interface WordSaveToBankModalProps {
   existingBankQuestions: Question[];
   subjects: SubjectItem[];
   defaultGrade: ChemGrade;
+  defaultSubjectId?: string;
+  defaultQuestionType?: QuestionType;
+  defaultDifficulty?: CognitiveLevel;
   sourceFileName?: string;
   currentUserId?: string;
   onClose: () => void;
@@ -135,6 +143,9 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
   existingBankQuestions,
   subjects = DEFAULT_GDPT_2018_SUBJECTS,
   defaultGrade,
+  defaultSubjectId,
+  defaultQuestionType,
+  defaultDifficulty,
   sourceFileName,
   currentUserId,
   onClose,
@@ -148,6 +159,10 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
       const matched = subjects.find((s) => s.id === firstWithSub.subjectId);
       if (matched) return matched;
     }
+    if (defaultSubjectId) {
+      const matchedDefault = subjects.find((s) => s.id === defaultSubjectId);
+      if (matchedDefault) return matchedDefault;
+    }
     return (
       subjects.find((s) => s.id === DEFAULT_SUBJECT_ID) ||
       subjects[0] || {
@@ -155,7 +170,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
         name: DEFAULT_SUBJECT_NAME,
       }
     );
-  }, [questionsToSave, subjects]);
+  }, [questionsToSave, subjects, defaultSubjectId]);
 
   const initialGrade: ChemGrade = useMemo(() => {
     const firstGrade = questionsToSave[0]?.grade;
@@ -186,16 +201,25 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
   const [perQuestionMeta, setPerQuestionMeta] = useState<Record<string, CurriculumSelectionValue>>(
     () => buildInitialPerQuestionMeta(questionsToSave, subjects, defaultGrade)
   );
+  // Individual per-question Question Type & Difficulty overrides (honored in BOTH batch & individual modes)
+  const [perQuestionTypeLevel, setPerQuestionTypeLevel] = useState<
+    Record<string, { questionType?: QuestionType; difficulty?: CognitiveLevel }>
+  >({});
   const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
 
   const [loadedLessons, setLoadedLessons] = useState<CurriculumLesson[]>([]);
   const [isCatalogLoading, setIsCatalogLoading] = useState<boolean>(false);
   const [schoolTextbookSeries, setSchoolTextbookSeries] = useState<string>('');
   const [showAdvancedOptions, setShowAdvancedOptions] = useState<boolean>(false);
-  const [levelMode, setLevelMode] = useState<'keep_per_question' | 'apply_all'>('keep_per_question');
-  const [defaultLevel, setDefaultLevel] = useState<CognitiveLevel>('nhan_biet');
+  // Question Type is ALWAYS placed BEFORE Difficulty; default mode keeps auto-detected per-question types
   const [typeMode, setTypeMode] = useState<'keep_per_question' | 'apply_all'>('keep_per_question');
-  const [defaultType, setDefaultType] = useState<QuestionType>('part1_single_choice');
+  const [defaultType, setDefaultType] = useState<QuestionType>(
+    defaultQuestionType || 'part1_single_choice'
+  );
+  const [levelMode, setLevelMode] = useState<'keep_per_question' | 'apply_all'>('keep_per_question');
+  const [defaultLevel, setDefaultLevel] = useState<CognitiveLevel>(
+    defaultDifficulty || 'nhan_biet'
+  );
   const [sourceLabel, setSourceLabel] = useState<string>(() =>
     formatDefaultSourceLabel(sourceFileName)
   );
@@ -230,6 +254,11 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     setApplyToAll(true);
     setExpandedQuestionId(null);
     setShowAdvancedOptions(false);
+    setTypeMode('keep_per_question');
+    setDefaultType(defaultQuestionType || 'part1_single_choice');
+    setLevelMode('keep_per_question');
+    setDefaultLevel(defaultDifficulty || 'nhan_biet');
+    setPerQuestionTypeLevel({});
     setCheckedIds(new Set(questionsToSave.map((q) => q.id)));
     setSaveResult(null);
     setValidationError(null);
@@ -301,6 +330,8 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     existingBankQuestions,
     subjects,
     defaultGrade,
+    defaultQuestionType,
+    defaultDifficulty,
   ]);
 
   const activeCandidates = useMemo(
@@ -414,6 +445,35 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     }));
   };
 
+  const getEffectiveQuestionType = (q: Question): QuestionType => {
+    const override = perQuestionTypeLevel[q.id]?.questionType;
+    if (override) return override;
+    if (typeMode === 'apply_all') return defaultType;
+    const base = resolveQuestionType(q);
+    return base === 'part1_multiple_choice' ? 'part1_single_choice' : base;
+  };
+
+  const getEffectiveQuestionDifficulty = (q: Question): CognitiveLevel => {
+    const override = perQuestionTypeLevel[q.id]?.difficulty;
+    if (override) return override;
+    if (levelMode === 'apply_all') return defaultLevel;
+    return resolveQuestionDifficulty(q);
+  };
+
+  const handlePerQuestionTypeChange = (qId: string, nextType: QuestionType) => {
+    setPerQuestionTypeLevel((prev) => ({
+      ...prev,
+      [qId]: { ...prev[qId], questionType: nextType },
+    }));
+  };
+
+  const handlePerQuestionDifficultyChange = (qId: string, nextDiff: CognitiveLevel) => {
+    setPerQuestionTypeLevel((prev) => ({
+      ...prev,
+      [qId]: { ...prev[qId], difficulty: nextDiff },
+    }));
+  };
+
   const handleConfirmSave = async () => {
     // Synchronous re-entrancy lock so rapid repeated clicks NEVER duplicate Firestore writes
     if (saveInFlightRef.current || isSaving) return;
@@ -438,28 +498,39 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     setIsSaving(true);
     setProgress({ done: 0, total: activeCandidates.length, currentCode: '' });
 
-    // Build per-question metadata map when applyToAll is false
+    // Build per-question metadata map (merging individual questionType/difficulty overrides in BOTH modes)
+    const perQuestionEntries: Array<[string, Partial<PerQuestionClassification>]> = [];
+    for (const q of activeCandidates) {
+      const m = perQuestionMeta[q.id];
+      const tlOverride = perQuestionTypeLevel[q.id];
+      if (!applyToAll) {
+        perQuestionEntries.push([
+          q.id,
+          {
+            subjectId: m?.subjectId || q.subjectId || DEFAULT_SUBJECT_ID,
+            subjectName: m?.subjectName || q.subjectName || DEFAULT_SUBJECT_NAME,
+            grade: (m?.grade || q.grade || '12') as ChemGrade,
+            textbookSeries: m?.textbookSeries || q.textbookSeries || undefined,
+            chapterId: m?.chapterId || undefined,
+            chapterName: m?.chapterName || undefined,
+            lessonId: m?.lessonId || undefined,
+            lessonName: m?.lessonName || undefined,
+            ...(tlOverride?.questionType ? { questionType: tlOverride.questionType } : {}),
+            ...(tlOverride?.difficulty ? { difficulty: tlOverride.difficulty } : {}),
+          },
+        ]);
+      } else if (tlOverride?.questionType || tlOverride?.difficulty) {
+        perQuestionEntries.push([
+          q.id,
+          {
+            ...(tlOverride.questionType ? { questionType: tlOverride.questionType } : {}),
+            ...(tlOverride.difficulty ? { difficulty: tlOverride.difficulty } : {}),
+          },
+        ]);
+      }
+    }
     const perQuestionPayload: Record<string, Partial<PerQuestionClassification>> | undefined =
-      !applyToAll
-        ? Object.fromEntries(
-            activeCandidates.map((q) => {
-              const m = perQuestionMeta[q.id];
-              return [
-                q.id,
-                {
-                  subjectId: m?.subjectId || q.subjectId || DEFAULT_SUBJECT_ID,
-                  subjectName: m?.subjectName || q.subjectName || DEFAULT_SUBJECT_NAME,
-                  grade: (m?.grade || q.grade || '12') as ChemGrade,
-                  textbookSeries: m?.textbookSeries || q.textbookSeries || undefined,
-                  chapterId: m?.chapterId || undefined,
-                  chapterName: m?.chapterName || undefined,
-                  lessonId: m?.lessonId || undefined,
-                  lessonName: m?.lessonName || undefined,
-                },
-              ];
-            })
-          )
-        : undefined;
+      perQuestionEntries.length > 0 ? Object.fromEntries(perQuestionEntries) : undefined;
 
     const classification: WordBankClassificationInput = {
       applyToAll,
@@ -846,7 +917,10 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                                   <span className="font-bold text-slate-900">Câu {idx + 1}</span>
                                   <span className="font-mono text-slate-500">{q.code}</span>
                                   <span className="text-teal-700 font-semibold">
-                                    {QUESTION_TYPE_SHORT_LABELS[q.type]}
+                                    {QUESTION_TYPE_SHORT_LABELS[getEffectiveQuestionType(q)]}
+                                  </span>
+                                  <span className="text-slate-500 font-semibold">
+                                    · {COGNITIVE_LEVEL_SHORT_LABELS[getEffectiveQuestionDifficulty(q)]}
                                   </span>
                                   {dup?.isDuplicate && (
                                     <span className="text-amber-700 font-bold">
@@ -901,7 +975,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                           </div>
 
                           {isExpanded && isChecked && (
-                            <div className="mt-3 pt-3 border-t border-slate-100 pl-6">
+                            <div className="mt-3 pt-3 border-t border-slate-100 pl-6 space-y-3">
                               <CurriculumCascadeSelector
                                 value={meta}
                                 subjects={subjects}
@@ -910,6 +984,52 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                                 compact
                                 onChange={(nextVal) => handlePerQuestionMetaChange(q.id, nextVal)}
                               />
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                    4. Dạng câu hỏi (riêng câu này)
+                                  </label>
+                                  <select
+                                    value={getEffectiveQuestionType(q)}
+                                    onChange={(e) =>
+                                      handlePerQuestionTypeChange(
+                                        q.id,
+                                        e.target.value as QuestionType
+                                      )
+                                    }
+                                    className="w-full min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800"
+                                  >
+                                    {PRIMARY_QUESTION_TYPES.map((qt) => (
+                                      <option key={qt.id} value={qt.id}>
+                                        {qt.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                </div>
+                                <div>
+                                  <label className="block text-[11px] font-bold text-slate-600 mb-1">
+                                    5. Mức độ nhận thức (riêng câu này)
+                                  </label>
+                                  <select
+                                    value={getEffectiveQuestionDifficulty(q)}
+                                    onChange={(e) =>
+                                      handlePerQuestionDifficultyChange(
+                                        q.id,
+                                        e.target.value as CognitiveLevel
+                                      )
+                                    }
+                                    className="w-full min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-800"
+                                  >
+                                    {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map(
+                                      (lvl) => (
+                                        <option key={lvl} value={lvl}>
+                                          {COGNITIVE_LEVEL_LABELS[lvl]}
+                                        </option>
+                                      )
+                                    )}
+                                  </select>
+                                </div>
+                              </div>
                             </div>
                           )}
                         </div>
@@ -918,6 +1038,93 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Primary Classification Group 4 & 5: Dạng câu hỏi (TRƯỚC) -> Mức độ nhận thức */}
+              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <SlidersHorizontal className="w-4 h-4 text-teal-600 shrink-0" />
+                    <span>4. Dạng câu hỏi &amp; 5. Mức độ nhận thức</span>
+                  </h4>
+                  <span className="text-[11px] text-slate-500">
+                    Có thể điều chỉnh riêng từng câu ở danh sách bên dưới
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  {/* 4. Dạng câu hỏi — ALWAYS BEFORE Mức độ */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-slate-700">
+                      4. Dạng câu hỏi
+                    </label>
+                    <select
+                      value={typeMode}
+                      disabled={isSaving}
+                      onChange={(e) =>
+                        setTypeMode(e.target.value as 'keep_per_question' | 'apply_all')
+                      }
+                      className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    >
+                      <option value="keep_per_question">
+                        Giữ nguyên dạng AI nhận diện cho từng câu (Khuyên dùng)
+                      </option>
+                      <option value="apply_all">
+                        Áp dụng cùng 1 dạng câu hỏi cho các câu chưa chỉnh riêng
+                      </option>
+                    </select>
+                    {typeMode === 'apply_all' && (
+                      <select
+                        value={defaultType}
+                        disabled={isSaving}
+                        onChange={(e) => setDefaultType(e.target.value as QuestionType)}
+                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      >
+                        {PRIMARY_QUESTION_TYPES.map((qt) => (
+                          <option key={qt.id} value={qt.id}>
+                            {qt.label}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+
+                  {/* 5. Mức độ nhận thức */}
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-slate-700">
+                      5. Mức độ nhận thức
+                    </label>
+                    <select
+                      value={levelMode}
+                      disabled={isSaving}
+                      onChange={(e) =>
+                        setLevelMode(e.target.value as 'keep_per_question' | 'apply_all')
+                      }
+                      className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                    >
+                      <option value="keep_per_question">
+                        Giữ nguyên mức độ từng câu đã nhận diện / chỉnh sửa
+                      </option>
+                      <option value="apply_all">
+                        Áp dụng cùng 1 mức độ cho các câu chưa chỉnh riêng
+                      </option>
+                    </select>
+                    {levelMode === 'apply_all' && (
+                      <select
+                        value={defaultLevel}
+                        disabled={isSaving}
+                        onChange={(e) => setDefaultLevel(e.target.value as CognitiveLevel)}
+                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                      >
+                        {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
+                          <option key={lvl} value={lvl}>
+                            {COGNITIVE_LEVEL_LABELS[lvl]}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </div>
+                </div>
+              </div>
 
               {/* Duplicate Detection Status */}
               <div
@@ -1012,7 +1219,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                 )}
               </div>
 
-              {/* Optional Collapsible Advanced Settings (Level, Question Type, Source) */}
+              {/* Optional Collapsible Advanced Settings (Source) */}
               <div className="border border-slate-200 rounded-2xl overflow-hidden">
                 <button
                   type="button"
@@ -1020,8 +1227,8 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                   className="w-full px-4 py-3 bg-slate-50 hover:bg-slate-100/80 flex items-center justify-between text-xs font-bold text-slate-800 transition-colors"
                 >
                   <span className="inline-flex items-center gap-2">
-                    <SlidersHorizontal className="w-3.5 h-3.5 text-teal-600" />
-                    <span>Tùy chọn nâng cao (Mức độ nhận thức, Dạng câu hỏi, Nguồn tài liệu)</span>
+                    <FileText className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Tùy chọn bổ sung (Nguồn gốc tài liệu)</span>
                   </span>
                   {showAdvancedOptions ? (
                     <ChevronUp className="w-4 h-4 text-slate-500" />
@@ -1031,79 +1238,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                 </button>
 
                 {showAdvancedOptions && (
-                  <div className="p-4 bg-white space-y-4 border-t border-slate-200">
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <label className="block text-xs font-bold text-slate-700">
-                          Mức độ nhận thức
-                        </label>
-                        <select
-                          value={levelMode}
-                          onChange={(e) =>
-                            setLevelMode(e.target.value as 'keep_per_question' | 'apply_all')
-                          }
-                          className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                        >
-                          <option value="keep_per_question">
-                            Giữ nguyên mức độ từng câu đã nhận diện / chỉnh sửa
-                          </option>
-                          <option value="apply_all">
-                            Áp dụng cùng 1 mức độ cho toàn bộ câu đang lưu
-                          </option>
-                        </select>
-                        {levelMode === 'apply_all' && (
-                          <select
-                            value={defaultLevel}
-                            onChange={(e) => setDefaultLevel(e.target.value as CognitiveLevel)}
-                            className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                          >
-                            {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map(
-                              (lvl) => (
-                                <option key={lvl} value={lvl}>
-                                  {COGNITIVE_LEVEL_LABELS[lvl]}
-                                </option>
-                              )
-                            )}
-                          </select>
-                        )}
-                      </div>
-
-                      <div className="space-y-2">
-                        <label className="block text-xs font-bold text-slate-700">
-                          Dạng câu hỏi
-                        </label>
-                        <select
-                          value={typeMode}
-                          onChange={(e) =>
-                            setTypeMode(e.target.value as 'keep_per_question' | 'apply_all')
-                          }
-                          className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                        >
-                          <option value="keep_per_question">
-                            Giữ nguyên dạng câu hỏi đã bóc tách (Phần I, II, III)
-                          </option>
-                          <option value="apply_all">
-                            Ghi đè dạng câu hỏi cho toàn bộ danh sách
-                          </option>
-                        </select>
-                        {typeMode === 'apply_all' && (
-                          <select
-                            value={defaultType}
-                            onChange={(e) => setDefaultType(e.target.value as QuestionType)}
-                            className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                          >
-                            {(Object.keys(QUESTION_TYPE_SHORT_LABELS) as QuestionType[]).map(
-                              (qt) => (
-                                <option key={qt} value={qt}>
-                                  {QUESTION_TYPE_SHORT_LABELS[qt]}
-                                </option>
-                              )
-                            )}
-                          </select>
-                        )}
-                      </div>
-                    </div>
-
+                  <div className="p-4 bg-white space-y-3 border-t border-slate-200">
                     <div>
                       <label className="block text-xs font-bold text-slate-700 mb-1.5">
                         Nguồn gốc câu hỏi (Source)
@@ -1123,7 +1258,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                 )}
               </div>
 
-              {/* Collapsible Candidate Checklist when applyToAll === true */}
+              {/* Collapsible Candidate Checklist & Individual Type/Difficulty Override when applyToAll === true */}
               {applyToAll && (
                 <div className="border border-slate-200 rounded-2xl overflow-hidden">
                   <button
@@ -1132,7 +1267,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                     className="w-full px-4 py-3 bg-slate-50 hover:bg-slate-100/80 flex items-center justify-between text-xs font-bold text-slate-800 transition-colors"
                   >
                     <span>
-                      Danh sách câu hỏi sẽ lưu ({activeCandidates.length} / {questionsToSave.length} câu đang chọn)
+                      Danh sách câu hỏi sẽ lưu &amp; điều chỉnh dạng/mức độ từng câu ({activeCandidates.length} / {questionsToSave.length} câu đang chọn)
                     </span>
                     {showCandidateList ? (
                       <ChevronUp className="w-4 h-4 text-slate-500" />
@@ -1142,41 +1277,84 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                   </button>
 
                   {showCandidateList && (
-                    <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto bg-white">
+                    <div className="divide-y divide-slate-100 max-h-64 overflow-y-auto bg-white">
                       {questionsToSave.map((q, idx) => {
                         const isChecked = checkedIds.has(q.id);
                         const dup = duplicateMap.get(q.id);
+                        const effType = getEffectiveQuestionType(q);
+                        const effDiff = getEffectiveQuestionDifficulty(q);
                         return (
                           <div
                             key={q.id}
-                            onClick={() => toggleCandidate(q.id)}
-                            className={`px-4 py-2.5 flex items-start gap-3 cursor-pointer text-xs hover:bg-slate-50 ${
+                            className={`px-4 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs ${
                               isChecked ? 'bg-white' : 'bg-slate-50/70 opacity-60'
                             }`}
                           >
-                            <div className="mt-0.5 text-teal-600 shrink-0">
-                              {isChecked ? (
-                                <CheckSquare className="w-4 h-4" />
-                              ) : (
-                                <Square className="w-4 h-4 text-slate-400" />
-                              )}
-                            </div>
-                            <div className="min-w-0 flex-1 space-y-0.5">
-                              <div className="flex flex-wrap items-center gap-2">
-                                <span className="font-bold text-slate-900">Câu {idx + 1}</span>
-                                <span className="font-mono text-slate-500">{q.code}</span>
-                                <span className="text-teal-700 font-semibold">
-                                  {QUESTION_TYPE_SHORT_LABELS[q.type]}
-                                </span>
-                                {dup?.isDuplicate && (
-                                  <span className="text-amber-700 font-bold">
-                                    · Trùng ({dup.matchedQuestionCode})
-                                  </span>
+                            <div
+                              onClick={() => toggleCandidate(q.id)}
+                              className="flex items-start gap-2.5 min-w-0 flex-1 cursor-pointer"
+                            >
+                              <div className="mt-0.5 text-teal-600 shrink-0">
+                                {isChecked ? (
+                                  <CheckSquare className="w-4 h-4" />
+                                ) : (
+                                  <Square className="w-4 h-4 text-slate-400" />
                                 )}
                               </div>
-                              <div className="text-slate-700 line-clamp-2">
-                                <ChemRenderer text={q.content} inline />
+                              <div className="min-w-0 flex-1 space-y-0.5">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-bold text-slate-900">Câu {idx + 1}</span>
+                                  <span className="font-mono text-slate-500">{q.code}</span>
+                                  {dup?.isDuplicate && (
+                                    <span className="text-amber-700 font-bold">
+                                      · Trùng ({dup.matchedQuestionCode})
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-slate-700 line-clamp-1">
+                                  <ChemRenderer text={q.content} inline />
+                                </div>
                               </div>
+                            </div>
+
+                            <div className="flex items-center gap-1.5 pl-6 sm:pl-0 shrink-0">
+                              <select
+                                value={effType}
+                                disabled={!isChecked || isSaving}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  handlePerQuestionTypeChange(q.id, e.target.value as QuestionType)
+                                }
+                                title="Chỉnh dạng câu hỏi riêng cho câu này"
+                                className="min-h-[30px] px-2 py-1 rounded-lg border border-slate-300 bg-slate-50 text-[11px] font-semibold text-slate-800 max-w-[165px]"
+                              >
+                                {PRIMARY_QUESTION_TYPES.map((qt) => (
+                                  <option key={qt.id} value={qt.id}>
+                                    {qt.shortLabel}
+                                  </option>
+                                ))}
+                              </select>
+                              <select
+                                value={effDiff}
+                                disabled={!isChecked || isSaving}
+                                onClick={(e) => e.stopPropagation()}
+                                onChange={(e) =>
+                                  handlePerQuestionDifficultyChange(
+                                    q.id,
+                                    e.target.value as CognitiveLevel
+                                  )
+                                }
+                                title="Chỉnh mức độ riêng cho câu này"
+                                className="min-h-[30px] px-2 py-1 rounded-lg border border-slate-300 bg-slate-50 text-[11px] font-semibold text-slate-800"
+                              >
+                                {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map(
+                                  (lvl) => (
+                                    <option key={lvl} value={lvl}>
+                                      {COGNITIVE_LEVEL_SHORT_LABELS[lvl]}
+                                    </option>
+                                  )
+                                )}
+                              </select>
                             </div>
                           </div>
                         );
