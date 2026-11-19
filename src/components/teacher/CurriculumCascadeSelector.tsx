@@ -29,6 +29,7 @@ export interface CurriculumSelectionValue {
   subjectId: string;
   subjectName: string;
   grade: ChemGrade | '';
+  textbookSeries?: string;
   chapterId: string;
   chapterName: string;
   lessonId: string;
@@ -189,6 +190,7 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
       subjectId: nextSubId,
       subjectName: found?.name || '',
       grade: '',
+      textbookSeries: curriculumConfig?.textbookSeries || '',
       chapterId: '',
       chapterName: '',
       lessonId: '',
@@ -204,6 +206,7 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
     onChange({
       ...value,
       grade: nextGrade,
+      textbookSeries: curriculumConfig?.textbookSeries || '',
       chapterId: '',
       chapterName: '',
       lessonId: '',
@@ -224,8 +227,10 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
     }
     const ch = chapters.find((c) => c.chapterId === nextChapterId);
     const keepLesson = ch?.lessons.some((l) => l.lessonId === value.lessonId);
+    const chapterTextbook = ch?.lessons[0]?.textbookSeries || value.textbookSeries || curriculumConfig?.textbookSeries || '';
     onChange({
       ...value,
+      textbookSeries: chapterTextbook,
       chapterId: nextChapterId,
       chapterName: ch?.chapterName || '',
       lessonId: keepLesson ? value.lessonId : '',
@@ -236,6 +241,7 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
   const handleSelectLesson = (lesson: CurriculumLesson) => {
     onChange({
       ...value,
+      textbookSeries: lesson.textbookSeries || value.textbookSeries || curriculumConfig?.textbookSeries || '',
       chapterId: lesson.chapterId,
       chapterName: lesson.chapterName,
       lessonId: lesson.lessonId,
@@ -323,6 +329,7 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
               setLessonSearch('');
               onChange({
                 ...value,
+                textbookSeries: nextTb === 'all' ? '' : nextTb,
                 chapterId: '',
                 chapterName: '',
                 lessonId: '',

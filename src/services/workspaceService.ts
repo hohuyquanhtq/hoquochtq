@@ -38,6 +38,12 @@ import {
 } from '../types';
 import { normalizeExamCode } from '../utils/urlHelper';
 import { normalizeFolderId, normalizeParentId } from '../utils/folderTree';
+import {
+  MAX_QUESTION_CONTENT_CHARS,
+  MAX_QUESTION_EXPLANATION_CHARS,
+  MAX_QUESTION_IMAGE_URL_CHARS,
+  safeTruncatePreservingImages,
+} from '../utils/wordImageOptimizer';
 
 export interface TeacherWorkspaceData {
   questions: Question[];
@@ -194,14 +200,39 @@ export async function fetchExamsByFolderFromFirestore(
     .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 }
 
+export async function fetchTeacherQuestionsFromFirestore(uid: string): Promise<Question[]> {
+  if (firebaseInitError) {
+    throw new Error(`Lỗi khởi tạo Firebase: ${firebaseInitError}`);
+  }
+  if (!uid || !auth.currentUser) {
+    throw new Error('Phiên đăng nhập Firebase đã hết hạn. Vui lòng đăng nhập lại.');
+  }
+  const qSnap = await getDocs(query(collection(db, 'questions'), where('ownerId', '==', uid)));
+  return qSnap.docs
+    .map((d) => ({ ...(d.data() as Question), id: d.id }))
+    .sort(
+      (a, b) =>
+        new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+    );
+}
+
 function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt?: unknown) {
   const safeId = safeDocId(q.id);
   const nowIso = new Date().toISOString();
+  const safeContent = safeTruncatePreservingImages(q.content || '', MAX_QUESTION_CONTENT_CHARS);
+  const safeExplanation = q.explanation
+    ? safeTruncatePreservingImages(q.explanation, MAX_QUESTION_EXPLANATION_CHARS)
+    : undefined;
+  const safeImageUrl =
+    q.imageUrl && q.imageUrl.trim()
+      ? safeTruncatePreservingImages(q.imageUrl.trim(), MAX_QUESTION_IMAGE_URL_CHARS)
+      : undefined;
+
   return stripUndefinedDeep({
     id: safeId,
     ownerId,
     code: (q.code || `Q_${safeId.slice(-6)}`).slice(0, 64),
-    content: (q.content || '').slice(0, 20000),
+    content: safeContent,
     type: q.type || 'part1_single_choice',
     ...(q.subjectId ? { subjectId: q.subjectId.slice(0, 64) } : {}),
     ...(q.subjectName ? { subjectName: q.subjectName.slice(0, 120) } : {}),
@@ -221,8 +252,8 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
       : {}),
     ...(q.statements ? { statements: q.statements.slice(0, 8) } : {}),
     ...(q.shortAnswerConfig ? { shortAnswerConfig: q.shortAnswerConfig } : {}),
-    ...(q.imageUrl && q.imageUrl.trim() ? { imageUrl: q.imageUrl.trim().slice(0, 1000) } : {}),
-    ...(q.explanation ? { explanation: q.explanation.slice(0, 20000) } : {}),
+    ...(safeImageUrl ? { imageUrl: safeImageUrl } : {}),
+    ...(safeExplanation ? { explanation: safeExplanation } : {}),
     ...(q.source ? { source: q.source.slice(0, 300) } : {}),
     authorId: q.authorId || ownerId,
     ...(q.parseStatus ? { parseStatus: q.parseStatus } : {}),
@@ -247,6 +278,62 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     serverCreatedAt: existingCreatedAt || serverTimestamp(),
     serverUpdatedAt: serverTimestamp(),
   });
+}
+
+function formatFirestoreWriteError(error: unknown, contextPath: string): string {
+  const errObj = error as { code?: string; message?: string } | null;
+  const code = errObj?.code || '';
+  const rawMessage = errObj?.message || (error instanceof Error ? error.message : String(error));
+  if (code.includes('permission-denied') || rawMessage.toLowerCase().includes('missing or insufficient permissions')) {
+    return `Firestore từ chối quyền ghi tại ${contextPath} (permission-denied). Kiểm tra tài khoản giáo viên đã được kích hoạt (status = active) và đúng chủ sở hữu.`;
+  }
+  if (code.includes('resource-exhausted') || rawMessage.toLowerCase().includes('quota')) {
+    return `Đã chạm giới hạn hạn mức ghi Firestore (Quota exceeded) tại ${contextPath}.`;
+  }
+  if (code.includes('invalid-argument') || rawMessage.toLowerCase().includes('exceeds the maximum allowed size')) {
+    return `Dữ liệu câu hỏi vượt quá giới hạn kích thước document của Firestore (1 MB) tại ${contextPath}.`;
+  }
+  if (code.includes('unavailable') || rawMessage.toLowerCase().includes('offline')) {
+    return `Không thể kết nối máy chủ Firestore (mất kết nối mạng) tại ${contextPath}.`;
+  }
+  return rawMessage || `Lỗi ghi Firestore không xác định tại ${contextPath}.`;
+}
+
+/**
+ * Strictly creates a single new Question document in Firestore `/questions/{id}`.
+ * Never swallows errors and never fakes success — throws a clear Vietnamese error message on rejection.
+ */
+export async function createNewQuestionInFirestoreStrict(
+  q: Question,
+  explicitOwnerId?: string
+): Promise<Question> {
+  if (firebaseInitError) {
+    throw new Error(`Firebase chưa sẵn sàng: ${firebaseInitError}`);
+  }
+  if (!auth.currentUser) {
+    throw new Error('Bạn chưa đăng nhập Firebase Authentication. Vui lòng đăng nhập lại để lưu câu hỏi.');
+  }
+  const ownerId = explicitOwnerId || auth.currentUser.uid;
+  if (ownerId !== auth.currentUser.uid) {
+    throw new Error('UID chủ sở hữu không khớp với phiên Firebase Authentication hiện tại.');
+  }
+  const safeId = safeDocId(q.id);
+  const ref = doc(db, 'questions', safeId);
+  const payload = buildQuestionDocPayload(q, ownerId);
+
+  try {
+    await setDoc(ref, payload);
+    return {
+      ...q,
+      id: safeId,
+      ownerId,
+      authorId: ownerId,
+      createdAt: String(payload.createdAt || q.createdAt || new Date().toISOString()),
+      updatedAt: String(payload.updatedAt || new Date().toISOString()),
+    };
+  } catch (error) {
+    throw new Error(formatFirestoreWriteError(error, `questions/${safeId}`));
+  }
 }
 
 export async function saveQuestionToFirestore(q: Question, explicitOwnerId?: string): Promise<void> {

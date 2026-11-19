@@ -479,6 +479,28 @@ export default function App() {
     }
   };
 
+  const handleWordQuestionsPersistedToBank = (
+    savedQuestions: Question[],
+    refreshedBank?: Question[]
+  ) => {
+    if (!activeUid) return;
+    if (Array.isArray(refreshedBank)) {
+      StorageService.saveQuestions(refreshedBank, activeUid);
+      setQuestions(refreshedBank);
+      return;
+    }
+    if (savedQuestions.length === 0) return;
+    setQuestions((prev) => {
+      const existingIds = new Set(prev.map((q) => q.id));
+      const merged = [
+        ...savedQuestions.filter((q) => !existingIds.has(q.id)),
+        ...prev,
+      ];
+      StorageService.saveQuestions(merged, activeUid);
+      return merged;
+    });
+  };
+
   // --- Handlers for Teacher Actions (Strictly Owner-Scoped + Firestore Persisted) ---
   const handleSaveQuestionsToBank = (newQuestions: Question[]) => {
     if (!activeUid) return;
@@ -491,8 +513,14 @@ export default function App() {
       authorId: activeUid,
       updatedAt: nowIso,
     }));
-    scoped.forEach((q) => StorageService.addQuestion(q, activeUid));
-    setQuestions(StorageService.getQuestions(activeUid));
+    const merged = [
+      ...scoped,
+      ...StorageService.getQuestions(activeUid).filter(
+        (existing) => !scoped.some((s) => s.id === existing.id)
+      ),
+    ];
+    StorageService.saveQuestions(merged, activeUid);
+    setQuestions(merged);
     void saveQuestionsBatchToFirestore(scoped, activeUid).catch((err) => {
       console.warn('[HQTest] Could not sync question batch to Firestore:', err);
     });
@@ -1436,6 +1464,11 @@ export default function App() {
 
             {activeTab === 'upload_exam' && (
               <ExamUploader
+                subjects={mergedSubjects}
+                existingBankQuestions={questions}
+                currentUserId={activeUid}
+                onQuestionsPersistedToBank={handleWordQuestionsPersistedToBank}
+                onNavigateToQuestionBank={() => setActiveTab('question_bank')}
                 onSaveToQuestionBank={handleSaveQuestionsToBank}
                 onCreateExamFromParsed={handleCreateExamFromParsed}
                 onFileParsedRecord={handleFileParsedRecord}

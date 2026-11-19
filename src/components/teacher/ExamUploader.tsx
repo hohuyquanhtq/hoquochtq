@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   FileUp,
   CheckCircle2,
@@ -24,6 +24,9 @@ import {
   ArrowRight,
   Cpu,
   Check,
+  CheckSquare,
+  Square,
+  Database,
 } from 'lucide-react';
 import {
   parseDocxExam,
@@ -38,14 +41,29 @@ import {
   Question,
   QuestionType,
   ChemGrade,
+  CognitiveLevel,
   RecognitionStatus,
+  SubjectItem,
 } from '../../types';
+import {
+  COGNITIVE_LEVEL_LABELS,
+  COGNITIVE_LEVEL_SHORT_LABELS,
+  DEFAULT_GDPT_2018_SUBJECTS,
+  GRADE_LABELS,
+  resolveQuestionSubject,
+} from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { ExamAnswerDashboard } from './ExamAnswerDashboard';
+import { WordSaveToBankModal } from './WordSaveToBankModal';
 import { isolateAnswerBlock, deepScanWithGemini } from '../../utils/answerExtractionEngine';
 
 interface ExamUploaderProps {
-  onSaveToQuestionBank: (questions: Question[]) => void;
+  onSaveToQuestionBank?: (questions: Question[]) => void;
+  onQuestionsPersistedToBank?: (savedQuestions: Question[], refreshedBank?: Question[]) => void;
+  onNavigateToQuestionBank?: () => void;
+  subjects?: SubjectItem[];
+  existingBankQuestions?: Question[];
+  currentUserId?: string;
   onCreateExamFromParsed: (title: string, questions: Question[], grade: ChemGrade) => void;
   onFileParsedRecord?: (record: {
     fileName: string;
@@ -97,6 +115,11 @@ function yieldToNextFrame(): Promise<void> {
 
 export const ExamUploader: React.FC<ExamUploaderProps> = ({
   onSaveToQuestionBank,
+  onQuestionsPersistedToBank,
+  onNavigateToQuestionBank,
+  subjects = DEFAULT_GDPT_2018_SUBJECTS,
+  existingBankQuestions = [],
+  currentUserId,
   onCreateExamFromParsed,
   onFileParsedRecord,
 }) => {
@@ -116,7 +139,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsedResult, setParsedResult] = useState<ParsedExamResult | null>(null);
 
-  // Preview & editing states
+  // Preview, selection & save-to-bank states
   const [showPreviewPanel, setShowPreviewPanel] = useState(false);
   const [activeViewTab, setActiveViewTab] = useState<UploaderViewTab>('answer_reconciliation');
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
@@ -124,6 +147,41 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const [showSourceSnippetModal, setShowSourceSnippetModal] = useState(false);
   const [isDeepScanning, setIsDeepScanning] = useState(false);
   const [pendingActionNotice, setPendingActionNotice] = useState<'bank' | 'exam' | null>(null);
+
+  // Per-question selection for saving to Firestore Question Bank
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
+  const [savedToBankSourceIds, setSavedToBankSourceIds] = useState<Set<string>>(new Set());
+  const [saveModalQuestions, setSaveModalQuestions] = useState<Question[] | null>(null);
+  const [unsavedOnlyFilterIds, setUnsavedOnlyFilterIds] = useState<Set<string> | null>(null);
+
+  // Keep selectedQuestionIds synced when parsedResult changes (select all on fresh parse; prune deleted IDs)
+  const parsedQuestionSignature = parsedResult?.questions.map((q) => q.id).join('|') || '';
+  const prevParsedSignatureRef = useRef<string>('');
+  useEffect(() => {
+    if (!parsedResult) {
+      setSelectedQuestionIds(new Set());
+      setSavedToBankSourceIds(new Set());
+      setUnsavedOnlyFilterIds(null);
+      prevParsedSignatureRef.current = '';
+      return;
+    }
+    const allIds = parsedResult.questions.map((q) => q.id);
+    const idSet = new Set(allIds);
+    const prevIds = prevParsedSignatureRef.current
+      ? prevParsedSignatureRef.current.split('|').filter(Boolean)
+      : [];
+    const hasOverlap = prevIds.some((id) => idSet.has(id));
+    if (!hasOverlap) {
+      // Freshly parsed document -> select all valid questions by default
+      setSelectedQuestionIds(new Set(allIds));
+      setSavedToBankSourceIds(new Set());
+      setUnsavedOnlyFilterIds(null);
+    } else {
+      // Deletion or update within same document -> preserve existing selection
+      setSelectedQuestionIds((prev) => new Set(Array.from(prev).filter((id) => idSet.has(id))));
+    }
+    prevParsedSignatureRef.current = parsedQuestionSignature;
+  }, [parsedQuestionSignature, parsedResult]);
 
   const showToast = (msg: string) => {
     setNotification(msg);
@@ -553,18 +611,72 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     return null;
   };
 
-  const handleGuardedSaveBank = () => {
+  const toggleSelectQuestion = (qId: string) => {
+    setSelectedQuestionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(qId)) next.delete(qId);
+      else next.add(qId);
+      return next;
+    });
+  };
+
+  const handleSelectAllQuestions = () => {
     if (!parsedResult) return;
-    const blockReason = getBlockingErrors();
-    if (blockReason) {
-      setPendingActionNotice('bank');
-      if (parsedResult.questions.some((q) => q.parseStatus === 'error')) {
-        setActiveViewTab('issues');
-      }
-      showToast(blockReason);
+    setSelectedQuestionIds(new Set(parsedResult.questions.map((q) => q.id)));
+  };
+
+  const handleDeselectAllQuestions = () => {
+    setSelectedQuestionIds(new Set());
+  };
+
+  const handleSelectOnlyUnsavedQuestions = () => {
+    if (!parsedResult) return;
+    const remaining = parsedResult.questions
+      .filter((q) => !savedToBankSourceIds.has(q.id))
+      .map((q) => q.id);
+    setSelectedQuestionIds(new Set(remaining));
+    showToast(`Đã chọn ${remaining.length} câu chưa lưu vào ngân hàng.`);
+  };
+
+  const openSaveBankModalForQuestions = (targetQuestions: Question[]) => {
+    if (!parsedResult || parsedResult.totalQuestions === 0) {
+      showToast('Chưa có câu hỏi nào được bóc tách để lưu.');
       return;
     }
-    onSaveToQuestionBank(parsedResult.questions);
+    if (targetQuestions.length === 0) {
+      showToast('Vui lòng chọn ít nhất 1 câu hỏi trước khi lưu vào ngân hàng.');
+      return;
+    }
+    const hardErrors = targetQuestions.filter(
+      (q) => q.parseStatus === 'error' || !q.content?.trim()
+    );
+    if (hardErrors.length > 0) {
+      setPendingActionNotice('bank');
+      setActiveViewTab('issues');
+      showToast(
+        `Có ${hardErrors.length} câu trong danh sách đang chọn bị lỗi cấu trúc hoặc trống nội dung. Vui lòng chỉnh sửa hoặc bỏ chọn trước khi lưu.`
+      );
+      return;
+    }
+    setPendingActionNotice(null);
+    setSaveModalQuestions(targetQuestions);
+  };
+
+  const handleGuardedSaveBank = () => {
+    if (!parsedResult) return;
+    const chosen = parsedResult.questions.filter((q) => selectedQuestionIds.has(q.id));
+    openSaveBankModalForQuestions(chosen.length > 0 ? chosen : parsedResult.questions);
+  };
+
+  const handleSaveSelectedToBank = () => {
+    if (!parsedResult) return;
+    const chosen = parsedResult.questions.filter((q) => selectedQuestionIds.has(q.id));
+    openSaveBankModalForQuestions(chosen);
+  };
+
+  const handleSaveAllToBank = () => {
+    if (!parsedResult) return;
+    openSaveBankModalForQuestions(parsedResult.questions);
   };
 
   const handleGuardedCreateExam = () => {
@@ -780,12 +892,17 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
   const displayedQuestions =
     parsedResult?.questions.filter((q) => {
+      if (unsavedOnlyFilterIds && !unsavedOnlyFilterIds.has(q.id)) return false;
       if (activeViewTab === 'part1') return q.type === 'part1_single_choice';
       if (activeViewTab === 'part2') return q.type === 'part2_true_false';
       if (activeViewTab === 'part3') return q.type === 'part3_short_answer';
       if (activeViewTab === 'issues') return q.parseStatus !== 'verified' || hasMissingAnswer(q);
       return true;
     }) || [];
+
+  const selectedCount = parsedResult
+    ? parsedResult.questions.filter((q) => selectedQuestionIds.has(q.id)).length
+    : 0;
 
   const getQuestionStatusBadge = (q: Question) => {
     if (q.parseStatus === 'error') {
@@ -1670,6 +1787,93 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               )}
             </div>
 
+            {/* Selection & Save-to-Bank Action Bar */}
+            <div className="bg-white border border-teal-200 rounded-2xl p-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-sm font-bold text-slate-900 tabular-nums mr-1">
+                  Chọn lưu ngân hàng:{' '}
+                  <span className="text-teal-700">
+                    {selectedCount} / {parsedResult.totalQuestions} câu
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSelectAllQuestions}
+                  className="px-3 min-h-[36px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-800 inline-flex items-center gap-1.5"
+                >
+                  <CheckSquare className="w-3.5 h-3.5 text-teal-600" />
+                  <span>Chọn tất cả</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDeselectAllQuestions}
+                  className="px-3 min-h-[36px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5"
+                >
+                  <Square className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Bỏ chọn tất cả</span>
+                </button>
+                {savedToBankSourceIds.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleSelectOnlyUnsavedQuestions}
+                    className="px-3 min-h-[36px] rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-xs font-semibold text-teal-900 inline-flex items-center gap-1.5"
+                  >
+                    <Database className="w-3.5 h-3.5 text-teal-700" />
+                    <span>
+                      Chỉ chọn câu chưa lưu ({parsedResult.totalQuestions - savedToBankSourceIds.size})
+                    </span>
+                  </button>
+                )}
+                {activeViewTab === 'answer_reconciliation' && (
+                  <button
+                    type="button"
+                    onClick={() => setActiveViewTab('all_questions')}
+                    className="px-3 min-h-[36px] rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-xs font-semibold text-indigo-800"
+                  >
+                    Mở danh sách chọn từng câu
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={selectedCount === 0}
+                  onClick={handleSaveSelectedToBank}
+                  className="px-4 min-h-[40px] rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Save className="w-4 h-4 shrink-0" />
+                  <span>Lưu các câu đã chọn ({selectedCount})</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveAllToBank}
+                  className="px-4 min-h-[40px] rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-900 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
+                >
+                  <Database className="w-4 h-4 text-teal-600 shrink-0" />
+                  <span>Lưu toàn bộ ({parsedResult.totalQuestions})</span>
+                </button>
+              </div>
+            </div>
+
+            {unsavedOnlyFilterIds && (
+              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-sm flex flex-wrap items-center justify-between gap-2">
+                <span className="font-semibold flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>
+                    Đang lọc hiển thị {unsavedOnlyFilterIds.size} câu chưa được lưu (bỏ qua do trùng hoặc bị lỗi) để bạn rà soát và chỉnh sửa.
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setUnsavedOnlyFilterIds(null)}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-xs font-bold text-amber-900 hover:bg-amber-100"
+                >
+                  Hiện lại tất cả câu hỏi
+                </button>
+              </div>
+            )}
+
             {/* Tab Content: 3-Table Dashboard or Question List */}
             {activeViewTab === 'answer_reconciliation' ? (
               <ExamAnswerDashboard
@@ -1692,12 +1896,17 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                   displayedQuestions.map((q, index) => {
                     const statusBadge = getQuestionStatusBadge(q);
                     const StatusIcon = statusBadge.icon;
+                    const isSelectedForBank = selectedQuestionIds.has(q.id);
+                    const isAlreadySavedToBank = savedToBankSourceIds.has(q.id);
+                    const subMeta = resolveQuestionSubject(q, subjects);
                     return (
                       <div
                         key={q.id}
                         className={`bg-white border rounded-2xl p-5 shadow-xs transition-colors ${
                           q.parseStatus === 'error'
                             ? 'border-rose-300 ring-2 ring-rose-100'
+                            : isSelectedForBank
+                            ? 'border-teal-300 ring-1 ring-teal-100'
                             : q.parseStatus === 'needs_review' || hasMissingAnswer(q)
                             ? 'border-amber-300 ring-1 ring-amber-100'
                             : 'border-slate-200'
@@ -1705,9 +1914,19 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
-                            <span className="font-bold text-slate-900 tabular-nums">
-                              Câu {index + 1}
-                            </span>
+                            <button
+                              type="button"
+                              onClick={() => toggleSelectQuestion(q.id)}
+                              aria-label={isSelectedForBank ? `Bỏ chọn Câu ${index + 1}` : `Chọn lưu Câu ${index + 1}`}
+                              className="inline-flex items-center gap-1.5 text-left font-bold text-slate-900 hover:text-teal-700"
+                            >
+                              {isSelectedForBank ? (
+                                <CheckSquare className="w-4.5 h-4.5 text-teal-600 shrink-0" />
+                              ) : (
+                                <Square className="w-4.5 h-4.5 text-slate-400 shrink-0" />
+                              )}
+                              <span className="tabular-nums">Câu {index + 1}</span>
+                            </button>
                             <span aria-hidden="true" className="text-slate-300">·</span>
                             <span className="font-mono text-[13px] text-slate-500">{q.code}</span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
@@ -1719,12 +1938,34 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                                 : 'Phần III (Trả lời ngắn)'}
                             </span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
+                            <span className="text-xs font-semibold text-slate-600">
+                              {COGNITIVE_LEVEL_SHORT_LABELS[q.level] || q.level}
+                            </span>
+                            <span aria-hidden="true" className="text-slate-300">·</span>
+                            <span className="text-xs text-slate-600">
+                              {subMeta.name} · {GRADE_LABELS[q.grade] || `Lớp ${q.grade}`}
+                            </span>
+                            {(q.chapterName || q.lessonName || q.lessonTopic) && (
+                              <>
+                                <span aria-hidden="true" className="text-slate-300">·</span>
+                                <span className="text-xs text-slate-600 truncate max-w-xs">
+                                  {[q.chapterName, q.lessonName || q.lessonTopic].filter(Boolean).join(' / ')}
+                                </span>
+                              </>
+                            )}
+                            <span aria-hidden="true" className="text-slate-300">·</span>
                             <span
                               className={`text-[13px] font-semibold px-2.5 py-0.5 rounded-lg border inline-flex items-center gap-1 ${statusBadge.className}`}
                             >
                               <StatusIcon className="w-3.5 h-3.5 shrink-0" />
                               <span>{statusBadge.label}</span>
                             </span>
+                            {isAlreadySavedToBank && (
+                              <span className="text-xs font-bold px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                                <Database className="w-3 h-3 shrink-0" />
+                                <span>Đã lưu vào NH</span>
+                              </span>
+                            )}
                           </div>
 
                           <div className="flex items-center gap-2">
@@ -1939,10 +2180,13 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 <button
                   type="button"
                   onClick={handleGuardedSaveBank}
-                  className="min-h-[46px] px-5 rounded-xl border border-slate-600 bg-slate-800 hover:bg-slate-700 text-white text-[15px] font-semibold transition-colors flex items-center gap-2 whitespace-nowrap"
+                  className="min-h-[46px] px-5 rounded-xl border border-teal-500/60 bg-slate-800 hover:bg-slate-700 text-white text-[15px] font-semibold transition-colors flex items-center gap-2 whitespace-nowrap"
                 >
-                  <Save className="w-4 h-4 shrink-0" />
-                  <span>Lưu vào Ngân hàng câu hỏi</span>
+                  <Save className="w-4 h-4 shrink-0 text-teal-400" />
+                  <span>
+                    Lưu vào Ngân hàng câu hỏi (
+                    {selectedCount > 0 ? `${selectedCount} câu đã chọn` : `${parsedResult.totalQuestions} câu`})
+                  </span>
                 </button>
 
                 <button
@@ -1976,19 +2220,107 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </div>
 
             <div className="p-6 overflow-y-auto flex-1 space-y-4 text-sm">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Dạng câu hỏi</label>
-                <select
-                  value={editingQuestion.type}
-                  onChange={(e) =>
-                    setEditingQuestion(reclassifyQuestionType(editingQuestion, e.target.value as QuestionType))
-                  }
-                  className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                >
-                  <option value="part1_single_choice">Phần I: Trắc nghiệm 4 lựa chọn (A, B, C, D)</option>
-                  <option value="part2_true_false">Phần II: Trắc nghiệm Đúng / Sai (a, b, c, d)</option>
-                  <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
-                </select>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Dạng câu hỏi</label>
+                  <select
+                    value={editingQuestion.type}
+                    onChange={(e) =>
+                      setEditingQuestion(reclassifyQuestionType(editingQuestion, e.target.value as QuestionType))
+                    }
+                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                  >
+                    <option value="part1_single_choice">Phần I: Trắc nghiệm 4 lựa chọn (A, B, C, D)</option>
+                    <option value="part2_true_false">Phần II: Trắc nghiệm Đúng / Sai (a, b, c, d)</option>
+                    <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Mức độ nhận thức</label>
+                  <select
+                    value={editingQuestion.level}
+                    onChange={(e) =>
+                      setEditingQuestion({ ...editingQuestion, level: e.target.value as CognitiveLevel })
+                    }
+                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                  >
+                    {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
+                      <option key={lvl} value={lvl}>
+                        {COGNITIVE_LEVEL_LABELS[lvl]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Môn học</label>
+                  <select
+                    value={editingQuestion.subjectId || resolveQuestionSubject(editingQuestion, subjects).id}
+                    onChange={(e) => {
+                      const matched = subjects.find((s) => s.id === e.target.value);
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        subjectId: e.target.value,
+                        subjectName: matched?.name || editingQuestion.subjectName,
+                      });
+                    }}
+                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                  >
+                    {subjects.map((sub) => (
+                      <option key={sub.id} value={sub.id}>
+                        {sub.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Khối lớp</label>
+                  <select
+                    value={editingQuestion.grade}
+                    onChange={(e) =>
+                      setEditingQuestion({ ...editingQuestion, grade: e.target.value as ChemGrade })
+                    }
+                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                  >
+                    <option value="10">Lớp 10</option>
+                    <option value="11">Lớp 11</option>
+                    <option value="12">Lớp 12</option>
+                    <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Chương (tùy chọn riêng câu)</label>
+                  <input
+                    type="text"
+                    value={editingQuestion.chapterName || ''}
+                    onChange={(e) => setEditingQuestion({ ...editingQuestion, chapterName: e.target.value })}
+                    placeholder="Có thể chọn chung khi lưu vào ngân hàng"
+                    className="w-full p-2.5 rounded-xl border border-slate-300 text-sm"
+                  />
+                </div>
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Bài học / Chủ đề</label>
+                  <input
+                    type="text"
+                    value={editingQuestion.lessonName || editingQuestion.lessonTopic || ''}
+                    onChange={(e) =>
+                      setEditingQuestion({
+                        ...editingQuestion,
+                        lessonName: e.target.value,
+                        lessonTopic: e.target.value,
+                      })
+                    }
+                    placeholder="Có thể chọn theo Cascading Dropdown khi lưu"
+                    className="w-full p-2.5 rounded-xl border border-slate-300 text-sm"
+                  />
+                </div>
               </div>
 
               <div>
@@ -2194,6 +2526,41 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
           </div>
         </div>
       )}
+      {/* Word Save-to-Question-Bank Confirmation & Firestore Persistence Modal */}
+      <WordSaveToBankModal
+        isOpen={Boolean(saveModalQuestions && saveModalQuestions.length > 0)}
+        questionsToSave={saveModalQuestions || []}
+        existingBankQuestions={existingBankQuestions}
+        subjects={subjects}
+        defaultGrade={selectedGrade}
+        sourceFileName={selectedFile?.name}
+        currentUserId={currentUserId}
+        onClose={() => setSaveModalQuestions(null)}
+        onQuestionsPersisted={(savedList, refreshedBank, savedSourceIds) => {
+          if (savedSourceIds && savedSourceIds.length > 0) {
+            setSavedToBankSourceIds((prev) => {
+              const next = new Set(prev);
+              savedSourceIds.forEach((sid) => next.add(sid));
+              return next;
+            });
+          }
+          if (onQuestionsPersistedToBank) {
+            onQuestionsPersistedToBank(savedList, refreshedBank);
+          } else if (onSaveToQuestionBank && savedList.length > 0) {
+            onSaveToQuestionBank(savedList);
+          }
+          showToast(`Đã ghi thành công ${savedList.length} câu hỏi vào Ngân hàng Firestore!`);
+        }}
+        onNavigateToQuestionBank={() => {
+          onNavigateToQuestionBank?.();
+        }}
+        onReviewUnsavedQuestions={(unsavedIds) => {
+          setUnsavedOnlyFilterIds(new Set(unsavedIds));
+          setSelectedQuestionIds(new Set(unsavedIds));
+          setActiveViewTab('all_questions');
+          scrollToSection(step3Ref);
+        }}
+      />
     </div>
   );
 };
