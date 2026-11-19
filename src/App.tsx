@@ -97,6 +97,8 @@ import { ExamJoinLanding, ExamLandingStatus } from './components/student/ExamJoi
 // Admin Components
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { CurriculumCatalogManager } from './components/admin/CurriculumCatalogManager';
+import { SchoolQuestionBankManager } from './components/admin/SchoolQuestionBankManager';
+import { cloneQuestionsForExam } from './components/teacher/QuestionBankPickerModal';
 
 function getDefaultTabForRole(role: UserRole): string {
   if (role === 'student') return 'student_home';
@@ -1358,12 +1360,32 @@ export default function App() {
           <ProtectedRoute allowedRoles={['teacher', 'admin']} onBackHome={resetToRoleHome}>
             {renderWorkspaceSubNav()}
 
-            {userProfile.role === 'admin' && (activeTab === 'admin_dashboard' || activeTab === 'admin_users' || activeTab === 'admin_curriculum') && (
+            {userProfile.role === 'admin' &&
+              (activeTab === 'admin_dashboard' ||
+                activeTab === 'admin_users' ||
+                activeTab === 'admin_curriculum' ||
+                activeTab === 'admin_school_bank') && (
               isAdminClaimVerified ? (
                 activeTab === 'admin_curriculum' ? (
                   <CurriculumCatalogManager
                     currentUser={userProfile}
                     subjects={mergedSubjects}
+                  />
+                ) : activeTab === 'admin_school_bank' ? (
+                  <SchoolQuestionBankManager
+                    currentUser={userProfile}
+                    subjects={mergedSubjects}
+                    onCreateExamFromQuestions={(pickedItems, suggestedTitle) => {
+                      const examQuestions = cloneQuestionsForExam(pickedItems, 'school_bank');
+                      setCreatorInitialQuestions(examQuestions);
+                      setCreatorInitialTitle(
+                        suggestedTitle || `Đề kiểm tra tổng hợp (${examQuestions.length} câu)`
+                      );
+                      setCreatorInitialGrade(examQuestions[0]?.grade || '12');
+                      setCreatorInitialFolderId(null);
+                      setActiveTab('create_exam');
+                    }}
+                    onPersonalBankUpdated={reloadDataFromStorage}
                   />
                 ) : (
                   <AdminDashboard
@@ -1447,6 +1469,7 @@ export default function App() {
                 subjects={mergedSubjects}
                 currentUserId={activeUid}
                 currentUserName={userProfile.name}
+                isAdmin={userProfile.role === 'admin'}
                 onSaveExam={handleSaveExam}
                 onCancel={() => setActiveTab('exam_manager')}
               />
@@ -1599,6 +1622,7 @@ export default function App() {
               'admin_dashboard',
               'admin_users',
               'admin_curriculum',
+              'admin_school_bank',
               'upload_exam',
               'question_bank',
               'folder_manager',

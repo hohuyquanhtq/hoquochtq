@@ -121,6 +121,29 @@ export interface CurriculumLesson {
   updatedAt: string;
 }
 
+export type CurriculumImportMode = 'append' | 'sync';
+
+export interface CurriculumImportLog {
+  id: string;
+  fileName: string;
+  actorUid: string;
+  actorName: string;
+  actorEmail?: string;
+  importedAt: string;
+  mode: CurriculumImportMode;
+  subjectsCount: number;
+  gradesCount: number;
+  chaptersCount: number;
+  lessonsCount: number;
+  addedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  deletedCount: number;
+  errorCount: number;
+  duplicateCount: number;
+  textbooks?: string[];
+}
+
 export interface SubjectItem {
   id: string;
   name: string;
@@ -212,6 +235,16 @@ export interface Question {
   sectionTitle?: string;
   partTitle?: string;
   rawSourceText?: string;
+
+  // Bộ sách giáo khoa & truy xuất nguồn gốc (Super Admin / tạo đề kết hợp nhiều giáo viên)
+  textbookSeries?: string;
+  sourceQuestionId?: string;
+  sourceOwnerId?: string;
+  sourceOwnerName?: string;
+  sourceScope?: 'personal' | 'school_bank';
+  copiedFromQuestionId?: string;
+  copiedFromOwnerId?: string;
+  copiedFromOwnerName?: string;
 }
 
 export interface Folder {
@@ -588,6 +621,120 @@ export interface ParsedExamResult {
   // Equation & OMML Parse Diagnostics
   equationWarnings?: string[];
   unsupportedEquationCount?: number;
+}
+
+// --- SUPER ADMIN SCHOOL-WIDE QUESTION BANK & AUDIT TYPES ---
+export interface AdminSchoolTeacherSummary {
+  uid: string;
+  name: string;
+  email: string;
+  role: UserRole;
+  school?: string;
+  status?: AccountStatus;
+  questionCount: number;
+  subjectsCount: number;
+  lastQuestionAt?: string;
+}
+
+export interface AdminSchoolQuestionItem extends Question {
+  ownerUid: string;
+  ownerName: string;
+  ownerEmail: string;
+  ownerRole?: UserRole;
+  ownerSchool?: string;
+  resolvedSubjectId: string;
+  resolvedSubjectName: string;
+  resolvedTextbookSeries?: string;
+}
+
+export interface AdminTeacherSubjectGradeRow {
+  teacherUid: string;
+  teacherName: string;
+  teacherEmail: string;
+  subjectId: string;
+  subjectName: string;
+  grade: string;
+  count: number;
+}
+
+export interface AdminChapterLessonStat {
+  subjectId: string;
+  subjectName: string;
+  grade: string;
+  chapterKey: string;
+  chapterName: string;
+  lessonKey: string;
+  lessonName: string;
+  count: number;
+}
+
+export interface AdminQuestionBankStats {
+  totalTeachersWithQuestions: number;
+  totalQuestions: number;
+  bySubject: Array<{ subjectId: string; subjectName: string; count: number }>;
+  byGrade: Array<{ grade: string; count: number }>;
+  byChapterLesson: AdminChapterLessonStat[];
+  byLevel: Array<{ level: CognitiveLevel; count: number }>;
+  byType: Array<{ type: QuestionType; count: number }>;
+  byTeacher: AdminSchoolTeacherSummary[];
+  teacherSubjectGradeRows: AdminTeacherSubjectGradeRow[];
+}
+
+export interface AdminQuestionBankFilterParams {
+  teacherIds?: string[];
+  subjectIds?: string[];
+  grades?: string[];
+  textbookSeries?: string;
+  chapter?: string;
+  lesson?: string;
+  levels?: CognitiveLevel[];
+  types?: QuestionType[];
+  dateFrom?: string;
+  dateTo?: string;
+  search?: string;
+  sortBy?: 'updatedAt_desc' | 'createdAt_desc' | 'createdAt_asc' | 'code_asc';
+  page?: number;
+  pageSize?: number;
+  includeAllFiltered?: boolean;
+}
+
+export interface AdminQuestionBankFilterOptions {
+  subjects: Array<{ id: string; name: string }>;
+  grades: string[];
+  textbookSeries: string[];
+  chapters: Array<{ key: string; name: string; subjectId: string; grade: string }>;
+  lessons: Array<{ key: string; name: string; chapterKey: string; subjectId: string; grade: string }>;
+}
+
+export interface AdminQuestionBankResponse {
+  items: AdminSchoolQuestionItem[];
+  totalFiltered: number;
+  page: number;
+  pageSize: number;
+  totalPages: number;
+  stats: AdminQuestionBankStats;
+  teachers: AdminSchoolTeacherSummary[];
+  filterOptions: AdminQuestionBankFilterOptions;
+}
+
+export type AdminQuestionAuditAction = 'copy_to_admin' | 'edit_original' | 'delete_original';
+
+export interface AdminQuestionAuditLog {
+  id: string;
+  action: AdminQuestionAuditAction;
+  questionId: string;
+  questionCode: string;
+  copiedQuestionId?: string;
+  originalOwnerId: string;
+  originalOwnerName: string;
+  originalOwnerEmail?: string;
+  actorUid: string;
+  actorName: string;
+  actorEmail?: string;
+  reason: string;
+  beforeSummary: string;
+  afterSummary?: string;
+  createdAt: string;
 }
 
 declare global {

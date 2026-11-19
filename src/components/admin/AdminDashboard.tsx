@@ -9,6 +9,7 @@ import {
   FileCheck,
   BookOpen,
   BookMarked,
+  Building2,
   FolderTree,
   Search,
   Lock,
@@ -321,6 +322,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             <>
               <button
                 type="button"
+                onClick={() => onNavigate('admin_school_bank')}
+                className="px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-xs flex items-center gap-1.5"
+              >
+                <Building2 className="w-4 h-4" />
+                <span>NH câu hỏi toàn trường</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => onNavigate('admin_curriculum')}
                 className="px-3.5 py-2 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-xs font-bold flex items-center gap-1.5"
               >
@@ -359,44 +368,70 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       </div>
 
       {/* Resource Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
         <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center font-bold shrink-0">
             <Clock className="w-5 h-5" />
           </div>
-          <div>
-            <p className="text-xs text-slate-500 font-medium">Chờ duyệt giáo viên</p>
-            <p className="text-xl font-bold text-slate-900">{pendingCount} tài khoản</p>
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500 font-medium truncate">Chờ duyệt giáo viên</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">{pendingCount}</p>
           </div>
         </div>
 
         <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold">
+          <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold shrink-0">
             <Users className="w-5 h-5" />
           </div>
-          <div>
-            <p className="text-xs text-slate-500 font-medium">Tổng tài khoản Cloud</p>
-            <p className="text-xl font-bold text-slate-900">{usersList.length} tài khoản</p>
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500 font-medium truncate">Tổng tài khoản Cloud</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">{usersList.length}</p>
           </div>
         </div>
 
+        <button
+          type="button"
+          onClick={() => onNavigate?.('admin_school_bank')}
+          className="p-4 rounded-xl bg-white border border-teal-200 hover:border-teal-400 hover:bg-teal-50/30 shadow-xs flex items-center gap-3 text-left transition-colors"
+        >
+          <div className="w-10 h-10 rounded-xl bg-teal-50 text-teal-700 flex items-center justify-center font-bold shrink-0">
+            <Building2 className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <p className="text-xs text-teal-800 font-semibold truncate">Câu hỏi toàn trường</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">
+              {cloudAudit.allQuestions.length}
+            </p>
+            <p className="text-[11px] text-slate-500 truncate tabular-nums">
+              {
+                new Set(
+                  cloudAudit.allQuestions.map((q) => q.ownerId || q.authorId).filter(Boolean)
+                ).size
+              }{' '}
+              GV đóng góp →
+            </p>
+          </div>
+        </button>
+
         <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold">
+          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center font-bold shrink-0">
             <FileCheck className="w-5 h-5" />
           </div>
-          <div>
-            <p className="text-xs text-slate-500 font-medium">Đề thi trên Cloud</p>
-            <p className="text-xl font-bold text-slate-900">{cloudAudit.allExams.length} đề</p>
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500 font-medium truncate">Đề thi trên Cloud</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">{cloudAudit.allExams.length}</p>
           </div>
         </div>
 
         <div className="p-4 rounded-xl bg-white border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold">
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold shrink-0">
             <BookOpen className="w-5 h-5" />
           </div>
-          <div>
-            <p className="text-xs text-slate-500 font-medium">Bài nộp trên Cloud</p>
-            <p className="text-xl font-bold text-slate-900">{cloudAudit.allSubmissions.length} bài</p>
+          <div className="min-w-0">
+            <p className="text-xs text-slate-500 font-medium truncate">Bài nộp trên Cloud</p>
+            <p className="text-xl font-bold text-slate-900 tabular-nums">
+              {cloudAudit.allSubmissions.length}
+            </p>
           </div>
         </div>
       </div>

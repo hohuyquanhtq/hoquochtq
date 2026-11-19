@@ -58,6 +58,7 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [curriculumConfig, setCurriculumConfig] = useState<CurriculumConfig | null>(null);
+  const [selectedTextbook, setSelectedTextbook] = useState<string>('all');
 
   const [isLessonDropdownOpen, setIsLessonDropdownOpen] = useState<boolean>(false);
   const [lessonSearch, setLessonSearch] = useState<string>('');
@@ -127,26 +128,56 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
   useEffect(() => {
     setIsLessonDropdownOpen(false);
     setLessonSearch('');
+    setSelectedTextbook('all');
     void loadLessons(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value.subjectId, value.grade]);
 
-  const { chapters } = useMemo(
+  const availableTextbooks = useMemo(
+    () => Array.from(new Set(lessons.map((l) => l.textbookSeries).filter(Boolean))),
+    [lessons]
+  );
+
+  // When multiple textbooks exist for this Subject + Grade, default to the selected lesson's textbook or school's configured textbook
+  useEffect(() => {
+    if (availableTextbooks.length <= 1) {
+      setSelectedTextbook('all');
+      return;
+    }
+    if (value.lessonId) {
+      const currentLesson = lessons.find((l) => l.lessonId === value.lessonId || l.id === value.lessonId);
+      if (currentLesson?.textbookSeries && availableTextbooks.includes(currentLesson.textbookSeries)) {
+        setSelectedTextbook(currentLesson.textbookSeries);
+        return;
+      }
+    }
+    if (
+      selectedTextbook === 'all' &&
+      curriculumConfig?.textbookSeries &&
+      availableTextbooks.includes(curriculumConfig.textbookSeries)
+    ) {
+      setSelectedTextbook(curriculumConfig.textbookSeries);
+    }
+  }, [availableTextbooks, curriculumConfig?.textbookSeries, lessons, value.lessonId, selectedTextbook]);
+
+  const { chapters, lessons: scopedLessons } = useMemo(
     () =>
       filterAndGroupCurriculumLessons(lessons, {
         includeInactive: false,
+        textbookSeries: availableTextbooks.length > 1 ? selectedTextbook : undefined,
       }),
-    [lessons]
+    [lessons, availableTextbooks.length, selectedTextbook]
   );
 
   const filteredByChapterAndSearch = useMemo(
     () =>
       filterAndGroupCurriculumLessons(lessons, {
         includeInactive: false,
+        textbookSeries: availableTextbooks.length > 1 ? selectedTextbook : undefined,
         chapterId: value.chapterId || undefined,
         searchTerm: lessonSearch,
       }),
-    [lessons, value.chapterId, lessonSearch]
+    [lessons, availableTextbooks.length, selectedTextbook, value.chapterId, lessonSearch]
   );
 
   const handleSubjectChange = (nextSubId: string) => {
@@ -276,6 +307,40 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
           </select>
         </div>
       </div>
+
+      {/* Optional Textbook Selector when >1 textbook series exists for selected Subject + Grade */}
+      {availableTextbooks.length > 1 && (
+        <div>
+          <label className="block text-xs font-bold text-slate-700 mb-1.5">
+            Bộ sách giáo khoa ({availableTextbooks.length} bộ sách khả dụng)
+          </label>
+          <select
+            value={selectedTextbook}
+            onChange={(e) => {
+              const nextTb = e.target.value;
+              setSelectedTextbook(nextTb);
+              setIsLessonDropdownOpen(false);
+              setLessonSearch('');
+              onChange({
+                ...value,
+                chapterId: '',
+                chapterName: '',
+                lessonId: '',
+                lessonName: '',
+              });
+            }}
+            aria-label="Chọn bộ sách giáo khoa"
+            className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+          >
+            <option value="all">-- Tất cả bộ sách ({availableTextbooks.length}) --</option>
+            {availableTextbooks.map((tb) => (
+              <option key={tb} value={tb}>
+                {tb}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* 3. Chương/Chủ đề + 4. Bài học */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -459,17 +524,23 @@ export const CurriculumCascadeSelector: React.FC<CurriculumCascadeSelectorProps>
                 </p>
               </div>
             </div>
-          ) : !isLoading && lessons.length > 0 ? (
+          ) : !isLoading && scopedLessons.length > 0 ? (
             <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 rounded-xl bg-slate-50 border border-slate-200 text-[11px] text-slate-600">
               <span className="inline-flex items-center gap-1.5">
                 <BookOpen className="w-3.5 h-3.5 text-teal-600" />
                 <span>
-                  Bộ sách: <strong className="text-slate-800">{lessons[0].textbookSeries}</strong> ·{' '}
-                  Năm áp dụng: <strong className="text-slate-800">{lessons[0].textbookYear}</strong>
+                  Bộ sách:{' '}
+                  <strong className="text-slate-800">
+                    {availableTextbooks.length > 1 && selectedTextbook === 'all'
+                      ? availableTextbooks.join(', ')
+                      : scopedLessons[0].textbookSeries}
+                  </strong>{' '}
+                  · Năm áp dụng:{' '}
+                  <strong className="text-slate-800">{scopedLessons[0].textbookYear}</strong>
                 </span>
               </span>
               <span className="tabular-nums text-slate-500">
-                {chapters.length} chương · {lessons.length} bài học khả dụng
+                {chapters.length} chương · {scopedLessons.length} bài học khả dụng
               </span>
             </div>
           ) : null}

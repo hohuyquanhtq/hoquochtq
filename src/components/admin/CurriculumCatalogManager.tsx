@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowDown,
@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
+  History,
   Layers,
   Loader2,
   Plus,
@@ -34,7 +35,6 @@ import {
   TEXTBOOK_SERIES_OPTIONS,
 } from '../../constants/subjects';
 import {
-  CurriculumImportParseResult,
   deleteCurriculumLessonFromFirestore,
   downloadCurriculumTemplateExcel,
   exportCurriculumCatalogExcel,
@@ -42,12 +42,13 @@ import {
   fetchCurriculumConfigFromFirestore,
   filterAndGroupCurriculumLessons,
   generateChapterId,
-  parseCurriculumImportFile,
   saveCurriculumConfigToFirestore,
   saveCurriculumLessonsBatchToFirestore,
   saveCurriculumLessonToFirestore,
 } from '../../services/curriculumService';
 import { ConfirmDialog } from '../common/ConfirmDialog';
+import { CurriculumImportModal } from './CurriculumImportModal';
+import { CurriculumImportHistoryModal } from './CurriculumImportHistoryModal';
 
 interface CurriculumCatalogManagerProps {
   currentUser: User;
@@ -70,6 +71,7 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [selectedSubjectId, setSelectedSubjectId] = useState<string>('hoa_hoc');
   const [selectedGrade, setSelectedGrade] = useState<CurriculumGrade>('10');
+  const [selectedTextbookFilter, setSelectedTextbookFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [showInactive, setShowInactive] = useState<boolean>(true);
 
@@ -88,11 +90,9 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
   const [isSavingLesson, setIsSavingLesson] = useState<boolean>(false);
   const [lessonFormError, setLessonFormError] = useState<string | null>(null);
 
-  // Import Excel/CSV modal
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [importPreview, setImportPreview] = useState<CurriculumImportParseResult | null>(null);
-  const [importFileName, setImportFileName] = useState<string>('');
-  const [isImporting, setIsImporting] = useState<boolean>(false);
+  // Import Excel/CSV Wizard & History Modals
+  const [isImportModalOpen, setIsImportModalOpen] = useState<boolean>(false);
+  const [isHistoryModalOpen, setIsHistoryModalOpen] = useState<boolean>(false);
 
   // Delete confirmation
   const [deleteTarget, setDeleteTarget] = useState<CurriculumLesson | null>(null);
@@ -173,14 +173,43 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
     [allLessons, selectedSubjectId, selectedGrade]
   );
 
+  const availableTextbooksInScope = useMemo(
+    () => Array.from(new Set(scopedLessons.map((l) => l.textbookSeries).filter(Boolean))),
+    [scopedLessons]
+  );
+
+  useEffect(() => {
+    if (
+      selectedTextbookFilter !== 'all' &&
+      !availableTextbooksInScope.includes(selectedTextbookFilter)
+    ) {
+      setSelectedTextbookFilter('all');
+    }
+  }, [availableTextbooksInScope, selectedTextbookFilter]);
+
+  const configuredTextbooks = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [
+            ...TEXTBOOK_SERIES_OPTIONS,
+            activeSeriesValue,
+            config?.textbookSeries || '',
+          ].filter(Boolean)
+        )
+      ),
+    [activeSeriesValue, config?.textbookSeries]
+  );
+
   const { chapters: groupedChapters, lessons: visibleLessons } = useMemo(
     () =>
       filterAndGroupCurriculumLessons(scopedLessons, {
         grade: selectedGrade,
+        textbookSeries: selectedTextbookFilter,
         includeInactive: showInactive,
         searchTerm,
       }),
-    [scopedLessons, selectedGrade, showInactive, searchTerm]
+    [scopedLessons, selectedGrade, selectedTextbookFilter, showInactive, searchTerm]
   );
 
   const handleSaveConfig = async (e: React.FormEvent) => {
@@ -270,7 +299,7 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
       const chapterId =
         editingLesson && !chapterChanged
           ? editingLesson.chapterId
-          : generateChapterId(currentSubject.id, selectedGrade, formChapterName.trim());
+          : generateChapterId(currentSubject.id, selectedGrade, formChapterName.trim(), seriesToUse);
 
       const saved = await saveCurriculumLessonToFirestore(
         {
@@ -374,48 +403,9 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
     }
   };
 
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = '';
-    if (!file) return;
-
-    try {
-      const parsed = await parseCurriculumImportFile(
-        file,
-        subjects,
-        {
-          textbookSeries: activeSeriesValue || config?.textbookSeries || '',
-          textbookYear: yearInput.trim() || config?.textbookYear || '2025-2026',
-        },
-        adminUid
-      );
-      setImportFileName(file.name);
-      setImportPreview(parsed);
-    } catch (err) {
-      showToast(
-        err instanceof Error ? err.message : 'Không thể đọc tệp Excel/CSV vừa chọn.',
-        'error'
-      );
-    }
-  };
-
-  const handleConfirmImport = async () => {
-    if (!importPreview || importPreview.validRows.length === 0) return;
-    setIsImporting(true);
-    try {
-      await saveCurriculumLessonsBatchToFirestore(importPreview.validRows, adminUid);
-      await loadData();
-      showToast(`Đã nhập thành công ${importPreview.validRows.length} bài học vào Firestore.`);
-      setImportPreview(null);
-      setImportFileName('');
-    } catch (err) {
-      showToast(
-        err instanceof Error ? err.message : 'Lỗi ghi danh mục bài học vào Firestore.',
-        'error'
-      );
-    } finally {
-      setIsImporting(false);
-    }
+  const handleImportCompleted = async () => {
+    await loadData();
+    showToast('Đã đồng bộ danh mục Chương & Bài học SGK mới nhất từ Firestore.');
   };
 
   return (
@@ -434,15 +424,6 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
           <span>{toast.text}</span>
         </div>
       )}
-
-      {/* Hidden Excel/CSV file input */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".xlsx,.xls,.csv"
-        onChange={handleFileChange}
-        className="hidden"
-      />
 
       {/* Page Header */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
@@ -471,16 +452,25 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
             className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5"
           >
             <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
-            <span>Tải file mẫu Excel</span>
+            <span>Tải file Excel mẫu</span>
           </button>
 
           <button
             type="button"
-            onClick={() => fileInputRef.current?.click()}
-            className="min-h-[40px] px-3.5 py-2 rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-semibold inline-flex items-center gap-1.5"
+            onClick={() => setIsImportModalOpen(true)}
+            className="min-h-[40px] px-3.5 py-2 rounded-xl border border-teal-600 bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold inline-flex items-center gap-1.5"
           >
-            <Upload className="w-4 h-4 text-teal-700" />
-            <span>Nhập Excel / CSV</span>
+            <Upload className="w-4 h-4" />
+            <span>Import Excel/CSV</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setIsHistoryModalOpen(true)}
+            className="min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5"
+          >
+            <History className="w-4 h-4 text-indigo-600" />
+            <span>Xem lịch sử Import</span>
           </button>
 
           <button
@@ -678,7 +668,7 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
             </div>
           </div>
 
-          {/* Search & Visibility Toolbar */}
+          {/* Search, Textbook Filter & Visibility Toolbar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div className="relative flex-1">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -690,6 +680,22 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
                 className="w-full min-h-[38px] pl-9 pr-3 py-1.5 rounded-xl border border-slate-200 bg-slate-50 text-xs focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
             </div>
+
+            {availableTextbooksInScope.length > 1 && (
+              <select
+                value={selectedTextbookFilter}
+                onChange={(e) => setSelectedTextbookFilter(e.target.value)}
+                aria-label="Lọc theo bộ sách giáo khoa"
+                className="min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-teal-500"
+              >
+                <option value="all">Tất cả bộ sách ({availableTextbooksInScope.length})</option>
+                {availableTextbooksInScope.map((tb) => (
+                  <option key={tb} value={tb}>
+                    {tb}
+                  </option>
+                ))}
+              </select>
+            )}
 
             <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 cursor-pointer shrink-0">
               <input
@@ -717,7 +723,7 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
                 </h3>
                 <p className="text-xs text-slate-500 max-w-md mx-auto">
                   Hệ thống không tự suy diễn tên bài học. Vui lòng dùng nút{' '}
-                  <strong>Thêm bài học</strong> hoặc <strong>Nhập Excel / CSV</strong> để nạp danh mục chính thức đúng theo bộ sách giáo khoa của trường.
+                  <strong>Thêm bài học</strong> hoặc <strong>Import Excel/CSV</strong> để nạp danh mục chính thức đúng theo bộ sách giáo khoa của trường.
                 </p>
               </div>
               <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
@@ -731,11 +737,11 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
                 </button>
                 <button
                   type="button"
-                  onClick={() => fileInputRef.current?.click()}
+                  onClick={() => setIsImportModalOpen(true)}
                   className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5"
                 >
                   <Upload className="w-3.5 h-3.5" />
-                  <span>Nhập từ Excel / CSV</span>
+                  <span>Import Excel/CSV</span>
                 </button>
               </div>
             </div>
@@ -1007,112 +1013,25 @@ export const CurriculumCatalogManager: React.FC<CurriculumCatalogManagerProps> =
         </div>
       )}
 
-      {/* Excel / CSV Import Preview Modal */}
-      {importPreview && (
-        <div
-          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[88vh]">
-            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between shrink-0">
-              <div>
-                <h3 className="font-bold text-sm">
-                  Kiểm tra tệp nhập danh mục: {importFileName}
-                </h3>
-                <p className="text-xs text-slate-300 mt-0.5 tabular-nums">
-                  Hợp lệ: {importPreview.validRows.length} dòng · Lỗi:{' '}
-                  {importPreview.errors.length} dòng
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setImportPreview(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* Excel / CSV Bulk Import Wizard Modal */}
+      <CurriculumImportModal
+        isOpen={isImportModalOpen}
+        subjects={subjects}
+        existingLessons={allLessons}
+        curriculumConfig={config}
+        configuredTextbooks={configuredTextbooks}
+        defaultTextbookYear={yearInput.trim() || config?.textbookYear || '2025-2026'}
+        adminUid={adminUid}
+        onClose={() => setIsImportModalOpen(false)}
+        onImportSuccess={handleImportCompleted}
+        onOpenHistory={() => setIsHistoryModalOpen(true)}
+      />
 
-            <div className="p-6 overflow-y-auto space-y-4 text-xs flex-1">
-              {importPreview.detectedSeries.length > 1 && (
-                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 font-semibold">
-                  Cảnh báo: Tệp nhập có nhiều bộ sách khác nhau (
-                  {importPreview.detectedSeries.join(', ')}). Hãy kiểm tra để tránh trộn lẫn tên bài giữa các bộ sách.
-                </div>
-              )}
-
-              {importPreview.errors.length > 0 && (
-                <div className="border border-rose-200 rounded-xl overflow-hidden">
-                  <div className="px-3.5 py-2 bg-rose-50 font-bold text-rose-800">
-                    Các dòng không hợp lệ ({importPreview.errors.length})
-                  </div>
-                  <div className="max-h-40 overflow-y-auto divide-y divide-rose-100">
-                    {importPreview.errors.map((err, idx) => (
-                      <div key={idx} className="px-3.5 py-2 text-rose-700">
-                        <strong>Dòng {err.rowNumber}:</strong> {err.message}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {importPreview.validRows.length > 0 && (
-                <div className="border border-slate-200 rounded-xl overflow-hidden">
-                  <div className="px-3.5 py-2 bg-slate-50 font-bold text-slate-800">
-                    Xem trước dữ liệu hợp lệ ({importPreview.validRows.length} bài)
-                  </div>
-                  <div className="overflow-x-auto max-h-64 overflow-y-auto">
-                    <table className="w-full text-left border-collapse">
-                      <thead>
-                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                          <th className="py-2 px-3">Môn</th>
-                          <th className="py-2 px-3">Lớp</th>
-                          <th className="py-2 px-3">Chương</th>
-                          <th className="py-2 px-3">Bài học</th>
-                          <th className="py-2 px-3">Bộ sách</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100">
-                        {importPreview.validRows.slice(0, 50).map((r) => (
-                          <tr key={r.id}>
-                            <td className="py-1.5 px-3 font-medium">{r.subjectName}</td>
-                            <td className="py-1.5 px-3 tabular-nums">{r.grade}</td>
-                            <td className="py-1.5 px-3">{r.chapterName}</td>
-                            <td className="py-1.5 px-3 font-semibold text-slate-900">
-                              {r.lessonName}
-                            </td>
-                            <td className="py-1.5 px-3 text-slate-500">{r.textbookSeries}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="px-6 py-3 bg-slate-50 border-t border-slate-200 flex justify-end gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => setImportPreview(null)}
-                className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 text-xs font-semibold"
-              >
-                Đóng
-              </button>
-              <button
-                type="button"
-                disabled={isImporting || importPreview.validRows.length === 0}
-                onClick={() => void handleConfirmImport()}
-                className="px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs font-semibold inline-flex items-center gap-1.5"
-              >
-                {isImporting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                <span>Lưu {importPreview.validRows.length} bài học lên Firestore</span>
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Import History Log Modal */}
+      <CurriculumImportHistoryModal
+        isOpen={isHistoryModalOpen}
+        onClose={() => setIsHistoryModalOpen(false)}
+      />
 
       {/* Delete Lesson Dialog */}
       <ConfirmDialog

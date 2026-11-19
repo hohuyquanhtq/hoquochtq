@@ -10,6 +10,7 @@ import {
   Users,
   BookOpenCheck,
   BookMarked,
+  Building2,
   Settings,
   FlaskConical,
   X,
@@ -87,12 +88,18 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
         },
         {
           id: 'question_bank',
-          label: 'Ngân hàng câu hỏi',
+          label: userRole === 'admin' ? 'Ngân hàng riêng của tôi' : 'Ngân hàng câu hỏi',
           matchTabs: ['question_bank'],
           icon: Database,
         },
         ...(userRole === 'admin'
           ? [
+              {
+                id: 'admin_school_bank',
+                label: 'NH câu hỏi toàn trường',
+                matchTabs: ['admin_school_bank'],
+                icon: Building2,
+              },
               {
                 id: 'admin_curriculum',
                 label: 'Danh mục bài học',

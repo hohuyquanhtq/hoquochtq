@@ -55,6 +55,10 @@
         "teacherVerified": { "type": "boolean" },
         "section": { "type": "string", "maxLength": 64 },
         "sectionTitle": { "type": "string", "maxLength": 300 },
+        "textbookSeries": { "type": "string", "maxLength": 150 },
+        "copiedFromQuestionId": { "type": "string", "maxLength": 128 },
+        "copiedFromOwnerId": { "type": "string", "maxLength": 128 },
+        "copiedFromOwnerName": { "type": "string", "maxLength": 150 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -477,6 +481,63 @@
         "chapterId", "chapterName", "lessonId", "lessonName", "lessonOrder", "status",
         "createdAt", "updatedAt"
       ]
+    },
+    "CurriculumImportLog": {
+      "title": "CurriculumImportLog",
+      "description": "Immutable admin audit log for Excel/CSV curriculum bulk imports.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 250 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "importedAt": { "type": "string", "format": "date-time" },
+        "mode": { "type": "string", "enum": ["append", "sync"] },
+        "subjectsCount": { "type": "number" },
+        "gradesCount": { "type": "number" },
+        "chaptersCount": { "type": "number" },
+        "lessonsCount": { "type": "number" },
+        "addedCount": { "type": "number" },
+        "updatedCount": { "type": "number" },
+        "skippedCount": { "type": "number" },
+        "deletedCount": { "type": "number" },
+        "errorCount": { "type": "number" },
+        "duplicateCount": { "type": "number" },
+        "textbooks": { "type": "array" }
+      },
+      "required": [
+        "id", "fileName", "actorUid", "actorName", "importedAt", "mode",
+        "subjectsCount", "gradesCount", "chaptersCount", "lessonsCount",
+        "addedCount", "updatedCount", "skippedCount", "deletedCount",
+        "errorCount", "duplicateCount"
+      ]
+    },
+    "AdminQuestionAuditLog": {
+      "title": "AdminQuestionAuditLog",
+      "description": "Immutable Admin-only audit record for copying, editing, or deleting teacher questions from the school-wide question bank.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "enum": ["copy_to_admin", "edit_original", "delete_original"] },
+        "questionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "questionCode": { "type": "string", "maxLength": 64 },
+        "copiedQuestionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "originalOwnerId": { "type": "string", "maxLength": 128 },
+        "originalOwnerName": { "type": "string", "maxLength": 150 },
+        "originalOwnerEmail": { "type": "string", "maxLength": 200 },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "beforeSummary": { "type": "string", "maxLength": 2000 },
+        "afterSummary": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "action", "questionId", "questionCode", "originalOwnerId",
+        "originalOwnerName", "actorUid", "actorName", "reason", "beforeSummary", "createdAt"
+      ]
     }
   },
   "firestore": {
@@ -563,6 +624,14 @@
     "/curriculumLessons/{lessonId}": {
       "schema": { "$ref": "#/entities/CurriculumLesson" },
       "description": "Centralized GDPT 2018 chapter/lesson catalog managed by Admin and consumed by Teachers via cascading dropdown."
+    },
+    "/curriculumImportLogs/{logId}": {
+      "schema": { "$ref": "#/entities/CurriculumImportLog" },
+      "description": "Admin-only immutable audit history of Excel/CSV bulk curriculum imports."
+    },
+    "/adminQuestionAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminQuestionAuditLog" },
+      "description": "Admin-only immutable audit log for privileged Super Admin actions on school-wide question bank records."
     }
   }
 }

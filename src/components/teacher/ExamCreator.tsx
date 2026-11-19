@@ -50,6 +50,7 @@ interface ExamCreatorProps {
   subjects?: SubjectItem[];
   currentUserId?: string;
   currentUserName?: string;
+  isAdmin?: boolean;
   onSaveExam: (exam: Exam) => void;
   onCancel: () => void;
 }
@@ -64,6 +65,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   subjects = DEFAULT_GDPT_2018_SUBJECTS,
   currentUserId,
   currentUserName,
+  isAdmin = false,
   onSaveExam,
   onCancel,
 }) => {
@@ -112,9 +114,27 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   const [isSavingExam, setIsSavingExam] = useState(false);
 
   // Question counts
-  const p1Count = questions.filter(q => q.type === 'part1_single_choice').length;
-  const p2Count = questions.filter(q => q.type === 'part2_true_false').length;
-  const p3Count = questions.filter(q => q.type === 'part3_short_answer').length;
+  const p1Count = questions.filter(
+    (q) => q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice'
+  ).length;
+  const p2Count = questions.filter((q) => q.type === 'part2_true_false').length;
+  const p3Count = questions.filter((q) => q.type === 'part3_short_answer').length;
+
+  // Source provenance breakdown when combining questions from multiple teachers
+  const sourceSummary = useMemo(() => {
+    const teacherNames = new Set<string>();
+    let schoolBankCount = 0;
+    questions.forEach((q) => {
+      if (q.sourceScope === 'school_bank') {
+        schoolBankCount += 1;
+        if (q.sourceOwnerName) teacherNames.add(q.sourceOwnerName);
+      }
+    });
+    return {
+      schoolBankCount,
+      teachers: Array.from(teacherNames),
+    };
+  }, [questions]);
 
   // Calculate current total score
   const calculateTotalScore = (): number => {
@@ -962,6 +982,15 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
               </h2>
               <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
                 Phần I: {p1Count} câu · Phần II: {p2Count} câu · Phần III: {p3Count} câu
+                {sourceSummary.schoolBankCount > 0 && (
+                  <span className="text-indigo-700 font-semibold">
+                    {' '}
+                    · Kết hợp {sourceSummary.schoolBankCount} câu từ NH toàn trường
+                    {sourceSummary.teachers.length > 0
+                      ? ` (${sourceSummary.teachers.length} GV: ${sourceSummary.teachers.slice(0, 3).join(', ')}${sourceSummary.teachers.length > 3 ? '...' : ''})`
+                      : ''}
+                  </span>
+                )}
               </p>
             </div>
 
@@ -972,7 +1001,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                 className="min-h-[38px] px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-xs"
               >
                 <BookOpen className="w-3.5 h-3.5" />
-                <span>Chọn từ Ngân hàng / Ma trận</span>
+                <span>{isAdmin ? 'Chọn từ NH của tôi / Toàn trường' : 'Chọn từ Ngân hàng / Ma trận'}</span>
               </button>
 
               <button
@@ -1024,6 +1053,14 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                       <span className="font-semibold text-teal-700">
                         {QUESTION_TYPE_SHORT_LABELS[q.type]}
                       </span>
+                      {q.sourceScope === 'school_bank' && q.sourceOwnerName && (
+                        <>
+                          <span className="text-slate-400">·</span>
+                          <span className="font-semibold text-indigo-700">
+                            Nguồn NH toàn trường · GV: {q.sourceOwnerName}
+                          </span>
+                        </>
+                      )}
                     </div>
 
                     <div className="flex items-center gap-1 shrink-0">
@@ -1104,6 +1141,9 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         subjects={subjects}
         defaultSubjectId={subjectId}
         defaultGrade={grade}
+        isAdmin={isAdmin}
+        currentUserId={currentUserId}
+        currentUserName={currentUserName}
         onAddQuestions={(picked) => {
           setQuestions((prev) => [...prev, ...picked]);
         }}

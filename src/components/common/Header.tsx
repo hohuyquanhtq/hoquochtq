@@ -48,6 +48,8 @@ const TAB_TITLES: Record<string, string> = {
   system_settings: 'Cài đặt hệ thống',
   admin_dashboard: 'Tổng quan Quản trị hệ thống',
   admin_users: 'Quản lý tài khoản & Học sinh',
+  admin_school_bank: 'Ngân hàng câu hỏi toàn trường',
+  admin_curriculum: 'Danh mục Chương & Bài học SGK',
 };
 
 export const Header: React.FC<HeaderProps> = ({

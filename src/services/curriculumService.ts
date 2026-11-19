@@ -15,6 +15,8 @@ import * as XLSX from 'xlsx';
 import {
   CurriculumConfig,
   CurriculumGrade,
+  CurriculumImportLog,
+  CurriculumImportMode,
   CurriculumLesson,
   CurriculumStatus,
   SubjectItem,
@@ -23,6 +25,15 @@ import {
   DEFAULT_GDPT_2018_SUBJECTS,
   TEXTBOOK_SERIES_OPTIONS,
 } from '../constants/subjects';
+import {
+  extractNormalizedRawRowsFromSheetRecords,
+  generateStableChapterId,
+  generateStableLessonId,
+  validateCurriculumImportRows,
+  type CurriculumImportNormalizedRow,
+  type CurriculumImportRawRow,
+  type CurriculumImportValidationResult,
+} from '../utils/curriculumImportEngine';
 import {
   auth,
   db,
@@ -61,9 +72,13 @@ function safeId(raw: string, fallbackPrefix = 'item'): string {
   return cleaned || `${fallbackPrefix}_${Date.now()}`;
 }
 
-export function generateChapterId(subjectId: string, grade: CurriculumGrade, chapterName: string): string {
-  const subShort = safeId(subjectId, 'sub').slice(0, 24);
-  return slugifyId(chapterName, `${subShort}_g${grade}_ch`, 128);
+export function generateChapterId(
+  subjectId: string,
+  grade: CurriculumGrade,
+  chapterName: string,
+  textbookSeries?: string
+): string {
+  return generateStableChapterId(subjectId, grade, chapterName, textbookSeries);
 }
 
 export function generateLessonId(
@@ -73,10 +88,7 @@ export function generateLessonId(
   lessonName: string,
   lessonOrder?: number
 ): string {
-  const subShort = safeId(subjectId, 'sub').slice(0, 20);
-  const chShort = safeId(chapterId, 'ch').slice(-24);
-  const orderTag = typeof lessonOrder === 'number' && lessonOrder > 0 ? `b${lessonOrder}_` : '';
-  return slugifyId(`${orderTag}${lessonName}`, `${subShort}_g${grade}_${chShort}`, 128);
+  return generateStableLessonId(subjectId, grade, chapterId, lessonName, lessonOrder);
 }
 
 export function invalidateCurriculumCache(subjectId?: string): void {
@@ -106,6 +118,7 @@ export function filterAndGroupCurriculumLessons(
   options?: {
     grade?: CurriculumGrade | '';
     chapterId?: string;
+    textbookSeries?: string;
     includeInactive?: boolean;
     searchTerm?: string;
   }
@@ -115,6 +128,7 @@ export function filterAndGroupCurriculumLessons(
     chapterId: string;
     chapterName: string;
     chapterOrder: number;
+    textbookSeries: string;
     lessons: CurriculumLesson[];
   }[];
 } {
@@ -122,6 +136,13 @@ export function filterAndGroupCurriculumLessons(
   const filtered = sortCurriculumLessons(lessons).filter((item) => {
     if (!options?.includeInactive && item.status !== 'active') return false;
     if (options?.grade && item.grade !== options.grade) return false;
+    if (
+      options?.textbookSeries &&
+      options.textbookSeries !== 'all' &&
+      item.textbookSeries !== options.textbookSeries
+    ) {
+      return false;
+    }
     if (options?.chapterId && options.chapterId !== 'all' && item.chapterId !== options.chapterId) {
       return false;
     }
@@ -136,7 +157,13 @@ export function filterAndGroupCurriculumLessons(
 
   const chapterMap = new Map<
     string,
-    { chapterId: string; chapterName: string; chapterOrder: number; lessons: CurriculumLesson[] }
+    {
+      chapterId: string;
+      chapterName: string;
+      chapterOrder: number;
+      textbookSeries: string;
+      lessons: CurriculumLesson[];
+    }
   >();
 
   filtered.forEach((item) => {
@@ -148,6 +175,7 @@ export function filterAndGroupCurriculumLessons(
         chapterId: item.chapterId,
         chapterName: item.chapterName,
         chapterOrder: item.chapterOrder ?? item.lessonOrder ?? 999,
+        textbookSeries: item.textbookSeries,
         lessons: [item],
       });
     }
@@ -333,7 +361,7 @@ export function normalizeAndValidateLessonInput(
 
   const chapterId = input.chapterId?.trim()
     ? safeId(input.chapterId.trim(), 'ch')
-    : generateChapterId(subjectId, input.grade, chapterName);
+    : generateChapterId(subjectId, input.grade, chapterName, textbookSeries);
 
   const lessonId = input.lessonId?.trim()
     ? safeId(input.lessonId.trim(), 'ls')
@@ -475,223 +503,438 @@ export async function deleteCurriculumLessonFromFirestore(
   }
 }
 
-export interface CurriculumImportParseResult {
-  validRows: CurriculumLesson[];
-  errors: { rowNumber: number; message: string }[];
-  detectedSeries: string[];
+export interface ParsedCurriculumSpreadsheet {
+  fileName: string;
+  rawRowCount: number;
+  validation: CurriculumImportValidationResult;
 }
 
-function resolveSubjectFromImportRow(
-  rawId: string,
-  rawName: string,
-  subjects: SubjectItem[]
-): { id: string; name: string } | null {
-  const cleanId = rawId.trim().toLowerCase();
-  const cleanName = rawName.trim().toLowerCase();
-
-  if (cleanId) {
-    const byId = subjects.find((s) => s.id.toLowerCase() === cleanId);
-    if (byId) return { id: byId.id, name: byId.name };
-  }
-  if (cleanName) {
-    if (cleanName === 'ngoại ngữ 1' || cleanName === 'tiếng anh') {
-      const nn = subjects.find((s) => s.id === 'ngoai_ngu_1');
-      if (nn) return { id: nn.id, name: nn.name };
-    }
-    const byName = subjects.find((s) => s.name.toLowerCase() === cleanName);
-    if (byName) return { id: byName.id, name: byName.name };
-  }
-  return null;
-}
-
-function normalizeGradeFromImportRow(rawGrade: unknown): CurriculumGrade | null {
-  const text = String(rawGrade ?? '').trim().toLowerCase();
-  if (text === '10' || text === 'lớp 10' || text === 'lop 10') return '10';
-  if (text === '11' || text === 'lớp 11' || text === 'lop 11') return '11';
-  if (text === '12' || text === 'lớp 12' || text === 'lop 12') return '12';
-  return null;
-}
-
-export async function parseCurriculumImportFile(
+export async function parseCurriculumExcelOrCsvFile(
   file: File,
-  subjects: SubjectItem[] = DEFAULT_GDPT_2018_SUBJECTS,
-  fallbackConfig?: { textbookSeries?: string; textbookYear?: string },
-  adminUid?: string
-): Promise<CurriculumImportParseResult> {
-  const buffer = await file.arrayBuffer();
-  const workbook = XLSX.read(buffer, { type: 'array' });
+  options?: {
+    subjects?: SubjectItem[];
+    configuredTextbooks?: string[];
+    defaultTextbookYear?: string;
+  }
+): Promise<ParsedCurriculumSpreadsheet> {
+  const lowerName = (file.name || '').toLowerCase();
+  if (!lowerName.endsWith('.xlsx') && !lowerName.endsWith('.csv')) {
+    throw new Error('Định dạng tệp không được hỗ trợ. Vui lòng chọn tệp Excel (.xlsx) hoặc CSV (.csv).');
+  }
+
+  let workbook: XLSX.WorkBook;
+  if (lowerName.endsWith('.csv')) {
+    const csvText = await file.text();
+    const cleanedCsv = csvText.replace(/^\uFEFF/, '');
+    workbook = XLSX.read(cleanedCsv, { type: 'string' });
+  } else {
+    const buffer = await file.arrayBuffer();
+    workbook = XLSX.read(buffer, { type: 'array' });
+  }
+
   const firstSheetName = workbook.SheetNames[0];
   if (!firstSheetName) {
-    return {
-      validRows: [],
-      errors: [{ rowNumber: 0, message: 'Tệp Excel/CSV không có trang dữ liệu nào.' }],
-      detectedSeries: [],
-    };
+    throw new Error('Tệp không có trang dữ liệu (sheet) nào.');
   }
 
   const sheet = workbook.Sheets[firstSheetName];
   const rawRecords = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '' });
-
-  const validRows: CurriculumLesson[] = [];
-  const errors: { rowNumber: number; message: string }[] = [];
-  const seriesSet = new Set<string>();
-  const seenLessonIds = new Set<string>();
-
-  rawRecords.forEach((raw, idx) => {
-    const rowNum = idx + 2; // +1 header, +1 1-indexed
-    const row: Record<string, string> = {};
-    Object.keys(raw).forEach((k) => {
-      row[k.trim().toLowerCase()] = String(raw[k] ?? '').trim();
-    });
-
-    const subjectIdRaw = row['subjectid'] || row['ma_mon'] || row['mã môn'] || '';
-    const subjectNameRaw = row['subjectname'] || row['ten_mon'] || row['môn học'] || '';
-    const gradeRaw = row['grade'] || row['khoi_lop'] || row['khối lớp'] || row['lớp'] || '';
-    const seriesRaw =
-      row['textbookseries'] || row['bo_sach'] || row['bộ sách'] || fallbackConfig?.textbookSeries || '';
-    const yearRaw =
-      row['textbookyear'] || row['nam_ap_dung'] || row['năm áp dụng'] || fallbackConfig?.textbookYear || '2025-2026';
-    const chapterIdRaw = row['chapterid'] || row['ma_chuong'] || '';
-    const chapterNameRaw = row['chaptername'] || row['ten_chuong'] || row['chương'] || row['chủ đề'] || '';
-    const chapterOrderRaw = row['chapterorder'] || row['thu_tu_chuong'] || '';
-    const lessonIdRaw = row['lessonid'] || row['ma_bai'] || '';
-    const lessonNameRaw = row['lessonname'] || row['ten_bai'] || row['bài học'] || '';
-    const lessonOrderRaw = row['lessonorder'] || row['thu_tu_bai'] || row['stt'] || '';
-    const statusRaw = (row['status'] || row['trang_thai'] || 'active').toLowerCase();
-
-    // Skip completely empty rows
-    if (!subjectIdRaw && !subjectNameRaw && !chapterNameRaw && !lessonNameRaw) {
-      return;
-    }
-
-    const resolvedSubject = resolveSubjectFromImportRow(subjectIdRaw, subjectNameRaw, subjects);
-    if (!resolvedSubject) {
-      errors.push({
-        rowNumber: rowNum,
-        message: `Không nhận diện được môn học ("${subjectIdRaw || subjectNameRaw}").`,
-      });
-      return;
-    }
-
-    const normalizedGrade = normalizeGradeFromImportRow(gradeRaw);
-    if (!normalizedGrade) {
-      errors.push({
-        rowNumber: rowNum,
-        message: `Khối lớp "${gradeRaw}" không hợp lệ (chỉ chấp nhận 10, 11 hoặc 12).`,
-      });
-      return;
-    }
-
-    if (!seriesRaw) {
-      errors.push({
-        rowNumber: rowNum,
-        message: 'Thiếu tên bộ sách giáo khoa (textbookSeries) và chưa chọn bộ sách mặc định.',
-      });
-      return;
-    }
-
-    if (!chapterNameRaw) {
-      errors.push({ rowNumber: rowNum, message: 'Thiếu tên chương / chủ đề (chapterName).' });
-      return;
-    }
-
-    if (!lessonNameRaw) {
-      errors.push({ rowNumber: rowNum, message: 'Thiếu tên bài học (lessonName).' });
-      return;
-    }
-
-    const parsedOrder = lessonOrderRaw ? Number(lessonOrderRaw) : validRows.length + 1;
-    if (!Number.isFinite(parsedOrder) || parsedOrder < 0) {
-      errors.push({ rowNumber: rowNum, message: `Thứ tự bài học "${lessonOrderRaw}" không hợp lệ.` });
-      return;
-    }
-
-    const parsedChapterOrder = chapterOrderRaw ? Number(chapterOrderRaw) : undefined;
-    const status: CurriculumStatus =
-      statusRaw === 'inactive' || statusRaw === 'hidden' || statusRaw === 'ẩn' ? 'inactive' : 'active';
-
-    try {
-      const normalized = normalizeAndValidateLessonInput(
-        {
-          subjectId: resolvedSubject.id,
-          subjectName: resolvedSubject.name,
-          grade: normalizedGrade,
-          textbookSeries: seriesRaw,
-          textbookYear: yearRaw,
-          chapterId: chapterIdRaw || undefined,
-          chapterName: chapterNameRaw,
-          chapterOrder: parsedChapterOrder,
-          lessonId: lessonIdRaw || undefined,
-          lessonName: lessonNameRaw,
-          lessonOrder: parsedOrder,
-          status,
-        },
-        adminUid
-      );
-
-      if (seenLessonIds.has(normalized.id)) {
-        errors.push({
-          rowNumber: rowNum,
-          message: `Trùng mã bài học "${normalized.id}" trong tệp nhập.`,
-        });
-        return;
-      }
-      seenLessonIds.add(normalized.id);
-      seriesSet.add(normalized.textbookSeries);
-      validRows.push(normalized);
-    } catch (err) {
-      errors.push({
-        rowNumber: rowNum,
-        message: err instanceof Error ? err.message : 'Dữ liệu dòng không hợp lệ.',
-      });
-    }
+  const extracted = extractNormalizedRawRowsFromSheetRecords(rawRecords);
+  const validation = validateCurriculumImportRows(extracted.rows, {
+    subjects: options?.subjects || DEFAULT_GDPT_2018_SUBJECTS,
+    configuredTextbooks: options?.configuredTextbooks || [],
+    defaultTextbookYear: options?.defaultTextbookYear || '2025-2026',
+    missingRequiredHeaders: extracted.missingRequiredHeaders,
   });
 
   return {
-    validRows,
-    errors,
-    detectedSeries: Array.from(seriesSet),
+    fileName: file.name,
+    rawRowCount: rawRecords.length,
+    validation,
   };
+}
+
+export interface CurriculumImportProgress {
+  percent: number;
+  processedRows: number;
+  totalRows: number;
+  currentBatch: number;
+  totalBatches: number;
+  statusText: string;
+}
+
+export interface CurriculumImportExecutionResult {
+  mode: CurriculumImportMode;
+  addedCount: number;
+  updatedCount: number;
+  skippedCount: number;
+  deletedCount: number;
+  missingInFileCount: number;
+  errorCount: number;
+  duplicateCount: number;
+  log: CurriculumImportLog | null;
+}
+
+function partitionRowsByScope(
+  rows: CurriculumImportNormalizedRow[],
+  maxRowsPerBatch = 250
+): CurriculumImportNormalizedRow[][] {
+  const scopeGroups = new Map<string, CurriculumImportNormalizedRow[]>();
+  for (const row of rows) {
+    const key = `${row.subjectId}::${row.grade}::${row.textbookSeries}`;
+    const list = scopeGroups.get(key) || [];
+    list.push(row);
+    scopeGroups.set(key, list);
+  }
+
+  const batches: CurriculumImportNormalizedRow[][] = [];
+  let current: CurriculumImportNormalizedRow[] = [];
+
+  for (const group of scopeGroups.values()) {
+    if (current.length > 0 && current.length + group.length > maxRowsPerBatch) {
+      batches.push(current);
+      current = [];
+    }
+    current.push(...group);
+  }
+  if (current.length > 0) {
+    batches.push(current);
+  }
+  return batches;
+}
+
+function toServerRawRow(row: CurriculumImportNormalizedRow): CurriculumImportRawRow {
+  return {
+    rowNumber: row.rowNumber,
+    subject: row.subjectName,
+    subjectId: row.subjectId,
+    subjectName: row.subjectName,
+    grade: row.grade,
+    textbook: row.textbookSeries,
+    textbookYear: row.textbookYear,
+    chapterId: row.explicitChapterId,
+    chapterOrder: row.chapterOrder,
+    chapterName: row.chapterName,
+    lessonId: row.explicitLessonId,
+    lessonOrder: row.lessonOrder,
+    lessonName: row.lessonName,
+    status: row.status,
+  };
+}
+
+export async function executeCurriculumImportOnServer(
+  params: {
+    fileName: string;
+    mode: CurriculumImportMode;
+    validRows: CurriculumImportNormalizedRow[];
+    subjects?: SubjectItem[];
+    configuredTextbooks?: string[];
+    defaultTextbookYear?: string;
+    confirmDeleteMissing?: boolean;
+    confirmedDeleteIds?: string[];
+    clientErrorCount?: number;
+    clientDuplicateCount?: number;
+    statsSummary?: {
+      subjectsCount: number;
+      gradesCount: number;
+      chaptersCount: number;
+      lessonsCount: number;
+      textbooks: string[];
+    };
+  },
+  onProgress?: (progress: CurriculumImportProgress) => void
+): Promise<CurriculumImportExecutionResult> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Cần đăng nhập Quản trị viên (Admin) để thực hiện import.');
+  }
+
+  const idToken = await auth.currentUser.getIdToken();
+  const batches = partitionRowsByScope(params.validRows, 250);
+  if (batches.length === 0) {
+    throw new Error('Không có dòng dữ liệu hợp lệ nào để import.');
+  }
+
+  let totalAdded = 0;
+  let totalUpdated = 0;
+  let totalSkipped = 0;
+  let totalDeleted = 0;
+  let totalMissingInFile = 0;
+  let processedRows = 0;
+  let finalLog: CurriculumImportLog | null = null;
+  const totalRows = params.validRows.length;
+
+  onProgress?.({
+    percent: 5,
+    processedRows: 0,
+    totalRows,
+    currentBatch: 1,
+    totalBatches: batches.length,
+    statusText: 'Đang xác thực quyền Admin và chuẩn bị dữ liệu...',
+  });
+
+  for (let i = 0; i < batches.length; i += 1) {
+    const batchRows = batches[i];
+    const isLastBatch = i === batches.length - 1;
+
+    onProgress?.({
+      percent: Math.min(92, Math.round(10 + (i / batches.length) * 80)),
+      processedRows,
+      totalRows,
+      currentBatch: i + 1,
+      totalBatches: batches.length,
+      statusText: `Đang ghi đợt ${i + 1}/${batches.length} (${batchRows.length} bài học)...`,
+    });
+
+    const response = await fetch('/api/admin/curriculum/import', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        fileName: params.fileName,
+        mode: params.mode,
+        rows: batchRows.map(toServerRawRow),
+        subjects: params.subjects || DEFAULT_GDPT_2018_SUBJECTS,
+        configuredTextbooks: params.configuredTextbooks || [],
+        defaultTextbookYear: params.defaultTextbookYear || '2025-2026',
+        confirmDeleteMissing: params.confirmDeleteMissing === true,
+        confirmedDeleteIds: params.confirmDeleteMissing === true ? params.confirmedDeleteIds || [] : [],
+        clientErrorCount: params.clientErrorCount || 0,
+        clientDuplicateCount: params.clientDuplicateCount || 0,
+        finalizeLog: isLastBatch,
+        ...(isLastBatch && batches.length > 1
+          ? {
+              logTotals: {
+                subjectsCount: params.statsSummary?.subjectsCount ?? 0,
+                gradesCount: params.statsSummary?.gradesCount ?? 0,
+                chaptersCount: params.statsSummary?.chaptersCount ?? 0,
+                lessonsCount: params.statsSummary?.lessonsCount ?? totalRows,
+                priorAddedCount: totalAdded,
+                priorUpdatedCount: totalUpdated,
+                priorSkippedCount: totalSkipped,
+                priorDeletedCount: totalDeleted,
+                errorCount: params.clientErrorCount || 0,
+                duplicateCount: params.clientDuplicateCount || 0,
+                textbooks: params.statsSummary?.textbooks || [],
+              },
+            }
+          : {}),
+      }),
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as Record<string, unknown>;
+    if (!response.ok) {
+      const errMsg =
+        typeof payload.error === 'string' && payload.error.trim()
+          ? payload.error
+          : `Import thất bại (mã lỗi ${response.status}).`;
+      throw new Error(errMsg);
+    }
+
+    totalAdded += Number(payload.addedCount || 0);
+    totalUpdated += Number(payload.updatedCount || 0);
+    totalSkipped += Number(payload.skippedCount || 0);
+    totalDeleted += Number(payload.deletedCount || 0);
+    totalMissingInFile += Number(payload.missingInFileCount || 0);
+    processedRows += batchRows.length;
+    if (payload.log && typeof payload.log === 'object') {
+      finalLog = payload.log as CurriculumImportLog;
+    }
+
+    // If multi-batch, finalize log with exact cumulative totals after final batch
+    if (isLastBatch && batches.length > 1 && finalLog) {
+      finalLog = {
+        ...finalLog,
+        addedCount: totalAdded,
+        updatedCount: totalUpdated,
+        skippedCount: totalSkipped,
+        deletedCount: totalDeleted,
+      };
+    }
+  }
+
+  invalidateCurriculumCache();
+
+  onProgress?.({
+    percent: 100,
+    processedRows: totalRows,
+    totalRows,
+    currentBatch: batches.length,
+    totalBatches: batches.length,
+    statusText: 'Hoàn tất import danh mục chương & bài học SGK.',
+  });
+
+  return {
+    mode: params.mode,
+    addedCount: totalAdded,
+    updatedCount: totalUpdated,
+    skippedCount: totalSkipped,
+    deletedCount: totalDeleted,
+    missingInFileCount: totalMissingInFile,
+    errorCount: params.clientErrorCount || 0,
+    duplicateCount: params.clientDuplicateCount || 0,
+    log: finalLog,
+  };
+}
+
+export async function fetchCurriculumImportHistory(): Promise<CurriculumImportLog[]> {
+  if (firebaseInitError || !auth.currentUser) {
+    return [];
+  }
+
+  try {
+    const idToken = await auth.currentUser.getIdToken();
+    const res = await fetch('/api/admin/curriculum/import-history', {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${idToken}`,
+      },
+    });
+    if (res.status === 403 || res.status === 401) {
+      const body = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(body.error || 'Bạn không có quyền xem lịch sử import danh mục.');
+    }
+    if (res.ok) {
+      const data = (await res.json()) as { logs?: CurriculumImportLog[] };
+      return Array.isArray(data.logs) ? data.logs : [];
+    }
+  } catch (err) {
+    if (err instanceof Error && err.message.includes('không có quyền')) {
+      throw err;
+    }
+  }
+
+  // Fallback directly to Firestore (still enforced Admin-only by firestore.rules)
+  try {
+    const snap = await getDocs(collection(db, 'curriculumImportLogs'));
+    return snap.docs
+      .map((d) => {
+        const raw = d.data() as CurriculumImportLog;
+        return {
+          ...raw,
+          id: raw.id || d.id,
+        };
+      })
+      .sort((a, b) => (b.importedAt || '').localeCompare(a.importedAt || ''))
+      .slice(0, 50);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'curriculumImportLogs');
+  }
+}
+
+export function buildCurriculumTemplateWorkbook(
+  subjects: SubjectItem[] = DEFAULT_GDPT_2018_SUBJECTS,
+  config?: { textbookSeries?: string; textbookYear?: string }
+): XLSX.WorkBook {
+  const primarySeries = config?.textbookSeries?.trim() || TEXTBOOK_SERIES_OPTIONS[0];
+  const secondarySeries =
+    TEXTBOOK_SERIES_OPTIONS.find((s) => s !== primarySeries) || TEXTBOOK_SERIES_OPTIONS[1];
+
+  const sampleRows = [
+    {
+      Subject: 'Hóa học',
+      Grade: 10,
+      Textbook: primarySeries,
+      ChapterOrder: 1,
+      ChapterName: 'Chương 1: Cấu tạo nguyên tử',
+      LessonOrder: 1,
+      LessonName: 'Bài 1: Thành phần của nguyên tử',
+    },
+    {
+      Subject: 'Hóa học',
+      Grade: 10,
+      Textbook: primarySeries,
+      ChapterOrder: 1,
+      ChapterName: 'Chương 1: Cấu tạo nguyên tử',
+      LessonOrder: 2,
+      LessonName: 'Bài 2: Nguyên tố hóa học',
+    },
+    {
+      Subject: 'Hóa học',
+      Grade: 10,
+      Textbook: primarySeries,
+      ChapterOrder: 2,
+      ChapterName: 'Chương 2: Bảng tuần hoàn các nguyên tố hóa học',
+      LessonOrder: 1,
+      LessonName: 'Bài 5: Cấu tạo của bảng tuần hoàn các nguyên tố hóa học',
+    },
+    {
+      Subject: 'Hóa học',
+      Grade: 11,
+      Textbook: primarySeries,
+      ChapterOrder: 1,
+      ChapterName: 'Chương 1: Cân bằng hóa học',
+      LessonOrder: 1,
+      LessonName: 'Bài 1: Khái niệm về cân bằng hóa học',
+    },
+    {
+      Subject: 'Vật lí',
+      Grade: 10,
+      Textbook: primarySeries,
+      ChapterOrder: 1,
+      ChapterName: 'Chương 1: Mở đầu',
+      LessonOrder: 1,
+      LessonName: 'Bài 1: Làm quen với Vật lí',
+    },
+    {
+      Subject: 'Toán học',
+      Grade: 10,
+      Textbook: secondarySeries,
+      ChapterOrder: 1,
+      ChapterName: 'Chương 1: Mệnh đề và Tập hợp',
+      LessonOrder: 1,
+      LessonName: 'Bài 1: Mệnh đề',
+    },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const wsData = XLSX.utils.json_to_sheet(sampleRows, {
+    header: [
+      'Subject',
+      'Grade',
+      'Textbook',
+      'ChapterOrder',
+      'ChapterName',
+      'LessonOrder',
+      'LessonName',
+    ],
+  });
+  wsData['!cols'] = [
+    { wch: 24 },
+    { wch: 8 },
+    { wch: 32 },
+    { wch: 14 },
+    { wch: 44 },
+    { wch: 13 },
+    { wch: 46 },
+  ];
+  XLSX.utils.book_append_sheet(wb, wsData, 'DanhMucChuongBai');
+
+  const allowedSeriesList = Array.from(
+    new Set([primarySeries, ...TEXTBOOK_SERIES_OPTIONS].filter(Boolean))
+  ).join(' | ');
+
+  const wsGuide = XLSX.utils.json_to_sheet(
+    subjects.map((s, index) => ({
+      Subject: s.name,
+      MaMonHeThong: s.id,
+      KhoiLopHopLe: '10, 11, 12',
+      BoSachHopLe: index === 0 ? allowedSeriesList : primarySeries,
+    }))
+  );
+  wsGuide['!cols'] = [{ wch: 34 }, { wch: 18 }, { wch: 14 }, { wch: 56 }];
+  XLSX.utils.book_append_sheet(wb, wsGuide, 'HuongDan_Va_MaMon');
+
+  return wb;
 }
 
 export function downloadCurriculumTemplateExcel(
   subjects: SubjectItem[] = DEFAULT_GDPT_2018_SUBJECTS,
   config?: { textbookSeries?: string; textbookYear?: string }
 ): void {
-  const sampleSeries = config?.textbookSeries || TEXTBOOK_SERIES_OPTIONS[0];
-  const sampleYear = config?.textbookYear || '2025-2026';
-
-  const headerRows = [
-    {
-      subjectId: 'hoa_hoc',
-      subjectName: 'Hóa học',
-      grade: '10',
-      textbookSeries: sampleSeries,
-      textbookYear: sampleYear,
-      chapterId: 'hoa_hoc_g10_ch_1',
-      chapterName: 'Chương 1: Nhập tên chương đúng SGK của trường',
-      chapterOrder: 1,
-      lessonId: 'hoa_hoc_g10_ch1_b1',
-      lessonName: 'Bài 1: Nhập tên bài đúng SGK của trường',
-      lessonOrder: 1,
-      status: 'active',
-    },
-  ];
-
-  const wb = XLSX.utils.book_new();
-  const wsData = XLSX.utils.json_to_sheet(headerRows);
-  XLSX.utils.book_append_sheet(wb, wsData, 'DanhMucBaiHoc');
-
-  const wsSubjects = XLSX.utils.json_to_sheet(
-    subjects.map((s) => ({
-      subjectId: s.id,
-      subjectName: s.name,
-      gradesSupported: '10, 11, 12',
-    }))
-  );
-  XLSX.utils.book_append_sheet(wb, wsSubjects, 'MaMonHoc_GDPT2018');
-
-  XLSX.writeFile(wb, `Mau_Danh_Muc_Bai_Hoc_GDPT2018.xlsx`);
+  const wb = buildCurriculumTemplateWorkbook(subjects, config);
+  XLSX.writeFile(wb, `Mau_Import_Danh_Muc_Chuong_Bai_SGK.xlsx`);
 }
 
 export function exportCurriculumCatalogExcel(
@@ -699,22 +942,22 @@ export function exportCurriculumCatalogExcel(
   fileName = `Danh_Muc_Bai_Hoc_GDPT2018_${new Date().toISOString().slice(0, 10)}.xlsx`
 ): void {
   const rows = sortCurriculumLessons(lessons).map((item) => ({
+    Subject: item.subjectName,
+    Grade: Number(item.grade),
+    Textbook: item.textbookSeries,
+    ChapterOrder: item.chapterOrder ?? 1,
+    ChapterName: item.chapterName,
+    LessonOrder: item.lessonOrder,
+    LessonName: item.lessonName,
     subjectId: item.subjectId,
-    subjectName: item.subjectName,
-    grade: item.grade,
-    textbookSeries: item.textbookSeries,
     textbookYear: item.textbookYear,
     chapterId: item.chapterId,
-    chapterName: item.chapterName,
-    chapterOrder: item.chapterOrder ?? 1,
     lessonId: item.lessonId,
-    lessonName: item.lessonName,
-    lessonOrder: item.lessonOrder,
     status: item.status,
   }));
 
   const wb = XLSX.utils.book_new();
   const ws = XLSX.utils.json_to_sheet(rows);
-  XLSX.utils.book_append_sheet(wb, ws, 'DanhMucBaiHoc');
+  XLSX.utils.book_append_sheet(wb, ws, 'DanhMucChuongBai');
   XLSX.writeFile(wb, fileName);
 }

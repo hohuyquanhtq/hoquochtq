@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createExamApiHandlers } from './server/examApiHandlers.ts';
 import { createPublicExamLinkHandlers } from './server/publicExamLinkHandler.ts';
+import { createCurriculumImportHandlers } from './server/curriculumImportHandler.ts';
+import { createAdminQuestionBankHandlers } from './server/adminQuestionBankHandler.ts';
 import { handleSetAdminClaims } from './server/adminClaimsHandler.ts';
 import { checkFirebaseAdminHealth } from './server/firebaseAdmin.ts';
 import { hasServiceAccountConfigured, resolveServerFirebaseConfig } from './server/firebaseServerAuth.ts';
@@ -18,6 +20,8 @@ async function startServer() {
 
   const handlers = createExamApiHandlers();
   const publicLinkHandlers = createPublicExamLinkHandlers();
+  const curriculumImportHandlers = createCurriculumImportHandlers();
+  const adminQuestionBankHandlers = createAdminQuestionBankHandlers();
 
   const wrapExpress =
     (fn: (req: { method?: string; headers: express.Request['headers']; body?: unknown; ip?: string }) => Promise<{ status: number; body: Record<string, unknown> }>) =>
@@ -83,6 +87,11 @@ async function startServer() {
   });
 
   app.all('/api/admin/set-claims', wrapExpress(handleSetAdminClaims));
+  app.post('/api/admin/curriculum/import', wrapExpress(curriculumImportHandlers.handleImportCurriculum));
+  app.all('/api/admin/curriculum/import-history', wrapExpress(curriculumImportHandlers.handleGetCurriculumImportHistory));
+  app.all('/api/admin/question-bank', wrapExpress(adminQuestionBankHandlers.handleGetSchoolQuestionBank));
+  app.post('/api/admin/question-bank/action', wrapExpress(adminQuestionBankHandlers.handleAdminQuestionAction));
+  app.all('/api/admin/question-bank/audit-logs', wrapExpress(adminQuestionBankHandlers.handleGetQuestionAuditLogs));
   app.post('/api/exams/security/configure', wrapExpress(handlers.handleConfigureExamSecurity));
   app.post('/api/exams/verify-password', wrapExpress(handlers.handleVerifyExamPassword));
   app.post('/api/exams/access-questions', wrapExpress(handlers.handleAccessExamQuestions));
