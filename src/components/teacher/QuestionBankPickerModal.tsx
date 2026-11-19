@@ -11,11 +11,8 @@ import {
   COGNITIVE_LEVEL_SHORT_LABELS,
   DEFAULT_GDPT_2018_SUBJECTS,
   GRADE_LABELS,
-  PRIMARY_QUESTION_TYPES,
   QUESTION_TYPE_SHORT_LABELS,
   getQuestionTopicDisplay,
-  matchesQuestionTypeFilter,
-  resolveQuestionDifficulty,
   resolveQuestionSubject,
 } from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
@@ -64,12 +61,7 @@ type PickerQuestion = Question & {
 };
 
 const LEVELS: CognitiveLevel[] = ['nhan_biet', 'thong_hieu', 'van_dung', 'van_dung_cao'];
-const TYPES: QuestionType[] = [
-  'part1_single_choice',
-  'part2_true_false',
-  'part3_short_answer',
-  'essay',
-];
+const TYPES: QuestionType[] = ['part1_single_choice', 'part2_true_false', 'part3_short_answer'];
 
 function createEmptyMatrix(): MatrixGrid {
   return {
@@ -77,7 +69,6 @@ function createEmptyMatrix(): MatrixGrid {
     part1_multiple_choice: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
     part2_true_false: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
     part3_short_answer: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
-    essay: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
   };
 }
 
@@ -120,10 +111,7 @@ export function pickQuestionsByMatrix(params: {
       if (targetCount === 0) continue;
 
       const candidates = pool.filter(
-        (q) =>
-          matchesQuestionTypeFilter(q, qType) &&
-          resolveQuestionDifficulty(q) === lvl &&
-          !usedIds.has(q.id)
+        (q) => q.type === qType && q.level === lvl && !usedIds.has(q.id)
       );
       const shuffled = [...candidates].sort(() => Math.random() - 0.5);
       const chosen = shuffled.slice(0, targetCount);
@@ -269,7 +257,7 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
       }
       if (topicFilter !== 'all' && getQuestionTopicDisplay(q) !== topicFilter) return false;
       if (activeTab === 'manual') {
-        if (typeFilter !== 'all' && !matchesQuestionTypeFilter(q, typeFilter)) return false;
+        if (typeFilter !== 'all' && q.type !== typeFilter) return false;
         if (levelFilter !== 'all' && q.level !== levelFilter) return false;
         if (term) {
           const hit =
@@ -625,12 +613,11 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
                   onChange={(e) => setTypeFilter(e.target.value)}
                   className="min-h-[36px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium"
                 >
-                  <option value="all">Tất cả dạng câu hỏi</option>
-                  {PRIMARY_QUESTION_TYPES.map((item) => (
-                    <option key={item.id} value={item.id}>
-                      {item.label}
-                    </option>
-                  ))}
+                  <option value="all">Tất cả dạng</option>
+                  <option value="part1_single_choice">Phần I (4 lựa chọn)</option>
+                  <option value="part1_multiple_choice">Phần I (Nhiều lựa chọn)</option>
+                  <option value="part2_true_false">Phần II (Đúng/Sai)</option>
+                  <option value="part3_short_answer">Phần III (Trả lời ngắn)</option>
                 </select>
 
                 <select

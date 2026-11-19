@@ -668,25 +668,6 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
                 );
               })()}
 
-              {/* Part IV: Essay */}
-              {currentQuestion.type === 'essay' && (
-                <div className="space-y-3">
-                  <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                    Trình bày bài làm tự luận:
-                  </p>
-                  <textarea
-                    rows={6}
-                    value={currentAnswer.textAnswer || ''}
-                    onChange={(e) => handleTextAnswerChange(e.target.value)}
-                    placeholder="Nhập nội dung trình bày bài làm tự luận của bạn tại đây..."
-                    className="w-full p-3.5 text-sm font-medium rounded-xl border-2 border-slate-300 focus:border-emerald-600 focus:outline-none bg-slate-50 leading-relaxed"
-                  />
-                  <p className="text-[11px] text-slate-500">
-                    Bài làm tự luận sẽ được lưu nguyên văn để giáo viên chấm điểm chi tiết.
-                  </p>
-                </div>
-              )}
-
             </div>
 
             {/* Bottom Nav: Prev / Next */}

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   FileUp,
   CheckCircle2,
@@ -24,9 +24,6 @@ import {
   ArrowRight,
   Cpu,
   Check,
-  CheckSquare,
-  Square,
-  Database,
 } from 'lucide-react';
 import {
   parseDocxExam,
@@ -41,43 +38,14 @@ import {
   Question,
   QuestionType,
   ChemGrade,
-  CognitiveLevel,
   RecognitionStatus,
-  SubjectItem,
 } from '../../types';
-import {
-  COGNITIVE_LEVEL_LABELS,
-  COGNITIVE_LEVEL_SHORT_LABELS,
-  DEFAULT_GDPT_2018_SUBJECTS,
-  GRADE_LABELS,
-  PRIMARY_QUESTION_TYPES,
-  QUESTION_TYPE_LABELS,
-  QUESTION_TYPE_SHORT_LABELS,
-  resolveQuestionDifficulty,
-  resolveQuestionSubject,
-  resolveQuestionType,
-} from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { ExamAnswerDashboard } from './ExamAnswerDashboard';
-import { WordSaveToBankModal } from './WordSaveToBankModal';
-import { CurriculumCascadeSelector } from './CurriculumCascadeSelector';
 import { isolateAnswerBlock, deepScanWithGemini } from '../../utils/answerExtractionEngine';
 
-export interface WordImportDefaultContext {
-  subjectId?: string;
-  grade?: ChemGrade;
-  questionType?: QuestionType;
-  difficulty?: CognitiveLevel;
-}
-
 interface ExamUploaderProps {
-  onSaveToQuestionBank?: (questions: Question[]) => void;
-  onQuestionsPersistedToBank?: (savedQuestions: Question[], refreshedBank?: Question[]) => void;
-  onNavigateToQuestionBank?: () => void;
-  defaultImportContext?: WordImportDefaultContext;
-  subjects?: SubjectItem[];
-  existingBankQuestions?: Question[];
-  currentUserId?: string;
+  onSaveToQuestionBank: (questions: Question[]) => void;
   onCreateExamFromParsed: (title: string, questions: Question[], grade: ChemGrade) => void;
   onFileParsedRecord?: (record: {
     fileName: string;
@@ -99,7 +67,6 @@ type UploaderViewTab =
   | 'part1'
   | 'part2'
   | 'part3'
-  | 'essay'
   | 'all_questions'
   | 'issues';
 
@@ -130,12 +97,6 @@ function yieldToNextFrame(): Promise<void> {
 
 export const ExamUploader: React.FC<ExamUploaderProps> = ({
   onSaveToQuestionBank,
-  onQuestionsPersistedToBank,
-  onNavigateToQuestionBank,
-  defaultImportContext,
-  subjects = DEFAULT_GDPT_2018_SUBJECTS,
-  existingBankQuestions = [],
-  currentUserId,
   onCreateExamFromParsed,
   onFileParsedRecord,
 }) => {
@@ -146,13 +107,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const step4Ref = useRef<HTMLElement>(null);
 
   const [inputText, setInputText] = useState('');
-  const [selectedGrade, setSelectedGrade] = useState<ChemGrade>(
-    defaultImportContext?.grade || '12'
-  );
-  // Default Question Type from Question Bank Tab (used as fallback default only — NEVER forces mixed docs)
-  const [defaultQuestionType, setDefaultQuestionType] = useState<QuestionType | ''>(
-    defaultImportContext?.questionType || ''
-  );
+  const [selectedGrade, setSelectedGrade] = useState<ChemGrade>('12');
   const [selectedFile, setSelectedFile] = useState<SelectedFileInfo | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -161,7 +116,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const [parseError, setParseError] = useState<string | null>(null);
   const [parsedResult, setParsedResult] = useState<ParsedExamResult | null>(null);
 
-  // Preview, selection & save-to-bank states
+  // Preview & editing states
   const [showPreviewPanel, setShowPreviewPanel] = useState(false);
   const [activeViewTab, setActiveViewTab] = useState<UploaderViewTab>('answer_reconciliation');
   const [editingQuestion, setEditingQuestion] = useState<Question | null>(null);
@@ -169,51 +124,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const [showSourceSnippetModal, setShowSourceSnippetModal] = useState(false);
   const [isDeepScanning, setIsDeepScanning] = useState(false);
   const [pendingActionNotice, setPendingActionNotice] = useState<'bank' | 'exam' | null>(null);
-
-  // Per-question selection for saving to Firestore Question Bank
-  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
-  const [savedToBankSourceIds, setSavedToBankSourceIds] = useState<Set<string>>(new Set());
-  const [saveModalQuestions, setSaveModalQuestions] = useState<Question[] | null>(null);
-  const [unsavedOnlyFilterIds, setUnsavedOnlyFilterIds] = useState<Set<string> | null>(null);
-
-  useEffect(() => {
-    if (!defaultImportContext) return;
-    if (defaultImportContext.grade) {
-      setSelectedGrade(defaultImportContext.grade);
-    }
-    if (defaultImportContext.questionType !== undefined) {
-      setDefaultQuestionType(defaultImportContext.questionType || '');
-    }
-  }, [defaultImportContext]);
-
-  // Keep selectedQuestionIds synced when parsedResult changes (select all on fresh parse; prune deleted IDs)
-  const parsedQuestionSignature = parsedResult?.questions.map((q) => q.id).join('|') || '';
-  const prevParsedSignatureRef = useRef<string>('');
-  useEffect(() => {
-    if (!parsedResult) {
-      setSelectedQuestionIds(new Set());
-      setSavedToBankSourceIds(new Set());
-      setUnsavedOnlyFilterIds(null);
-      prevParsedSignatureRef.current = '';
-      return;
-    }
-    const allIds = parsedResult.questions.map((q) => q.id);
-    const idSet = new Set(allIds);
-    const prevIds = prevParsedSignatureRef.current
-      ? prevParsedSignatureRef.current.split('|').filter(Boolean)
-      : [];
-    const hasOverlap = prevIds.some((id) => idSet.has(id));
-    if (!hasOverlap) {
-      // Freshly parsed document -> select all valid questions by default
-      setSelectedQuestionIds(new Set(allIds));
-      setSavedToBankSourceIds(new Set());
-      setUnsavedOnlyFilterIds(null);
-    } else {
-      // Deletion or update within same document -> preserve existing selection
-      setSelectedQuestionIds((prev) => new Set(Array.from(prev).filter((id) => idSet.has(id))));
-    }
-    prevParsedSignatureRef.current = parsedQuestionSignature;
-  }, [parsedQuestionSignature, parsedResult]);
 
   const showToast = (msg: string) => {
     setNotification(msg);
@@ -246,9 +156,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage('Đang phân loại câu hỏi Phần I, II, III và đối chiếu đáp án...');
         await yieldToNextFrame();
 
-        const { text, result } = await parseDocxExam(buffer, selectedGrade, {
-          defaultQuestionType: defaultQuestionType || undefined,
-        });
+        const { text, result } = await parseDocxExam(buffer, selectedGrade);
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab(result.totalQuestions > 0 ? 'answer_reconciliation' : 'all_questions');
@@ -273,9 +181,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage('Đang bóc tách câu hỏi trắc nghiệm & bảng đáp án PDF...');
         await yieldToNextFrame();
 
-        const { text, pdfMeta, result } = await parsePdfExam(buffer, selectedGrade, {
-          defaultQuestionType: defaultQuestionType || undefined,
-        });
+        const { text, pdfMeta, result } = await parsePdfExam(buffer, selectedGrade);
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab(result.totalQuestions > 0 ? 'answer_reconciliation' : 'all_questions');
@@ -311,9 +217,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
         const text = await file.text();
         setInputText(text);
-        const result = parseExamContent(text, selectedGrade, {
-          defaultQuestionType: defaultQuestionType || undefined,
-        });
+        const result = parseExamContent(text, selectedGrade);
         setParsedResult(result);
         setActiveViewTab('answer_reconciliation');
         setAnalysisProgress(100);
@@ -386,7 +290,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         selectedAnswerCandidateId: parsedResult?.selectedAnswerCandidateId,
         pdfMeta: parsedResult?.pdfMeta,
         extractedTables: parsedResult?.extractedTables,
-        defaultQuestionType: defaultQuestionType || undefined,
       });
       setParsedResult(result);
       setAnalysisProgress(100);
@@ -413,9 +316,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     });
     setInputText(sample.content);
     setSelectedGrade(sample.grade);
-    const result = parseExamContent(sample.content, sample.grade, {
-      defaultQuestionType: defaultQuestionType || undefined,
-    });
+    const result = parseExamContent(sample.content, sample.grade);
     setParsedResult(result);
     setActiveViewTab('answer_reconciliation');
     setAnalysisProgress(100);
@@ -442,9 +343,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       await yieldToNextFrame();
 
       if (type === 'docx') {
-        const { text, result } = await parseDocxExam(buffer, '12', {
-          defaultQuestionType: defaultQuestionType || undefined,
-        });
+        const { text, result } = await parseDocxExam(buffer, '12');
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab('answer_reconciliation');
@@ -452,9 +351,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage(`Hoàn tất bóc tách ${result.totalQuestions} câu hỏi từ ${name}.`);
         showToast(`Đã bóc tách file Word mẫu ${name} (${result.totalQuestions} câu)!`);
       } else {
-        const { text, pdfMeta, result } = await parsePdfExam(buffer, '12', {
-          defaultQuestionType: defaultQuestionType || undefined,
-        });
+        const { text, pdfMeta, result } = await parsePdfExam(buffer, '12');
         setInputText(text);
         setParsedResult(result);
         setActiveViewTab('answer_reconciliation');
@@ -482,7 +379,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       selectedAnswerCandidateId: candidateId,
       pdfMeta: parsedResult.pdfMeta,
       extractedTables: parsedResult.extractedTables,
-      defaultQuestionType: defaultQuestionType || undefined,
     });
     setParsedResult({
       ...result,
@@ -626,20 +522,17 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const handleMoveQuestionType = (qId: string, newType: QuestionType) => {
     if (!parsedResult) return;
     const targetQ = parsedResult.questions.find((q) => q.id === qId);
-    if (!targetQ || resolveQuestionType(targetQ) === newType) return;
+    if (!targetQ || targetQ.type === newType) return;
     const reclassified = reclassifyQuestionType(targetQ, newType);
     const updatedQuestions = parsedResult.questions.map((q) => (q.id === qId ? reclassified : q));
     setParsedResult(recalculateParsedExamResult(parsedResult, updatedQuestions));
-    showToast(`Đã chuyển câu hỏi sang ${QUESTION_TYPE_LABELS[newType]}`);
-  };
-
-  const handleChangeQuestionLevel = (qId: string, newLevel: CognitiveLevel) => {
-    if (!parsedResult) return;
-    const updatedQuestions = parsedResult.questions.map((q) =>
-      q.id === qId ? { ...q, level: newLevel, difficulty: newLevel } : q
-    );
-    setParsedResult(recalculateParsedExamResult(parsedResult, updatedQuestions));
-    showToast(`Đã đổi mức độ câu hỏi sang ${COGNITIVE_LEVEL_LABELS[newLevel]}`);
+    const label =
+      newType === 'part1_single_choice'
+        ? 'Phần I (4 lựa chọn)'
+        : newType === 'part2_true_false'
+        ? 'Phần II (Đúng/Sai)'
+        : 'Phần III (Trả lời ngắn)';
+    showToast(`Đã chuyển câu hỏi sang ${label}`);
   };
 
   const getBlockingErrors = (): string | null => {
@@ -660,72 +553,18 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     return null;
   };
 
-  const toggleSelectQuestion = (qId: string) => {
-    setSelectedQuestionIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(qId)) next.delete(qId);
-      else next.add(qId);
-      return next;
-    });
-  };
-
-  const handleSelectAllQuestions = () => {
-    if (!parsedResult) return;
-    setSelectedQuestionIds(new Set(parsedResult.questions.map((q) => q.id)));
-  };
-
-  const handleDeselectAllQuestions = () => {
-    setSelectedQuestionIds(new Set());
-  };
-
-  const handleSelectOnlyUnsavedQuestions = () => {
-    if (!parsedResult) return;
-    const remaining = parsedResult.questions
-      .filter((q) => !savedToBankSourceIds.has(q.id))
-      .map((q) => q.id);
-    setSelectedQuestionIds(new Set(remaining));
-    showToast(`Đã chọn ${remaining.length} câu chưa lưu vào ngân hàng.`);
-  };
-
-  const openSaveBankModalForQuestions = (targetQuestions: Question[]) => {
-    if (!parsedResult || parsedResult.totalQuestions === 0) {
-      showToast('Chưa có câu hỏi nào được bóc tách để lưu.');
-      return;
-    }
-    if (targetQuestions.length === 0) {
-      showToast('Vui lòng chọn ít nhất 1 câu hỏi trước khi lưu vào ngân hàng.');
-      return;
-    }
-    const hardErrors = targetQuestions.filter(
-      (q) => q.parseStatus === 'error' || !q.content?.trim()
-    );
-    if (hardErrors.length > 0) {
-      setPendingActionNotice('bank');
-      setActiveViewTab('issues');
-      showToast(
-        `Có ${hardErrors.length} câu trong danh sách đang chọn bị lỗi cấu trúc hoặc trống nội dung. Vui lòng chỉnh sửa hoặc bỏ chọn trước khi lưu.`
-      );
-      return;
-    }
-    setPendingActionNotice(null);
-    setSaveModalQuestions(targetQuestions);
-  };
-
   const handleGuardedSaveBank = () => {
     if (!parsedResult) return;
-    const chosen = parsedResult.questions.filter((q) => selectedQuestionIds.has(q.id));
-    openSaveBankModalForQuestions(chosen.length > 0 ? chosen : parsedResult.questions);
-  };
-
-  const handleSaveSelectedToBank = () => {
-    if (!parsedResult) return;
-    const chosen = parsedResult.questions.filter((q) => selectedQuestionIds.has(q.id));
-    openSaveBankModalForQuestions(chosen);
-  };
-
-  const handleSaveAllToBank = () => {
-    if (!parsedResult) return;
-    openSaveBankModalForQuestions(parsedResult.questions);
+    const blockReason = getBlockingErrors();
+    if (blockReason) {
+      setPendingActionNotice('bank');
+      if (parsedResult.questions.some((q) => q.parseStatus === 'error')) {
+        setActiveViewTab('issues');
+      }
+      showToast(blockReason);
+      return;
+    }
+    onSaveToQuestionBank(parsedResult.questions);
   };
 
   const handleGuardedCreateExam = () => {
@@ -918,7 +757,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         selectedAnswerCandidateId: parsedResult?.selectedAnswerCandidateId,
         pdfMeta: parsedResult?.pdfMeta,
         extractedTables: parsedResult?.extractedTables,
-        defaultQuestionType: defaultQuestionType || undefined,
       });
       setParsedResult(result);
       setAnalysisProgress(100);
@@ -942,21 +780,12 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
   const displayedQuestions =
     parsedResult?.questions.filter((q) => {
-      if (unsavedOnlyFilterIds && !unsavedOnlyFilterIds.has(q.id)) return false;
-      const resolvedT = resolveQuestionType(q);
-      if (activeViewTab === 'part1') {
-        return resolvedT === 'part1_single_choice' || resolvedT === 'part1_multiple_choice';
-      }
-      if (activeViewTab === 'part2') return resolvedT === 'part2_true_false';
-      if (activeViewTab === 'part3') return resolvedT === 'part3_short_answer';
-      if (activeViewTab === 'essay') return resolvedT === 'essay';
+      if (activeViewTab === 'part1') return q.type === 'part1_single_choice';
+      if (activeViewTab === 'part2') return q.type === 'part2_true_false';
+      if (activeViewTab === 'part3') return q.type === 'part3_short_answer';
       if (activeViewTab === 'issues') return q.parseStatus !== 'verified' || hasMissingAnswer(q);
       return true;
     }) || [];
-
-  const selectedCount = parsedResult
-    ? parsedResult.questions.filter((q) => selectedQuestionIds.has(q.id)).length
-    : 0;
 
   const getQuestionStatusBadge = (q: Question) => {
     if (q.parseStatus === 'error') {
@@ -1072,44 +901,20 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full lg:w-auto lg:min-w-[440px] shrink-0">
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Khối lớp áp dụng
-              </label>
-              <select
-                value={selectedGrade}
-                onChange={(e) => setSelectedGrade(e.target.value as ChemGrade)}
-                className="w-full min-h-[42px] text-sm font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
-              >
-                <option value="12">Lớp 12 THPT</option>
-                <option value="11">Lớp 11 THPT</option>
-                <option value="10">Lớp 10 THPT</option>
-                <option value="chuyen_hsg">Chuyên &amp; HSG</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                Dạng câu hỏi mặc định (lượt bóc tách)
-              </label>
-              <select
-                value={defaultQuestionType}
-                onChange={(e) => setDefaultQuestionType(e.target.value as QuestionType | '')}
-                title="Chỉ dùng làm giá trị mặc định cho câu không rõ cấu trúc — hệ thống vẫn tự nhận diện từng câu trong đề hỗn hợp"
-                className="w-full min-h-[42px] text-sm font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
-              >
-                <option value="">Tự động nhận diện từng câu</option>
-                {PRIMARY_QUESTION_TYPES.map((qt) => (
-                  <option key={qt.id} value={qt.id}>
-                    {qt.label}
-                  </option>
-                ))}
-              </select>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Chỉ làm mặc định khi câu mơ hồ, không ép đề hỗn hợp thành 1 dạng.
-              </p>
-            </div>
+          <div className="w-full sm:w-56 shrink-0">
+            <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+              Khối lớp áp dụng
+            </label>
+            <select
+              value={selectedGrade}
+              onChange={(e) => setSelectedGrade(e.target.value as ChemGrade)}
+              className="w-full min-h-[44px] text-[15px] font-semibold px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+            >
+              <option value="12">Lớp 12 THPT</option>
+              <option value="11">Lớp 11 THPT</option>
+              <option value="10">Lớp 10 THPT</option>
+              <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+            </select>
           </div>
         </div>
 
@@ -1529,7 +1334,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               </div>
 
               {/* Category Summary Cards */}
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 tabular-nums">
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 tabular-nums">
                 <button
                   type="button"
                   onClick={() => setActiveViewTab('part1')}
@@ -1539,7 +1344,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-teal-300'
                   }`}
                 >
-                  <p className="text-[12px] font-semibold text-teal-800">Trắc nghiệm nhiều L/C</p>
+                  <p className="text-[13px] font-semibold text-teal-800">Phần I (4 lựa chọn A,B,C,D)</p>
                   <p className="text-2xl font-bold text-slate-900 mt-1">{parsedResult.part1Count} câu</p>
                 </button>
 
@@ -1552,10 +1357,10 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-indigo-300'
                   }`}
                 >
-                  <p className="text-[12px] font-semibold text-indigo-800">Đúng / Sai (a,b,c,d)</p>
+                  <p className="text-[13px] font-semibold text-indigo-800">Phần II (Đúng/Sai a,b,c,d)</p>
                   <p className="text-2xl font-bold text-slate-900 mt-1">
                     {parsedResult.part2Count} câu{' '}
-                    <span className="text-xs font-medium text-indigo-700">
+                    <span className="text-sm font-medium text-indigo-700">
                       ({parsedResult.part2StatementsCount ?? parsedResult.part2Count * 4} ý)
                     </span>
                   </p>
@@ -1570,21 +1375,8 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-slate-400'
                   }`}
                 >
-                  <p className="text-[12px] font-semibold text-slate-700">Trả lời ngắn</p>
+                  <p className="text-[13px] font-semibold text-slate-700">Phần III (Trả lời ngắn)</p>
                   <p className="text-2xl font-bold text-slate-900 mt-1">{parsedResult.part3Count} câu</p>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setActiveViewTab('essay')}
-                  className={`text-left p-3.5 rounded-xl border transition-colors ${
-                    activeViewTab === 'essay'
-                      ? 'bg-amber-50 border-amber-500'
-                      : 'bg-slate-50 border-slate-200 hover:border-amber-300'
-                  }`}
-                >
-                  <p className="text-[12px] font-semibold text-amber-800">Tự luận</p>
-                  <p className="text-2xl font-bold text-slate-900 mt-1">{parsedResult.essayCount ?? 0} câu</p>
                 </button>
 
                 <button
@@ -1596,7 +1388,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       : 'bg-slate-50 border-slate-200 hover:border-emerald-300'
                   }`}
                 >
-                  <p className="text-[12px] font-semibold text-emerald-800">Đáp án đã nhận diện</p>
+                  <p className="text-[13px] font-semibold text-emerald-800">Đáp án đã nhận diện</p>
                   <p className="text-2xl font-bold text-emerald-700 mt-1">
                     {verifiedAnswerItems}
                     <span className="text-sm font-medium text-slate-600 ml-1">/ {totalAnswerItems}</span>
@@ -1606,14 +1398,14 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 <button
                   type="button"
                   onClick={() => setActiveViewTab(issueQuestions.length > 0 ? 'issues' : 'all_questions')}
-                  className={`text-left p-3.5 rounded-xl border transition-colors ${
+                  className={`text-left p-3.5 rounded-xl border transition-colors col-span-2 sm:col-span-1 ${
                     issueQuestions.length > 0
                       ? 'bg-amber-50 border-amber-300 hover:border-amber-500'
                       : 'bg-slate-50 border-slate-200 hover:border-slate-300'
                   }`}
                 >
                   <p
-                    className={`text-[12px] font-semibold ${
+                    className={`text-[13px] font-semibold ${
                       issueQuestions.length > 0 ? 'text-amber-800' : 'text-slate-600'
                     }`}
                   >
@@ -1787,11 +1579,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                           onChange={(e) => handleChangeSectionType(sec.id, e.target.value as QuestionType)}
                           className="flex-1 text-sm font-semibold px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
                         >
-                          {PRIMARY_QUESTION_TYPES.map((qt) => (
-                            <option key={qt.id} value={qt.id}>
-                              {qt.label}
-                            </option>
-                          ))}
+                          <option value="part1_single_choice">Phần I: 4 lựa chọn (A,B,C,D)</option>
+                          <option value="part2_true_false">Phần II: Đúng / Sai (a,b,c,d)</option>
+                          <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
                         </select>
                       </div>
                     </div>
@@ -1824,7 +1614,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                     : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                Trắc nghiệm nhiều L/C ({parsedResult.part1Count})
+                Trắc nghiệm A,B,C,D ({parsedResult.part1Count})
               </button>
 
               <button
@@ -1836,7 +1626,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                     : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
                 }`}
               >
-                Đúng / Sai ({parsedResult.part2Count})
+                Đúng / Sai a,b,c,d ({parsedResult.part2Count})
               </button>
 
               <button
@@ -1849,18 +1639,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 }`}
               >
                 Trả lời ngắn ({parsedResult.part3Count})
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setActiveViewTab('essay')}
-                className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-semibold transition-colors whitespace-nowrap ${
-                  activeViewTab === 'essay'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
-                }`}
-              >
-                Tự luận ({parsedResult.essayCount ?? 0})
               </button>
 
               <button
@@ -1892,93 +1670,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               )}
             </div>
 
-            {/* Selection & Save-to-Bank Action Bar */}
-            <div className="bg-white border border-teal-200 rounded-2xl p-4 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-sm font-bold text-slate-900 tabular-nums mr-1">
-                  Chọn lưu ngân hàng:{' '}
-                  <span className="text-teal-700">
-                    {selectedCount} / {parsedResult.totalQuestions} câu
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={handleSelectAllQuestions}
-                  className="px-3 min-h-[36px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-800 inline-flex items-center gap-1.5"
-                >
-                  <CheckSquare className="w-3.5 h-3.5 text-teal-600" />
-                  <span>Chọn tất cả</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleDeselectAllQuestions}
-                  className="px-3 min-h-[36px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-xs font-semibold text-slate-700 inline-flex items-center gap-1.5"
-                >
-                  <Square className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Bỏ chọn tất cả</span>
-                </button>
-                {savedToBankSourceIds.size > 0 && (
-                  <button
-                    type="button"
-                    onClick={handleSelectOnlyUnsavedQuestions}
-                    className="px-3 min-h-[36px] rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-xs font-semibold text-teal-900 inline-flex items-center gap-1.5"
-                  >
-                    <Database className="w-3.5 h-3.5 text-teal-700" />
-                    <span>
-                      Chỉ chọn câu chưa lưu ({parsedResult.totalQuestions - savedToBankSourceIds.size})
-                    </span>
-                  </button>
-                )}
-                {activeViewTab === 'answer_reconciliation' && (
-                  <button
-                    type="button"
-                    onClick={() => setActiveViewTab('all_questions')}
-                    className="px-3 min-h-[36px] rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-xs font-semibold text-indigo-800"
-                  >
-                    Mở danh sách chọn từng câu
-                  </button>
-                )}
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  disabled={selectedCount === 0}
-                  onClick={handleSaveSelectedToBank}
-                  className="px-4 min-h-[40px] rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white text-xs sm:text-sm font-semibold shadow-xs inline-flex items-center gap-1.5 whitespace-nowrap"
-                >
-                  <Save className="w-4 h-4 shrink-0" />
-                  <span>Lưu các câu đã chọn ({selectedCount})</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={handleSaveAllToBank}
-                  className="px-4 min-h-[40px] rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-900 text-xs sm:text-sm font-semibold inline-flex items-center gap-1.5 whitespace-nowrap"
-                >
-                  <Database className="w-4 h-4 text-teal-600 shrink-0" />
-                  <span>Lưu toàn bộ ({parsedResult.totalQuestions})</span>
-                </button>
-              </div>
-            </div>
-
-            {unsavedOnlyFilterIds && (
-              <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 text-xs sm:text-sm flex flex-wrap items-center justify-between gap-2">
-                <span className="font-semibold flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                  <span>
-                    Đang lọc hiển thị {unsavedOnlyFilterIds.size} câu chưa được lưu (bỏ qua do trùng hoặc bị lỗi) để bạn rà soát và chỉnh sửa.
-                  </span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setUnsavedOnlyFilterIds(null)}
-                  className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-xs font-bold text-amber-900 hover:bg-amber-100"
-                >
-                  Hiện lại tất cả câu hỏi
-                </button>
-              </div>
-            )}
-
             {/* Tab Content: 3-Table Dashboard or Question List */}
             {activeViewTab === 'answer_reconciliation' ? (
               <ExamAnswerDashboard
@@ -2001,17 +1692,12 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                   displayedQuestions.map((q, index) => {
                     const statusBadge = getQuestionStatusBadge(q);
                     const StatusIcon = statusBadge.icon;
-                    const isSelectedForBank = selectedQuestionIds.has(q.id);
-                    const isAlreadySavedToBank = savedToBankSourceIds.has(q.id);
-                    const subMeta = resolveQuestionSubject(q, subjects);
                     return (
                       <div
                         key={q.id}
                         className={`bg-white border rounded-2xl p-5 shadow-xs transition-colors ${
                           q.parseStatus === 'error'
                             ? 'border-rose-300 ring-2 ring-rose-100'
-                            : isSelectedForBank
-                            ? 'border-teal-300 ring-1 ring-teal-100'
                             : q.parseStatus === 'needs_review' || hasMissingAnswer(q)
                             ? 'border-amber-300 ring-1 ring-amber-100'
                             : 'border-slate-200'
@@ -2019,41 +1705,19 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                           <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
-                            <button
-                              type="button"
-                              onClick={() => toggleSelectQuestion(q.id)}
-                              aria-label={isSelectedForBank ? `Bỏ chọn Câu ${index + 1}` : `Chọn lưu Câu ${index + 1}`}
-                              className="inline-flex items-center gap-1.5 text-left font-bold text-slate-900 hover:text-teal-700"
-                            >
-                              {isSelectedForBank ? (
-                                <CheckSquare className="w-4.5 h-4.5 text-teal-600 shrink-0" />
-                              ) : (
-                                <Square className="w-4.5 h-4.5 text-slate-400 shrink-0" />
-                              )}
-                              <span className="tabular-nums">Câu {index + 1}</span>
-                            </button>
+                            <span className="font-bold text-slate-900 tabular-nums">
+                              Câu {index + 1}
+                            </span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
                             <span className="font-mono text-[13px] text-slate-500">{q.code}</span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
                             <span className="font-semibold text-teal-700">
-                              {QUESTION_TYPE_SHORT_LABELS[resolveQuestionType(q)]}
+                              {q.type === 'part1_single_choice'
+                                ? 'Phần I (4 lựa chọn)'
+                                : q.type === 'part2_true_false'
+                                ? 'Phần II (Đúng / Sai)'
+                                : 'Phần III (Trả lời ngắn)'}
                             </span>
-                            <span aria-hidden="true" className="text-slate-300">·</span>
-                            <span className="text-xs font-semibold text-slate-600">
-                              {COGNITIVE_LEVEL_SHORT_LABELS[resolveQuestionDifficulty(q)] || q.level}
-                            </span>
-                            <span aria-hidden="true" className="text-slate-300">·</span>
-                            <span className="text-xs text-slate-600">
-                              {subMeta.name} · {GRADE_LABELS[q.grade] || `Lớp ${q.grade}`}
-                            </span>
-                            {(q.chapterName || q.lessonName || q.lessonTopic) && (
-                              <>
-                                <span aria-hidden="true" className="text-slate-300">·</span>
-                                <span className="text-xs text-slate-600 truncate max-w-xs">
-                                  {[q.chapterName, q.lessonName || q.lessonTopic].filter(Boolean).join(' / ')}
-                                </span>
-                              </>
-                            )}
                             <span aria-hidden="true" className="text-slate-300">·</span>
                             <span
                               className={`text-[13px] font-semibold px-2.5 py-0.5 rounded-lg border inline-flex items-center gap-1 ${statusBadge.className}`}
@@ -2061,49 +1725,23 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                               <StatusIcon className="w-3.5 h-3.5 shrink-0" />
                               <span>{statusBadge.label}</span>
                             </span>
-                            {isAlreadySavedToBank && (
-                              <span className="text-xs font-bold px-2.5 py-0.5 rounded-lg bg-emerald-100 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
-                                <Database className="w-3 h-3 shrink-0" />
-                                <span>Đã lưu vào NH</span>
-                              </span>
-                            )}
                           </div>
 
-                          <div className="flex flex-wrap items-center gap-2">
+                          <div className="flex items-center gap-2">
                             <select
-                              value={
-                                resolveQuestionType(q) === 'part1_multiple_choice'
-                                  ? 'part1_single_choice'
-                                  : resolveQuestionType(q)
-                              }
+                              value={q.type}
                               onChange={(e) => handleMoveQuestionType(q.id, e.target.value as QuestionType)}
-                              title="Chỉnh dạng câu hỏi riêng cho câu này"
-                              className="text-xs font-semibold px-2.5 min-h-[36px] rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
+                              title="Chuyển câu hỏi sang phần khác"
+                              className="text-sm font-semibold px-3 min-h-[38px] rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
                             >
-                              {PRIMARY_QUESTION_TYPES.map((qt) => (
-                                <option key={qt.id} value={qt.id}>
-                                  {qt.shortLabel}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={resolveQuestionDifficulty(q)}
-                              onChange={(e) =>
-                                handleChangeQuestionLevel(q.id, e.target.value as CognitiveLevel)
-                              }
-                              title="Chỉnh mức độ nhận thức riêng cho câu này"
-                              className="text-xs font-semibold px-2.5 min-h-[36px] rounded-xl border border-slate-300 bg-slate-50 text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-600"
-                            >
-                              {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
-                                <option key={lvl} value={lvl}>
-                                  {COGNITIVE_LEVEL_SHORT_LABELS[lvl]}
-                                </option>
-                              ))}
+                              <option value="part1_single_choice">Phần I (4 L/C)</option>
+                              <option value="part2_true_false">Phần II (Đ/S)</option>
+                              <option value="part3_short_answer">Phần III (Ngắn)</option>
                             </select>
                             <button
                               type="button"
                               onClick={() => setEditingQuestion({ ...q })}
-                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl text-slate-600 hover:text-teal-700 hover:bg-teal-50 border border-slate-200 transition-colors"
+                              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-600 hover:text-teal-700 hover:bg-teal-50 border border-slate-200 transition-colors"
                               title="Chỉnh sửa câu hỏi & đáp án"
                             >
                               <Edit3 className="w-4 h-4" />
@@ -2111,7 +1749,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                             <button
                               type="button"
                               onClick={() => handleDeleteQuestion(q.id)}
-                              className="min-h-[36px] min-w-[36px] flex items-center justify-center rounded-xl text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition-colors"
+                              className="min-h-[38px] min-w-[38px] flex items-center justify-center rounded-xl text-slate-600 hover:text-rose-600 hover:bg-rose-50 border border-slate-200 transition-colors"
                               title="Xóa câu này"
                             >
                               <Trash2 className="w-4 h-4" />
@@ -2211,21 +1849,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                           </div>
                         )}
 
-                        {q.type === 'essay' && (
-                          <div className="mt-3 pt-3 border-t border-slate-100 text-sm">
-                            {q.essayGuide ? (
-                              <div className="p-3 rounded-xl bg-amber-50/70 border border-amber-200 text-amber-950">
-                                <span className="font-bold text-amber-900">Hướng dẫn chấm Tự luận: </span>
-                                <ChemRenderer text={q.essayGuide} inline />
-                              </div>
-                            ) : (
-                              <span className="text-xs italic text-slate-500">
-                                Câu hỏi Tự luận (có thể nhập hướng dẫn chấm trong mục Chỉnh sửa)
-                              </span>
-                            )}
-                          </div>
-                        )}
-
                         {q.explanation && (
                           <div className="mt-3 p-3.5 rounded-xl bg-slate-50 text-slate-700 text-sm border border-slate-200">
                             <span className="font-bold text-slate-900">Hướng dẫn giải: </span>
@@ -2272,17 +1895,17 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </div>
 
             {/* Summary Numbers */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 tabular-nums">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 tabular-nums">
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
                 <p className="text-[13px] text-slate-300">Tổng câu đã bóc tách</p>
                 <p className="text-2xl font-bold text-white mt-1">{parsedResult.totalQuestions} câu</p>
               </div>
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
-                <p className="text-[13px] text-slate-300">Trắc nghiệm nhiều L/C</p>
+                <p className="text-[13px] text-slate-300">Phần I (4 lựa chọn)</p>
                 <p className="text-2xl font-bold text-teal-300 mt-1">{parsedResult.part1Count} câu</p>
               </div>
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
-                <p className="text-[13px] text-slate-300">Đúng / Sai</p>
+                <p className="text-[13px] text-slate-300">Phần II (Đúng/Sai)</p>
                 <p className="text-2xl font-bold text-indigo-300 mt-1">
                   {parsedResult.part2Count} câu{' '}
                   <span className="text-sm font-normal text-slate-300">
@@ -2291,12 +1914,8 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 </p>
               </div>
               <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
-                <p className="text-[13px] text-slate-300">Trả lời ngắn</p>
+                <p className="text-[13px] text-slate-300">Phần III (Trả lời ngắn)</p>
                 <p className="text-2xl font-bold text-emerald-300 mt-1">{parsedResult.part3Count} câu</p>
-              </div>
-              <div className="p-4 rounded-xl bg-slate-800 border border-slate-700">
-                <p className="text-[13px] text-slate-300">Tự luận</p>
-                <p className="text-2xl font-bold text-amber-300 mt-1">{parsedResult.essayCount ?? 0} câu</p>
               </div>
             </div>
 
@@ -2320,13 +1939,10 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 <button
                   type="button"
                   onClick={handleGuardedSaveBank}
-                  className="min-h-[46px] px-5 rounded-xl border border-teal-500/60 bg-slate-800 hover:bg-slate-700 text-white text-[15px] font-semibold transition-colors flex items-center gap-2 whitespace-nowrap"
+                  className="min-h-[46px] px-5 rounded-xl border border-slate-600 bg-slate-800 hover:bg-slate-700 text-white text-[15px] font-semibold transition-colors flex items-center gap-2 whitespace-nowrap"
                 >
-                  <Save className="w-4 h-4 shrink-0 text-teal-400" />
-                  <span>
-                    Lưu vào Ngân hàng câu hỏi (
-                    {selectedCount > 0 ? `${selectedCount} câu đã chọn` : `${parsedResult.totalQuestions} câu`})
-                  </span>
+                  <Save className="w-4 h-4 shrink-0" />
+                  <span>Lưu vào Ngân hàng câu hỏi</span>
                 </button>
 
                 <button
@@ -2360,91 +1976,19 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </div>
 
             <div className="p-6 overflow-y-auto flex-1 space-y-4 text-sm">
-              {/* 1. Môn học -> 2. Khối lớp -> 3. Chương / Bài học FIRST */}
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
-                <p className="text-xs font-bold text-slate-700">
-                  1–3. Phân loại chương trình (Môn học · Khối lớp · Chương · Bài học)
-                </p>
-                <CurriculumCascadeSelector
-                  value={{
-                    subjectId:
-                      editingQuestion.subjectId ||
-                      resolveQuestionSubject(editingQuestion, subjects).id,
-                    subjectName:
-                      editingQuestion.subjectName ||
-                      resolveQuestionSubject(editingQuestion, subjects).name,
-                    grade: editingQuestion.grade || selectedGrade,
-                    textbookSeries: editingQuestion.textbookSeries || '',
-                    chapterId: editingQuestion.chapterId || '',
-                    chapterName: editingQuestion.chapterName || '',
-                    lessonId: editingQuestion.lessonId || '',
-                    lessonName: editingQuestion.lessonName || editingQuestion.lessonTopic || '',
-                  }}
-                  subjects={subjects}
-                  requireChapterBeforeLesson
-                  preserveGradeOnSubjectChange
-                  compact
-                  onChange={(next) =>
-                    setEditingQuestion({
-                      ...editingQuestion,
-                      subjectId: next.subjectId,
-                      subjectName: next.subjectName,
-                      grade: (next.grade || editingQuestion.grade) as ChemGrade,
-                      textbookSeries: next.textbookSeries || undefined,
-                      chapterId: next.chapterId || undefined,
-                      chapterName: next.chapterName || undefined,
-                      lessonId: next.lessonId || undefined,
-                      lessonName: next.lessonName || undefined,
-                      lessonTopic: next.lessonName || undefined,
-                    })
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">Dạng câu hỏi</label>
+                <select
+                  value={editingQuestion.type}
+                  onChange={(e) =>
+                    setEditingQuestion(reclassifyQuestionType(editingQuestion, e.target.value as QuestionType))
                   }
-                />
-              </div>
-
-              {/* 4. Dạng câu hỏi BEFORE 5. Mức độ nhận thức */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">4. Dạng câu hỏi</label>
-                  <select
-                    value={
-                      resolveQuestionType(editingQuestion) === 'part1_multiple_choice'
-                        ? 'part1_single_choice'
-                        : resolveQuestionType(editingQuestion)
-                    }
-                    onChange={(e) =>
-                      setEditingQuestion(reclassifyQuestionType(editingQuestion, e.target.value as QuestionType))
-                    }
-                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                  >
-                    {PRIMARY_QUESTION_TYPES.map((qt) => (
-                      <option key={qt.id} value={qt.id}>
-                        {qt.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">5. Mức độ nhận thức</label>
-                  <select
-                    value={resolveQuestionDifficulty(editingQuestion)}
-                    onChange={(e) => {
-                      const nextLvl = e.target.value as CognitiveLevel;
-                      setEditingQuestion({
-                        ...editingQuestion,
-                        level: nextLvl,
-                        difficulty: nextLvl,
-                      });
-                    }}
-                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                  >
-                    {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
-                      <option key={lvl} value={lvl}>
-                        {COGNITIVE_LEVEL_LABELS[lvl]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
+                >
+                  <option value="part1_single_choice">Phần I: Trắc nghiệm 4 lựa chọn (A, B, C, D)</option>
+                  <option value="part2_true_false">Phần II: Trắc nghiệm Đúng / Sai (a, b, c, d)</option>
+                  <option value="part3_short_answer">Phần III: Trả lời ngắn</option>
+                </select>
               </div>
 
               <div>
@@ -2563,28 +2107,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 </div>
               )}
 
-              {editingQuestion.type === 'essay' && (
-                <div className="space-y-2">
-                  <label className="block font-bold text-slate-700">
-                    Hướng dẫn chấm / Gợi ý đáp án Tự luận (tùy chọn):
-                  </label>
-                  <textarea
-                    rows={3}
-                    value={editingQuestion.essayGuide || ''}
-                    onChange={(e) =>
-                      setEditingQuestion({
-                        ...editingQuestion,
-                        essayGuide: e.target.value,
-                        parseStatus: 'verified',
-                        parseWarning: undefined,
-                      })
-                    }
-                    placeholder="Nhập dàn ý chấm điểm, các bước lập luận hoặc phương trình phản ứng..."
-                    className="w-full p-2.5 rounded-xl border border-amber-300 bg-amber-50/40 text-sm focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                  />
-                </div>
-              )}
-
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Hướng dẫn giải chi tiết</label>
                 <textarea
@@ -2672,44 +2194,6 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
           </div>
         </div>
       )}
-      {/* Word Save-to-Question-Bank Confirmation & Firestore Persistence Modal */}
-      <WordSaveToBankModal
-        isOpen={Boolean(saveModalQuestions && saveModalQuestions.length > 0)}
-        questionsToSave={saveModalQuestions || []}
-        existingBankQuestions={existingBankQuestions}
-        subjects={subjects}
-        defaultGrade={selectedGrade}
-        defaultSubjectId={defaultImportContext?.subjectId}
-        defaultQuestionType={defaultQuestionType || defaultImportContext?.questionType}
-        defaultDifficulty={defaultImportContext?.difficulty}
-        sourceFileName={selectedFile?.name}
-        currentUserId={currentUserId}
-        onClose={() => setSaveModalQuestions(null)}
-        onQuestionsPersisted={(savedList, refreshedBank, savedSourceIds) => {
-          if (savedSourceIds && savedSourceIds.length > 0) {
-            setSavedToBankSourceIds((prev) => {
-              const next = new Set(prev);
-              savedSourceIds.forEach((sid) => next.add(sid));
-              return next;
-            });
-          }
-          if (onQuestionsPersistedToBank) {
-            onQuestionsPersistedToBank(savedList, refreshedBank);
-          } else if (onSaveToQuestionBank && savedList.length > 0) {
-            onSaveToQuestionBank(savedList);
-          }
-          showToast(`Đã ghi thành công ${savedList.length} câu hỏi vào Ngân hàng Firestore!`);
-        }}
-        onNavigateToQuestionBank={() => {
-          onNavigateToQuestionBank?.();
-        }}
-        onReviewUnsavedQuestions={(unsavedIds) => {
-          setUnsavedOnlyFilterIds(new Set(unsavedIds));
-          setSelectedQuestionIds(new Set(unsavedIds));
-          setActiveViewTab('all_questions');
-          scrollToSection(step3Ref);
-        }}
-      />
     </div>
   );
 };

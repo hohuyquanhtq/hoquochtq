@@ -113,10 +113,9 @@ service cloud.firestore {
           'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
-          'id', 'ownerId', 'code', 'content', 'type', 'questionType', 'subjectId', 'subjectName',
-          'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
-          'level', 'difficulty', 'folderId', 'options', 'correctOptionId', 'correctOptionIds',
-          'statements', 'shortAnswerConfig', 'essayGuide',
+          'id', 'ownerId', 'code', 'content', 'type', 'subjectId', 'subjectName',
+          'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic', 'level',
+          'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
           'imageUrl', 'explanation', 'source', 'authorId', 'parseStatus', 'parseWarning',
           'teacherVerified', 'section', 'sectionTitle', 'textbookSeries',
           'copiedFromQuestionId', 'copiedFromOwnerId', 'copiedFromOwnerName',
@@ -125,9 +124,8 @@ service cloud.firestore {
         && isValidId(data.id)
         && isValidId(data.ownerId)
         && data.code is string && data.code.size() >= 1 && data.code.size() <= 64
-        && data.content is string && data.content.size() >= 1 && data.content.size() <= 350000
-        && data.type in ['part1_single_choice', 'part1_multiple_choice', 'part2_true_false', 'part3_short_answer', 'essay']
-        && (!('questionType' in data) || data.questionType in ['part1_single_choice', 'part1_multiple_choice', 'part2_true_false', 'part3_short_answer', 'essay'])
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 20000
+        && data.type in ['part1_single_choice', 'part1_multiple_choice', 'part2_true_false', 'part3_short_answer']
         && (!('subjectId' in data) || (data.subjectId is string && data.subjectId.size() <= 64))
         && (!('subjectName' in data) || (data.subjectName is string && data.subjectName.size() <= 120))
         && data.grade in ['10', '11', '12', 'chuyen_hsg']
@@ -138,16 +136,14 @@ service cloud.firestore {
         && (!('lessonName' in data) || (data.lessonName is string && data.lessonName.size() <= 250))
         && (!('lessonTopic' in data) || (data.lessonTopic is string && data.lessonTopic.size() <= 200))
         && data.level in ['nhan_biet', 'thong_hieu', 'van_dung', 'van_dung_cao']
-        && (!('difficulty' in data) || data.difficulty in ['nhan_biet', 'thong_hieu', 'van_dung', 'van_dung_cao'])
         && (!('folderId' in data) || (data.folderId is string && data.folderId.size() <= 128))
         && (!('options' in data) || (data.options is list && data.options.size() <= 8))
         && (!('correctOptionId' in data) || (data.correctOptionId is string && data.correctOptionId.size() <= 8))
         && (!('correctOptionIds' in data) || (data.correctOptionIds is list && data.correctOptionIds.size() <= 8 && (data.correctOptionIds.size() == 0 || (data.correctOptionIds[0] is string && data.correctOptionIds[0].size() <= 8))))
         && (!('statements' in data) || (data.statements is list && data.statements.size() <= 8))
         && (!('shortAnswerConfig' in data) || data.shortAnswerConfig is map)
-        && (!('essayGuide' in data) || (data.essayGuide is string && data.essayGuide.size() <= 100000))
-        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 250000))
-        && (!('explanation' in data) || (data.explanation is string && data.explanation.size() <= 100000))
+        && (!('imageUrl' in data) || (data.imageUrl is string && data.imageUrl.size() <= 1000))
+        && (!('explanation' in data) || (data.explanation is string && data.explanation.size() <= 20000))
         && (!('source' in data) || (data.source is string && data.source.size() <= 300))
         && (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128))
         && (!('parseStatus' in data) || data.parseStatus in ['verified', 'needs_review', 'error'])

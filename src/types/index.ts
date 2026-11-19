@@ -77,11 +77,10 @@ export interface UploadRecord {
 }
 
 export type QuestionType = 
-  | 'part1_single_choice'    // Trắc nghiệm nhiều lựa chọn (4 phương án A, B, C, D)
-  | 'part1_multiple_choice'  // Trắc nghiệm nhiều lựa chọn (tương thích dữ liệu cũ nhiều đáp án)
-  | 'part2_true_false'       // Trắc nghiệm đúng/sai (4 ý a, b, c, d)
-  | 'part3_short_answer'     // Trắc nghiệm trả lời ngắn (số/chữ)
-  | 'essay';                 // Tự luận
+  | 'part1_single_choice'    // Phần I: Trắc nghiệm 4 lựa chọn (1 đáp án đúng)
+  | 'part1_multiple_choice'  // Phần I mở rộng: Trắc nghiệm nhiều lựa chọn
+  | 'part2_true_false'       // Phần II: Trắc nghiệm Đúng - Sai (4 ý a, b, c, d)
+  | 'part3_short_answer';    // Phần III: Trắc nghiệm trả lời ngắn (số/chữ)
 
 export type CognitiveLevel = 
   | 'nhan_biet'   // Nhận biết
@@ -191,7 +190,6 @@ export interface Question {
   code: string;               // Mã câu hỏi, VD: "H12_HC_001"
   content: string;            // Nội dung câu hỏi (chứa công thức hóa học, latex, text)
   type: QuestionType;
-  questionType?: QuestionType; // Đồng bộ chuẩn metadata questionType (tương thích ngược với `type`)
   subjectId?: string;         // ID môn học GDPT 2018 (mặc định fallback: "hoa_hoc")
   subjectName?: string;       // Tên môn học hiển thị (mặc định fallback: "Hóa học")
   grade: ChemGrade;
@@ -202,7 +200,6 @@ export interface Question {
   lessonName?: string;        // Tên bài học chuẩn hóa từ danh mục SGK
   lessonTopic?: string;       // Tên bài học / chủ đề hiển thị (tương thích ngược dữ liệu cũ)
   level: CognitiveLevel;
-  difficulty?: CognitiveLevel; // Đồng bộ chuẩn metadata difficulty (tương thích ngược với `level`)
   folderId?: string;
   
   // Dành cho Phần I (4 lựa chọn hoặc nhiều lựa chọn)
@@ -215,9 +212,6 @@ export interface Question {
   
   // Dành cho Phần III (Trả lời ngắn)
   shortAnswerConfig?: ShortAnswerConfig;
-
-  // Dành cho Tự luận
-  essayGuide?: string;        // Hướng dẫn chấm / gợi ý đáp án câu tự luận
   
   // Tài liệu bổ trợ
   imageUrl?: string;          // Sơ đồ thí nghiệm, bảng số liệu, đồ thị
@@ -586,7 +580,6 @@ export interface ParsedExamResult {
   part2Count: number;
   part2StatementsCount?: number;
   part3Count: number;
-  essayCount?: number;
   questionsWithAnswers: number;
   questionsMissingAnswers: number;
   questionsWithWarnings: number;

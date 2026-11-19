@@ -1,6 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  ChemGrade,
   CognitiveLevel,
   CurriculumGrade,
   CurriculumLesson,
@@ -14,15 +13,10 @@ import {
   COGNITIVE_LEVEL_SHORT_LABELS,
   DEFAULT_GDPT_2018_SUBJECTS,
   GRADE_LABELS,
-  PRIMARY_QUESTION_TYPES,
-  QUESTION_TYPE_LABELS,
   QUESTION_TYPE_SHORT_LABELS,
   generateQuestionCode,
   getQuestionTopicDisplay,
-  matchesQuestionTypeFilter,
-  resolveQuestionDifficulty,
   resolveQuestionSubject,
-  resolveQuestionType,
 } from '../../constants/subjects';
 import {
   BarChart3,
@@ -36,7 +30,6 @@ import {
   Copy,
   Edit3,
   Eye,
-  FileUp,
   FlaskConical,
   Loader2,
   Plus,
@@ -66,12 +59,6 @@ interface QuestionBankProps {
   onDeleteQuestion: (id: string) => void;
   onBulkDeleteQuestions?: (ids: string[]) => void;
   onCreateExamFromSelected: (selectedQuestions: Question[]) => void;
-  onOpenWordImport?: (defaults: {
-    subjectId?: string;
-    grade?: ChemGrade;
-    questionType?: QuestionType;
-    difficulty?: CognitiveLevel;
-  }) => void;
 }
 
 export const QuestionBank: React.FC<QuestionBankProps> = ({
@@ -84,7 +71,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   onDeleteQuestion,
   onBulkDeleteQuestions,
   onCreateExamFromSelected,
-  onOpenWordImport,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>('all');
@@ -227,8 +213,8 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           return false;
         }
       }
-      if (!matchesQuestionTypeFilter(q, typeFilter)) return false;
-      if (levelFilter !== 'all' && resolveQuestionDifficulty(q) !== levelFilter) return false;
+      if (typeFilter !== 'all' && q.type !== typeFilter) return false;
+      if (levelFilter !== 'all' && q.level !== levelFilter) return false;
       if (term) {
         const matchContent = (q.content || '').toLowerCase().includes(term);
         const matchCode = (q.code || '').toLowerCase().includes(term);
@@ -296,7 +282,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       part1_multiple_choice: 0,
       part2_true_false: 0,
       part3_short_answer: 0,
-      essay: 0,
     };
     const byLevel: Record<CognitiveLevel, number> = {
       nhan_biet: 0,
@@ -325,11 +310,9 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     });
 
     filtered.forEach((q) => {
-      const qType = resolveQuestionType(q);
-      const qDiff = resolveQuestionDifficulty(q);
       byGrade[q.grade] = (byGrade[q.grade] || 0) + 1;
-      byType[qType] = (byType[qType] || 0) + 1;
-      byLevel[qDiff] = (byLevel[qDiff] || 0) + 1;
+      byType[q.type] = (byType[q.type] || 0) + 1;
+      byLevel[q.level] = (byLevel[q.level] || 0) + 1;
 
       const tLabel = getQuestionTopicDisplay(q);
       const entry = byTopic.get(tLabel) || {
@@ -341,7 +324,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         van_dung_cao: 0,
       };
       entry.total += 1;
-      entry[qDiff] = (entry[qDiff] || 0) + 1;
+      entry[q.level] = (entry[q.level] || 0) + 1;
       byTopic.set(tLabel, entry);
     });
 
@@ -391,21 +374,15 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const handleDuplicateQuestion = (q: Question) => {
     const nowIso = new Date().toISOString();
     const sub = resolveQuestionSubject(q, subjects);
-    const resolvedType = resolveQuestionType(q);
-    const resolvedDiff = resolveQuestionDifficulty(q);
     const cloned: Question = {
       ...structuredClone(q),
       id: `q_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       code: generateQuestionCode({
         subjectId: sub.id,
         grade: q.grade,
-        type: resolvedType,
+        type: q.type,
         subjects,
       }),
-      type: resolvedType,
-      questionType: resolvedType,
-      level: resolvedDiff,
-      difficulty: resolvedDiff,
       subjectId: sub.id,
       subjectName: sub.name,
       ownerId: currentUserId || q.ownerId,
@@ -482,7 +459,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             Ngân hàng câu hỏi ({questions.length} câu)
           </h1>
           <p className="text-sm text-slate-600 mt-1">
-            Phân loại chuẩn 5 nhóm: Môn học → Khối lớp → Chương / Bài học → Dạng câu hỏi (4 dạng) → Mức độ nhận thức.
+            Phân loại theo môn học, khối lớp, chủ đề bài học, dạng thức đề thi 2025 và 4 mức độ nhận thức.
           </p>
         </div>
 
@@ -504,25 +481,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               <ChevronDown className="w-3.5 h-3.5" />
             )}
           </button>
-
-          {onOpenWordImport && (
-            <button
-              type="button"
-              onClick={() =>
-                onOpenWordImport({
-                  subjectId: subjectFilter !== 'all' ? subjectFilter : undefined,
-                  grade: gradeFilter !== 'all' ? (gradeFilter as ChemGrade) : undefined,
-                  questionType: typeFilter !== 'all' ? (typeFilter as QuestionType) : undefined,
-                  difficulty: levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined,
-                })
-              }
-              title="Dạng câu hỏi đang chọn tại bộ lọc sẽ là giá trị mặc định cho lượt bóc tách Word/PDF (không ép tài liệu hỗn hợp thành 1 dạng)"
-              className="min-h-[42px] px-4 py-2 rounded-xl border border-teal-200 bg-teal-50 hover:bg-teal-100 text-teal-800 text-xs font-semibold transition-colors inline-flex items-center gap-1.5"
-            >
-              <FileUp className="w-4 h-4" />
-              <span>Nhập từ Word/PDF</span>
-            </button>
-          )}
 
           <button
             type="button"
@@ -565,22 +523,16 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               <p className="text-xs font-medium text-slate-500">Theo dạng câu hỏi</p>
               <div className="mt-2 space-y-1 text-xs tabular-nums">
                 <div className="flex justify-between">
-                  <span className="text-slate-700">Trắc nghiệm nhiều lựa chọn</span>
-                  <span className="font-bold text-slate-900">
-                    {(stats.byType.part1_single_choice || 0) + (stats.byType.part1_multiple_choice || 0)}
-                  </span>
+                  <span className="text-slate-700">Phần I (4 lựa chọn)</span>
+                  <span className="font-bold text-slate-900">{stats.byType.part1_single_choice}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-700">Trắc nghiệm đúng/sai</span>
-                  <span className="font-bold text-slate-900">{stats.byType.part2_true_false || 0}</span>
+                  <span className="text-slate-700">Phần II (Đúng/Sai)</span>
+                  <span className="font-bold text-slate-900">{stats.byType.part2_true_false}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-slate-700">Trắc nghiệm trả lời ngắn</span>
-                  <span className="font-bold text-slate-900">{stats.byType.part3_short_answer || 0}</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-700">Tự luận</span>
-                  <span className="font-bold text-slate-900">{stats.byType.essay || 0}</span>
+                  <span className="text-slate-700">Phần III (Trả lời ngắn)</span>
+                  <span className="font-bold text-slate-900">{stats.byType.part3_short_answer}</span>
                 </div>
               </div>
             </div>
@@ -816,25 +768,23 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-              4. Dạng câu hỏi
+              Dạng câu hỏi
             </label>
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
               className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
             >
-              <option value="all">Tất cả 4 dạng</option>
-              {PRIMARY_QUESTION_TYPES.map((qt) => (
-                <option key={qt.id} value={qt.id}>
-                  {qt.label}
-                </option>
-              ))}
+              <option value="all">Tất cả 3 dạng</option>
+              <option value="part1_single_choice">Phần I · 4 lựa chọn</option>
+              <option value="part2_true_false">Phần II · Đúng - Sai 4 ý</option>
+              <option value="part3_short_answer">Phần III · Trả lời ngắn</option>
             </select>
           </div>
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-              5. Mức độ nhận thức
+              Mức độ nhận thức
             </label>
             <select
               value={levelFilter}
@@ -945,8 +895,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             const isSelected = selectedIds.has(q.id);
             const sub = resolveQuestionSubject(q, subjects);
             const topicLabel = getQuestionTopicDisplay(q);
-            const qType = resolveQuestionType(q);
-            const qDiff = resolveQuestionDifficulty(q);
 
             return (
               <div
@@ -990,11 +938,11 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                         <span className="text-slate-800 font-medium">{topicLabel}</span>
                         <span className="text-slate-300">·</span>
                         <span className="font-semibold text-slate-800">
-                          {QUESTION_TYPE_SHORT_LABELS[qType]}
+                          {QUESTION_TYPE_SHORT_LABELS[q.type]}
                         </span>
                         <span className="text-slate-300">·</span>
                         <span className="font-semibold text-slate-600">
-                          {COGNITIVE_LEVEL_SHORT_LABELS[qDiff]}
+                          {COGNITIVE_LEVEL_SHORT_LABELS[q.level]}
                         </span>
                       </div>
                       {q.source && (
@@ -1068,12 +1016,10 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 )}
 
                 {/* Answer Summary */}
-                {(qType === 'part1_single_choice' || qType === 'part1_multiple_choice') && q.options && (
+                {q.type === 'part1_single_choice' && q.options && (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2.5 border-t border-slate-100">
                     {q.options.map((opt) => {
-                      const isCorrect =
-                        opt.id === q.correctOptionId ||
-                        Boolean(q.correctOptionIds?.includes(opt.id));
+                      const isCorrect = opt.id === q.correctOptionId;
                       return (
                         <div
                           key={opt.id}
@@ -1101,7 +1047,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                   </div>
                 )}
 
-                {qType === 'part2_true_false' && q.statements && (
+                {q.type === 'part2_true_false' && q.statements && (
                   <div className="space-y-1.5 pt-2.5 border-t border-slate-100">
                     {q.statements.map((stmt) => (
                       <div
@@ -1128,7 +1074,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                   </div>
                 )}
 
-                {qType === 'part3_short_answer' && q.shortAnswerConfig && (
+                {q.type === 'part3_short_answer' && q.shortAnswerConfig && (
                   <div className="pt-2.5 border-t border-slate-100 text-xs flex flex-wrap items-center gap-2">
                     <span className="font-semibold text-slate-700">Đáp án:</span>
                     <span className="px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-900 font-mono font-bold rounded-lg">
@@ -1136,19 +1082,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                     </span>
                     {q.shortAnswerConfig.unit && (
                       <span className="text-slate-500">({q.shortAnswerConfig.unit})</span>
-                    )}
-                  </div>
-                )}
-
-                {qType === 'essay' && (
-                  <div className="pt-2.5 border-t border-slate-100 text-xs">
-                    {q.essayGuide ? (
-                      <div className="p-2.5 rounded-xl bg-amber-50/70 border border-amber-200 text-amber-950">
-                        <span className="font-bold text-amber-900">Hướng dẫn chấm / Gợi ý đáp án Tự luận: </span>
-                        <ChemRenderer text={q.essayGuide} inline />
-                      </div>
-                    ) : (
-                      <span className="text-slate-500 italic">Câu hỏi Tự luận (giáo viên chấm tự luận trực tiếp)</span>
                     )}
                   </div>
                 )}
@@ -1203,12 +1136,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       <QuestionFormModal
         isOpen={isAddModalOpen}
         mode="add"
-        initialDefaults={{
-          subjectId: subjectFilter !== 'all' ? subjectFilter : undefined,
-          grade: gradeFilter !== 'all' ? (gradeFilter as ChemGrade) : undefined,
-          questionType: typeFilter !== 'all' ? (typeFilter as QuestionType) : undefined,
-          difficulty: levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined,
-        }}
         subjects={subjects}
         existingQuestions={questions}
         currentUserId={currentUserId}
@@ -1291,13 +1218,13 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 <div>
                   <span className="text-slate-500 block">Dạng câu hỏi</span>
                   <span className="font-bold text-slate-900">
-                    {QUESTION_TYPE_LABELS[resolveQuestionType(viewingQuestion)]}
+                    {QUESTION_TYPE_SHORT_LABELS[viewingQuestion.type]}
                   </span>
                 </div>
                 <div>
                   <span className="text-slate-500 block">Mức độ</span>
                   <span className="font-bold text-slate-900">
-                    {COGNITIVE_LEVEL_LABELS[resolveQuestionDifficulty(viewingQuestion)]}
+                    {COGNITIVE_LEVEL_LABELS[viewingQuestion.level]}
                   </span>
                 </div>
               </div>
@@ -1314,14 +1241,10 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 />
               )}
 
-              {(resolveQuestionType(viewingQuestion) === 'part1_single_choice' ||
-                resolveQuestionType(viewingQuestion) === 'part1_multiple_choice') &&
-                viewingQuestion.options && (
+              {viewingQuestion.type === 'part1_single_choice' && viewingQuestion.options && (
                 <div className="space-y-2">
                   {viewingQuestion.options.map((opt) => {
-                    const isCorrect =
-                      opt.id === viewingQuestion.correctOptionId ||
-                      Boolean(viewingQuestion.correctOptionIds?.includes(opt.id));
+                    const isCorrect = opt.id === viewingQuestion.correctOptionId;
                     return (
                       <div
                         key={opt.id}
@@ -1341,7 +1264,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 </div>
               )}
 
-              {resolveQuestionType(viewingQuestion) === 'part2_true_false' && viewingQuestion.statements && (
+              {viewingQuestion.type === 'part2_true_false' && viewingQuestion.statements && (
                 <div className="space-y-2">
                   {viewingQuestion.statements.map((s) => (
                     <div
@@ -1365,7 +1288,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 </div>
               )}
 
-              {resolveQuestionType(viewingQuestion) === 'part3_short_answer' &&
+              {viewingQuestion.type === 'part3_short_answer' &&
                 viewingQuestion.shortAnswerConfig && (
                   <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-xs">
                     <span className="font-bold text-emerald-900">Đáp án chuẩn: </span>
@@ -1379,17 +1302,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                     )}
                   </div>
                 )}
-
-              {resolveQuestionType(viewingQuestion) === 'essay' && (
-                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950">
-                  <p className="font-bold text-amber-900 mb-1">Hướng dẫn chấm / Gợi ý đáp án Tự luận:</p>
-                  {viewingQuestion.essayGuide ? (
-                    <ChemRenderer text={viewingQuestion.essayGuide} />
-                  ) : (
-                    <p className="italic text-amber-800">Chưa nhập hướng dẫn chấm tự luận.</p>
-                  )}
-                </div>
-              )}
 
               {viewingQuestion.explanation && (
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-800">

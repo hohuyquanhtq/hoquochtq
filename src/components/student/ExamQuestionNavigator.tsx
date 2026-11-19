@@ -52,11 +52,6 @@ const SECTION_ACCENTS: Record<
     badgeText: 'text-purple-700',
     dot: 'bg-purple-600',
   },
-  essay: {
-    headerBg: 'bg-emerald-50/70 border-emerald-100',
-    badgeText: 'text-emerald-700',
-    dot: 'bg-emerald-600',
-  },
 };
 
 export const ExamQuestionNavigator: React.FC<ExamQuestionNavigatorProps> = ({

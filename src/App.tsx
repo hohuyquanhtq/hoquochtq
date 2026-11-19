@@ -8,8 +8,6 @@ import {
   User,
   UserRole,
   Question,
-  QuestionType,
-  CognitiveLevel,
   Exam,
   Folder,
   SubjectItem,
@@ -182,15 +180,6 @@ export default function App() {
   const [creatorInitialTitle, setCreatorInitialTitle] = useState<string>('');
   const [creatorInitialGrade, setCreatorInitialGrade] = useState<ChemGrade>('12');
   const [creatorInitialFolderId, setCreatorInitialFolderId] = useState<string | null>(null);
-  const [wordImportDefaults, setWordImportDefaults] = useState<
-    | {
-        subjectId?: string;
-        grade?: ChemGrade;
-        questionType?: QuestionType;
-        difficulty?: CognitiveLevel;
-      }
-    | undefined
-  >(undefined);
 
   // Direct Join via link/QR state
   const [directJoinExam, setDirectJoinExam] = useState<Exam | null>(null);
@@ -490,28 +479,6 @@ export default function App() {
     }
   };
 
-  const handleWordQuestionsPersistedToBank = (
-    savedQuestions: Question[],
-    refreshedBank?: Question[]
-  ) => {
-    if (!activeUid) return;
-    if (Array.isArray(refreshedBank)) {
-      StorageService.saveQuestions(refreshedBank, activeUid);
-      setQuestions(refreshedBank);
-      return;
-    }
-    if (savedQuestions.length === 0) return;
-    setQuestions((prev) => {
-      const existingIds = new Set(prev.map((q) => q.id));
-      const merged = [
-        ...savedQuestions.filter((q) => !existingIds.has(q.id)),
-        ...prev,
-      ];
-      StorageService.saveQuestions(merged, activeUid);
-      return merged;
-    });
-  };
-
   // --- Handlers for Teacher Actions (Strictly Owner-Scoped + Firestore Persisted) ---
   const handleSaveQuestionsToBank = (newQuestions: Question[]) => {
     if (!activeUid) return;
@@ -524,14 +491,8 @@ export default function App() {
       authorId: activeUid,
       updatedAt: nowIso,
     }));
-    const merged = [
-      ...scoped,
-      ...StorageService.getQuestions(activeUid).filter(
-        (existing) => !scoped.some((s) => s.id === existing.id)
-      ),
-    ];
-    StorageService.saveQuestions(merged, activeUid);
-    setQuestions(merged);
+    scoped.forEach((q) => StorageService.addQuestion(q, activeUid));
+    setQuestions(StorageService.getQuestions(activeUid));
     void saveQuestionsBatchToFirestore(scoped, activeUid).catch((err) => {
       console.warn('[HQTest] Could not sync question batch to Firestore:', err);
     });
@@ -1475,12 +1436,6 @@ export default function App() {
 
             {activeTab === 'upload_exam' && (
               <ExamUploader
-                subjects={mergedSubjects}
-                existingBankQuestions={questions}
-                currentUserId={activeUid}
-                defaultImportContext={wordImportDefaults}
-                onQuestionsPersistedToBank={handleWordQuestionsPersistedToBank}
-                onNavigateToQuestionBank={() => setActiveTab('question_bank')}
                 onSaveToQuestionBank={handleSaveQuestionsToBank}
                 onCreateExamFromParsed={handleCreateExamFromParsed}
                 onFileParsedRecord={handleFileParsedRecord}
@@ -1499,10 +1454,6 @@ export default function App() {
                 onDeleteQuestion={handleDeleteQuestion}
                 onBulkDeleteQuestions={handleBulkDeleteQuestions}
                 onCreateExamFromSelected={handleCreateExamFromSelected}
-                onOpenWordImport={(defaults) => {
-                  setWordImportDefaults(defaults);
-                  setActiveTab('upload_exam');
-                }}
               />
             )}
 
