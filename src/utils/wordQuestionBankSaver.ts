@@ -19,7 +19,7 @@ import {
   optimizeQuestionEmbeddedImages,
 } from './wordImageOptimizer';
 
-export interface WordBankClassificationInput {
+export interface PerQuestionClassification {
   subjectId: string;
   subjectName: string;
   grade: ChemGrade;
@@ -28,6 +28,24 @@ export interface WordBankClassificationInput {
   chapterName?: string;
   lessonId?: string;
   lessonName?: string;
+}
+
+export interface WordBankClassificationInput {
+  /**
+   * When true (default), applies subject/grade/chapter/lesson/textbookSeries to every
+   * question in this save batch. When false, preserves each question's own metadata
+   * (or per-question overrides from `perQuestionMetadata`) without overwriting.
+   */
+  applyToAll: boolean;
+  subjectId: string;
+  subjectName: string;
+  grade: ChemGrade;
+  textbookSeries?: string;
+  chapterId?: string;
+  chapterName?: string;
+  lessonId?: string;
+  lessonName?: string;
+  perQuestionMetadata?: Record<string, Partial<PerQuestionClassification>>;
   levelMode: 'keep_per_question' | 'apply_all';
   defaultLevel: CognitiveLevel;
   typeMode: 'keep_per_question' | 'apply_all';
@@ -267,8 +285,9 @@ export function validateQuestionBeforeFirestoreSave(question: Question): string 
 }
 
 /**
- * Prepares a single parsed Word question with full classification metadata,
+ * Prepares a single parsed Word/PDF question with full classification metadata,
  * brand-new unique Firestore document ID, owner attribution, and image optimization.
+ * Never mutates the original `raw` parsed question object.
  */
 export async function buildPreparedWordQuestionForBank(
   raw: Question,
@@ -279,14 +298,72 @@ export async function buildPreparedWordQuestionForBank(
   nowIso: string
 ): Promise<Question> {
   const optimized = await optimizeQuestionEmbeddedImages(raw);
+  const perOverride = !classification.applyToAll
+    ? classification.perQuestionMetadata?.[raw.id]
+    : undefined;
 
-  const subjectId = raw.subjectId || classification.subjectId || DEFAULT_SUBJECT_ID;
-  const subjectName = raw.subjectName || classification.subjectName || DEFAULT_SUBJECT_NAME;
-  const grade: ChemGrade = VALID_GRADES.has(classification.grade)
-    ? classification.grade
-    : VALID_GRADES.has(raw.grade)
-    ? raw.grade
-    : '12';
+  let subjectId: string;
+  let subjectName: string;
+  let grade: ChemGrade;
+  let chapterId: string | undefined;
+  let chapterName: string | undefined;
+  let lessonId: string | undefined;
+  let lessonName: string | undefined;
+  let lessonTopic: string | undefined;
+  let textbookSeries: string | undefined;
+
+  if (classification.applyToAll) {
+    // Batch mode: explicitly apply modal's selected classification to every question
+    subjectId = classification.subjectId?.trim() || raw.subjectId || DEFAULT_SUBJECT_ID;
+    subjectName = classification.subjectName?.trim() || raw.subjectName || DEFAULT_SUBJECT_NAME;
+    grade = VALID_GRADES.has(classification.grade)
+      ? classification.grade
+      : VALID_GRADES.has(raw.grade)
+      ? raw.grade
+      : '12';
+    chapterId = classification.chapterId?.trim() || undefined;
+    chapterName = classification.chapterName?.trim() || undefined;
+    lessonId = classification.lessonId?.trim() || undefined;
+    lessonName = classification.lessonName?.trim() || undefined;
+    lessonTopic = lessonName || undefined;
+    textbookSeries = classification.textbookSeries?.trim() || undefined;
+  } else {
+    // Per-question mode: NEVER auto-apply bulk metadata; preserve each question's own or per-question configured metadata
+    subjectId =
+      perOverride?.subjectId?.trim() || raw.subjectId?.trim() || DEFAULT_SUBJECT_ID;
+    subjectName =
+      perOverride?.subjectName?.trim() || raw.subjectName?.trim() || DEFAULT_SUBJECT_NAME;
+    grade =
+      perOverride?.grade && VALID_GRADES.has(perOverride.grade)
+        ? perOverride.grade
+        : VALID_GRADES.has(raw.grade)
+        ? raw.grade
+        : '12';
+    chapterId =
+      perOverride !== undefined
+        ? perOverride.chapterId?.trim() || undefined
+        : raw.chapterId?.trim() || undefined;
+    chapterName =
+      perOverride !== undefined
+        ? perOverride.chapterName?.trim() || undefined
+        : raw.chapterName?.trim() || undefined;
+    lessonId =
+      perOverride !== undefined
+        ? perOverride.lessonId?.trim() || undefined
+        : raw.lessonId?.trim() || undefined;
+    lessonName =
+      perOverride !== undefined
+        ? perOverride.lessonName?.trim() || undefined
+        : raw.lessonName?.trim() || undefined;
+    lessonTopic =
+      lessonName ||
+      (perOverride !== undefined ? undefined : raw.lessonTopic?.trim() || undefined);
+    textbookSeries =
+      perOverride !== undefined
+        ? perOverride.textbookSeries?.trim() || undefined
+        : raw.textbookSeries?.trim() || undefined;
+  }
+
   const level: CognitiveLevel =
     classification.levelMode === 'apply_all'
       ? classification.defaultLevel
@@ -300,15 +377,11 @@ export async function buildPreparedWordQuestionForBank(
       ? raw.type
       : classification.defaultType;
 
-  const chapterId = classification.chapterId?.trim() || raw.chapterId?.trim() || undefined;
-  const chapterName = classification.chapterName?.trim() || raw.chapterName?.trim() || undefined;
-  const lessonId = classification.lessonId?.trim() || raw.lessonId?.trim() || undefined;
-  const lessonName = classification.lessonName?.trim() || raw.lessonName?.trim() || undefined;
-  const lessonTopic = lessonName || raw.lessonTopic?.trim() || undefined;
-  const textbookSeries = classification.textbookSeries?.trim() || raw.textbookSeries?.trim() || undefined;
   const topic = inferLegacyTopic(lessonName || lessonTopic, chapterName, raw.topic);
-
-  const source = (raw.source && raw.source.trim()) || classification.sourceLabel.trim() || 'Import từ Word (.docx)';
+  const source =
+    (raw.source && raw.source.trim()) ||
+    classification.sourceLabel.trim() ||
+    'Import từ Word/PDF';
 
   // Ensure question code does not clash with existing bank codes
   let resolvedCode = (raw.code || '').trim();
@@ -324,7 +397,24 @@ export async function buildPreparedWordQuestionForBank(
 
   const newId = buildUniqueWordQuestionId(index);
 
-  return {
+  // Clone nested question-type structures so source parsed objects are never mutated
+  const clonedOptions = optimized.options
+    ? optimized.options.map((o) => ({ ...o }))
+    : undefined;
+  const clonedCorrectOptionIds = Array.isArray(optimized.correctOptionIds)
+    ? [...optimized.correctOptionIds]
+    : undefined;
+  const clonedStatements = optimized.statements
+    ? optimized.statements.map((s) => ({ ...s }))
+    : undefined;
+  const clonedShortAnswerConfig = optimized.shortAnswerConfig
+    ? {
+        ...optimized.shortAnswerConfig,
+        acceptableAnswers: [...(optimized.shortAnswerConfig.acceptableAnswers || [])],
+      }
+    : undefined;
+
+  const prepared: Question = {
     ...optimized,
     id: newId,
     code: resolvedCode,
@@ -333,13 +423,17 @@ export async function buildPreparedWordQuestionForBank(
     subjectName,
     grade,
     topic,
-    ...(chapterId ? { chapterId } : {}),
-    ...(chapterName ? { chapterName } : {}),
-    ...(lessonId ? { lessonId } : {}),
-    ...(lessonName ? { lessonName } : {}),
-    ...(lessonTopic ? { lessonTopic } : {}),
-    ...(textbookSeries ? { textbookSeries } : {}),
+    chapterId,
+    chapterName,
+    lessonId,
+    lessonName,
+    lessonTopic,
+    textbookSeries,
     level,
+    options: clonedOptions,
+    correctOptionIds: clonedCorrectOptionIds,
+    statements: clonedStatements,
+    shortAnswerConfig: clonedShortAnswerConfig,
     source: source.slice(0, 300),
     ownerId,
     authorId: ownerId,
@@ -347,6 +441,20 @@ export async function buildPreparedWordQuestionForBank(
     createdAt: nowIso,
     updatedAt: nowIso,
   };
+
+  // Strip undefined optional fields cleanly
+  if (!chapterId) delete prepared.chapterId;
+  if (!chapterName) delete prepared.chapterName;
+  if (!lessonId) delete prepared.lessonId;
+  if (!lessonName) delete prepared.lessonName;
+  if (!lessonTopic) delete prepared.lessonTopic;
+  if (!textbookSeries) delete prepared.textbookSeries;
+  if (!clonedOptions) delete prepared.options;
+  if (!clonedCorrectOptionIds) delete prepared.correctOptionIds;
+  if (!clonedStatements) delete prepared.statements;
+  if (!clonedShortAnswerConfig) delete prepared.shortAnswerConfig;
+
+  return prepared;
 }
 
 /**

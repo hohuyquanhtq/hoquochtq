@@ -55,6 +55,7 @@ import {
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { ExamAnswerDashboard } from './ExamAnswerDashboard';
 import { WordSaveToBankModal } from './WordSaveToBankModal';
+import { CurriculumCascadeSelector } from './CurriculumCascadeSelector';
 import { isolateAnswerBlock, deepScanWithGemini } from '../../utils/answerExtractionEngine';
 
 interface ExamUploaderProps {
@@ -2254,73 +2255,44 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Môn học</label>
-                  <select
-                    value={editingQuestion.subjectId || resolveQuestionSubject(editingQuestion, subjects).id}
-                    onChange={(e) => {
-                      const matched = subjects.find((s) => s.id === e.target.value);
-                      setEditingQuestion({
-                        ...editingQuestion,
-                        subjectId: e.target.value,
-                        subjectName: matched?.name || editingQuestion.subjectName,
-                      });
-                    }}
-                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                  >
-                    {subjects.map((sub) => (
-                      <option key={sub.id} value={sub.id}>
-                        {sub.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Khối lớp</label>
-                  <select
-                    value={editingQuestion.grade}
-                    onChange={(e) =>
-                      setEditingQuestion({ ...editingQuestion, grade: e.target.value as ChemGrade })
-                    }
-                    className="w-full p-2.5 rounded-xl border border-slate-300 font-semibold text-sm bg-slate-50 focus:ring-2 focus:ring-teal-600 focus:outline-none"
-                  >
-                    <option value="10">Lớp 10</option>
-                    <option value="11">Lớp 11</option>
-                    <option value="12">Lớp 12</option>
-                    <option value="chuyen_hsg">Chuyên &amp; HSG</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Chương (tùy chọn riêng câu)</label>
-                  <input
-                    type="text"
-                    value={editingQuestion.chapterName || ''}
-                    onChange={(e) => setEditingQuestion({ ...editingQuestion, chapterName: e.target.value })}
-                    placeholder="Có thể chọn chung khi lưu vào ngân hàng"
-                    className="w-full p-2.5 rounded-xl border border-slate-300 text-sm"
-                  />
-                </div>
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Bài học / Chủ đề</label>
-                  <input
-                    type="text"
-                    value={editingQuestion.lessonName || editingQuestion.lessonTopic || ''}
-                    onChange={(e) =>
-                      setEditingQuestion({
-                        ...editingQuestion,
-                        lessonName: e.target.value,
-                        lessonTopic: e.target.value,
-                      })
-                    }
-                    placeholder="Có thể chọn theo Cascading Dropdown khi lưu"
-                    className="w-full p-2.5 rounded-xl border border-slate-300 text-sm"
-                  />
-                </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2">
+                <p className="text-xs font-bold text-slate-700">
+                  Phân loại riêng cho câu hỏi này (Môn học · Khối lớp · Chương · Bài học)
+                </p>
+                <CurriculumCascadeSelector
+                  value={{
+                    subjectId:
+                      editingQuestion.subjectId ||
+                      resolveQuestionSubject(editingQuestion, subjects).id,
+                    subjectName:
+                      editingQuestion.subjectName ||
+                      resolveQuestionSubject(editingQuestion, subjects).name,
+                    grade: editingQuestion.grade || selectedGrade,
+                    textbookSeries: editingQuestion.textbookSeries || '',
+                    chapterId: editingQuestion.chapterId || '',
+                    chapterName: editingQuestion.chapterName || '',
+                    lessonId: editingQuestion.lessonId || '',
+                    lessonName: editingQuestion.lessonName || editingQuestion.lessonTopic || '',
+                  }}
+                  subjects={subjects}
+                  requireChapterBeforeLesson
+                  preserveGradeOnSubjectChange
+                  compact
+                  onChange={(next) =>
+                    setEditingQuestion({
+                      ...editingQuestion,
+                      subjectId: next.subjectId,
+                      subjectName: next.subjectName,
+                      grade: (next.grade || editingQuestion.grade) as ChemGrade,
+                      textbookSeries: next.textbookSeries || undefined,
+                      chapterId: next.chapterId || undefined,
+                      chapterName: next.chapterName || undefined,
+                      lessonId: next.lessonId || undefined,
+                      lessonName: next.lessonName || undefined,
+                      lessonTopic: next.lessonName || undefined,
+                    })
+                  }
+                />
               </div>
 
               <div>

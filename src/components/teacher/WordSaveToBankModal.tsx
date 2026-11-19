@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -15,6 +15,7 @@ import {
   RefreshCw,
   Save,
   ShieldAlert,
+  SlidersHorizontal,
   Square,
   X,
   XCircle,
@@ -33,6 +34,7 @@ import {
   DEFAULT_SUBJECT_ID,
   DEFAULT_SUBJECT_NAME,
   QUESTION_TYPE_SHORT_LABELS,
+  resolveQuestionSubject,
 } from '../../constants/subjects';
 import { auth } from '../../services/firebase';
 import {
@@ -47,6 +49,7 @@ import {
 import {
   detectWordDuplicateQuestions,
   DuplicateMatchInfo,
+  PerQuestionClassification,
   persistWordQuestionsToBank,
   WordBankClassificationInput,
   WordBankSaveResult,
@@ -91,6 +94,41 @@ function getProgressWidthClass(done: number, total: number): string {
   return PROGRESS_WIDTH_CLASSES[bucket] || 'w-0';
 }
 
+function formatDefaultSourceLabel(fileName?: string): string {
+  if (!fileName) return 'Import từ Word/PDF';
+  if (/\.pdf$/i.test(fileName)) return `Import từ PDF: ${fileName}`;
+  return `Import từ Word: ${fileName}`;
+}
+
+function buildInitialPerQuestionMeta(
+  questions: Question[],
+  subjects: SubjectItem[],
+  defaultGrade: ChemGrade
+): Record<string, CurriculumSelectionValue> {
+  const map: Record<string, CurriculumSelectionValue> = {};
+  const fallbackGrade: ChemGrade =
+    defaultGrade === '10' || defaultGrade === '11' || defaultGrade === '12' ? defaultGrade : '12';
+
+  for (const q of questions) {
+    const resolvedSub = resolveQuestionSubject(q, subjects);
+    const resolvedGrade: ChemGrade =
+      q.grade === '10' || q.grade === '11' || q.grade === '12' || q.grade === 'chuyen_hsg'
+        ? q.grade
+        : fallbackGrade;
+    map[q.id] = {
+      subjectId: q.subjectId || resolvedSub.id,
+      subjectName: q.subjectName || resolvedSub.name,
+      grade: resolvedGrade,
+      textbookSeries: q.textbookSeries || '',
+      chapterId: q.chapterId || '',
+      chapterName: q.chapterName || '',
+      lessonId: q.lessonId || '',
+      lessonName: q.lessonName || q.lessonTopic || '',
+    };
+  }
+  return map;
+}
+
 export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
   isOpen,
   questionsToSave,
@@ -129,6 +167,10 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
       : '12';
   }, [questionsToSave, defaultGrade]);
 
+  // Primary configuration option: apply batch metadata to all questions (default: true)
+  const [applyToAll, setApplyToAll] = useState<boolean>(true);
+
+  // Batch classification state (used when applyToAll === true)
   const [curriculumValue, setCurriculumValue] = useState<CurriculumSelectionValue>(() => ({
     subjectId: initialSubject.id,
     subjectName: initialSubject.name,
@@ -140,14 +182,22 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     lessonName: questionsToSave[0]?.lessonName || '',
   }));
 
-  const [loadedLessonsCount, setLoadedLessonsCount] = useState<number>(0);
+  // Per-question classification state (used when applyToAll === false)
+  const [perQuestionMeta, setPerQuestionMeta] = useState<Record<string, CurriculumSelectionValue>>(
+    () => buildInitialPerQuestionMeta(questionsToSave, subjects, defaultGrade)
+  );
+  const [expandedQuestionId, setExpandedQuestionId] = useState<string | null>(null);
+
+  const [loadedLessons, setLoadedLessons] = useState<CurriculumLesson[]>([]);
+  const [isCatalogLoading, setIsCatalogLoading] = useState<boolean>(false);
   const [schoolTextbookSeries, setSchoolTextbookSeries] = useState<string>('');
+  const [showAdvancedOptions, setShowAdvancedOptions] = useState<boolean>(false);
   const [levelMode, setLevelMode] = useState<'keep_per_question' | 'apply_all'>('keep_per_question');
   const [defaultLevel, setDefaultLevel] = useState<CognitiveLevel>('nhan_biet');
   const [typeMode, setTypeMode] = useState<'keep_per_question' | 'apply_all'>('keep_per_question');
   const [defaultType, setDefaultType] = useState<QuestionType>('part1_single_choice');
-  const [sourceLabel, setSourceLabel] = useState<string>(
-    sourceFileName ? `Import từ Word: ${sourceFileName}` : 'Import từ Word (.docx)'
+  const [sourceLabel, setSourceLabel] = useState<string>(() =>
+    formatDefaultSourceLabel(sourceFileName)
   );
   const [skipDuplicates, setSkipDuplicates] = useState<boolean>(true);
 
@@ -163,8 +213,9 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
   const [isCheckingDuplicates, setIsCheckingDuplicates] = useState<boolean>(false);
   const [checkError, setCheckError] = useState<string | null>(null);
 
-  // Save execution & result state
+  // Save execution & result state + synchronous ref lock to prevent rapid double-click duplicates
   const [isSaving, setIsSaving] = useState<boolean>(false);
+  const saveInFlightRef = useRef<boolean>(false);
   const [progress, setProgress] = useState<{ done: number; total: number; currentCode: string }>({
     done: 0,
     total: 0,
@@ -176,15 +227,18 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
   // Reset modal state whenever opened with new selection
   useEffect(() => {
     if (!isOpen) return;
+    setApplyToAll(true);
+    setExpandedQuestionId(null);
+    setShowAdvancedOptions(false);
     setCheckedIds(new Set(questionsToSave.map((q) => q.id)));
     setSaveResult(null);
     setValidationError(null);
     setCheckError(null);
     setIsSaving(false);
+    saveInFlightRef.current = false;
     setProgress({ done: 0, total: 0, currentCode: '' });
-    setSourceLabel(
-      sourceFileName ? `Import từ Word: ${sourceFileName}` : 'Import từ Word (.docx)'
-    );
+    setSourceLabel(formatDefaultSourceLabel(sourceFileName));
+
     setCurriculumValue({
       subjectId: initialSubject.id,
       subjectName: initialSubject.name,
@@ -195,6 +249,8 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
       lessonId: questionsToSave[0]?.lessonId || '',
       lessonName: questionsToSave[0]?.lessonName || '',
     });
+
+    setPerQuestionMeta(buildInitialPerQuestionMeta(questionsToSave, subjects, defaultGrade));
 
     let active = true;
     void fetchCurriculumConfigFromFirestore().then((cfg) => {
@@ -235,7 +291,17 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     return () => {
       active = false;
     };
-  }, [isOpen, questionsToSave, sourceFileName, initialSubject, initialGrade, currentUserId, existingBankQuestions]);
+  }, [
+    isOpen,
+    questionsToSave,
+    sourceFileName,
+    initialSubject,
+    initialGrade,
+    currentUserId,
+    existingBankQuestions,
+    subjects,
+    defaultGrade,
+  ]);
 
   const activeCandidates = useMemo(
     () => questionsToSave.filter((q) => checkedIds.has(q.id)),
@@ -254,6 +320,84 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
 
   const netNewCount = activeCandidates.length - duplicateCandidates.length;
 
+  // Compute strict validity state for the Confirm button
+  const formValidationStatus = useMemo((): { valid: boolean; reason: string | null } => {
+    if (activeCandidates.length === 0) {
+      return {
+        valid: false,
+        reason: 'Vui lòng chọn ít nhất 1 câu hỏi để lưu vào ngân hàng.',
+      };
+    }
+
+    if (applyToAll) {
+      if (!curriculumValue.subjectId) {
+        return { valid: false, reason: 'Vui lòng chọn Môn học.' };
+      }
+      if (
+        curriculumValue.grade !== '10' &&
+        curriculumValue.grade !== '11' &&
+        curriculumValue.grade !== '12'
+      ) {
+        return { valid: false, reason: 'Vui lòng chọn Khối lớp (Lớp 10, 11 hoặc 12).' };
+      }
+      if (isCatalogLoading) {
+        return {
+          valid: false,
+          reason: 'Đang tải danh mục chương và bài học từ Firestore...',
+        };
+      }
+      if (loadedLessons.length > 0) {
+        if (!curriculumValue.chapterId) {
+          return { valid: false, reason: 'Vui lòng chọn Chương / Chủ đề.' };
+        }
+        if (!curriculumValue.lessonId) {
+          return { valid: false, reason: 'Vui lòng chọn Bài học thuộc chương đã chọn.' };
+        }
+        const belongsToChapter = loadedLessons.some(
+          (l) =>
+            l.chapterId === curriculumValue.chapterId &&
+            (l.lessonId === curriculumValue.lessonId || l.id === curriculumValue.lessonId)
+        );
+        if (!belongsToChapter) {
+          return {
+            valid: false,
+            reason: 'Bài học đang chọn không thuộc Chương / Chủ đề hiện tại. Vui lòng chọn lại.',
+          };
+        }
+      }
+      return { valid: true, reason: null };
+    }
+
+    // Per-question mode: verify each selected question has a valid subject & grade
+    for (let idx = 0; idx < activeCandidates.length; idx++) {
+      const q = activeCandidates[idx];
+      const meta = perQuestionMeta[q.id];
+      const subId = meta?.subjectId || q.subjectId;
+      const grade = meta?.grade || q.grade;
+      if (!subId) {
+        return {
+          valid: false,
+          reason: `Câu ${q.code || idx + 1} chưa có Môn học. Vui lòng cấu hình riêng cho câu này.`,
+        };
+      }
+      if (!grade) {
+        return {
+          valid: false,
+          reason: `Câu ${q.code || idx + 1} chưa có Khối lớp. Vui lòng cấu hình riêng cho câu này.`,
+        };
+      }
+    }
+
+    return { valid: true, reason: null };
+  }, [
+    activeCandidates,
+    applyToAll,
+    curriculumValue,
+    isCatalogLoading,
+    loadedLessons,
+    perQuestionMeta,
+  ]);
+
   const toggleCandidate = (id: string) => {
     setCheckedIds((prev) => {
       const next = new Set(prev);
@@ -263,19 +407,22 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     });
   };
 
+  const handlePerQuestionMetaChange = (qId: string, nextVal: CurriculumSelectionValue) => {
+    setPerQuestionMeta((prev) => ({
+      ...prev,
+      [qId]: nextVal,
+    }));
+  };
+
   const handleConfirmSave = async () => {
+    // Synchronous re-entrancy lock so rapid repeated clicks NEVER duplicate Firestore writes
+    if (saveInFlightRef.current || isSaving) return;
     setValidationError(null);
 
-    if (activeCandidates.length === 0) {
-      setValidationError('Vui lòng chọn ít nhất 1 câu hỏi để lưu vào ngân hàng.');
-      return;
-    }
-    if (!curriculumValue.subjectId) {
-      setValidationError('Vui lòng chọn Môn học trước khi lưu.');
-      return;
-    }
-    if (!curriculumValue.grade) {
-      setValidationError('Vui lòng chọn Khối lớp (10, 11 hoặc 12) trước khi lưu.');
+    if (!formValidationStatus.valid) {
+      setValidationError(
+        formValidationStatus.reason || 'Vui lòng điền đầy đủ thông tin phân loại bắt buộc.'
+      );
       return;
     }
 
@@ -287,23 +434,49 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
       return;
     }
 
+    saveInFlightRef.current = true;
     setIsSaving(true);
     setProgress({ done: 0, total: activeCandidates.length, currentCode: '' });
 
+    // Build per-question metadata map when applyToAll is false
+    const perQuestionPayload: Record<string, Partial<PerQuestionClassification>> | undefined =
+      !applyToAll
+        ? Object.fromEntries(
+            activeCandidates.map((q) => {
+              const m = perQuestionMeta[q.id];
+              return [
+                q.id,
+                {
+                  subjectId: m?.subjectId || q.subjectId || DEFAULT_SUBJECT_ID,
+                  subjectName: m?.subjectName || q.subjectName || DEFAULT_SUBJECT_NAME,
+                  grade: (m?.grade || q.grade || '12') as ChemGrade,
+                  textbookSeries: m?.textbookSeries || q.textbookSeries || undefined,
+                  chapterId: m?.chapterId || undefined,
+                  chapterName: m?.chapterName || undefined,
+                  lessonId: m?.lessonId || undefined,
+                  lessonName: m?.lessonName || undefined,
+                },
+              ];
+            })
+          )
+        : undefined;
+
     const classification: WordBankClassificationInput = {
-      subjectId: curriculumValue.subjectId,
+      applyToAll,
+      subjectId: curriculumValue.subjectId || DEFAULT_SUBJECT_ID,
       subjectName: curriculumValue.subjectName || DEFAULT_SUBJECT_NAME,
-      grade: curriculumValue.grade as ChemGrade,
+      grade: (curriculumValue.grade || initialGrade) as ChemGrade,
       textbookSeries: curriculumValue.textbookSeries || schoolTextbookSeries || undefined,
       chapterId: curriculumValue.chapterId || undefined,
       chapterName: curriculumValue.chapterName || undefined,
       lessonId: curriculumValue.lessonId || undefined,
       lessonName: curriculumValue.lessonName || undefined,
+      perQuestionMetadata: perQuestionPayload,
       levelMode,
       defaultLevel,
       typeMode,
       defaultType,
-      sourceLabel: sourceLabel.trim() || 'Import từ Word (.docx)',
+      sourceLabel: sourceLabel.trim() || formatDefaultSourceLabel(sourceFileName),
       skipDuplicates,
     };
 
@@ -342,6 +515,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
           : 'Đã xảy ra lỗi không mong muốn khi ghi dữ liệu vào Firestore.'
       );
     } finally {
+      saveInFlightRef.current = false;
       setIsSaving(false);
     }
   };
@@ -356,7 +530,12 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
     : [];
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4">
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="word-save-bank-modal-title"
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/65 backdrop-blur-xs flex items-center justify-center p-4"
+    >
       <div className="bg-white w-full max-w-3xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
         {/* Header */}
         <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between gap-3 shrink-0">
@@ -365,15 +544,15 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
               <Database className="w-5 h-5" />
             </div>
             <div className="min-w-0">
-              <h3 className="font-bold text-base truncate">
+              <h3 id="word-save-bank-modal-title" className="font-bold text-base tracking-tight truncate">
                 {saveResult
-                  ? 'Kết quả lưu câu hỏi vào Ngân hàng Firestore'
-                  : 'Xác nhận thông tin lưu vào Ngân hàng câu hỏi'}
+                  ? 'KẾT QUẢ LƯU VÀO NGÂN HÀNG CÂU HỎI'
+                  : 'CẤU HÌNH LƯU VÀO NGÂN HÀNG CÂU HỎI'}
               </h3>
               <p className="text-xs text-slate-300 truncate">
                 {saveResult
                   ? `Collection Firestore: /questions · Đã xử lý ${saveResult.totalSelected} câu hỏi`
-                  : `Đang chuẩn bị lưu ${activeCandidates.length} / ${questionsToSave.length} câu hỏi trực tiếp vào Firestore`}
+                  : `Chuẩn bị lưu ${activeCandidates.length} / ${questionsToSave.length} câu hỏi sau khi bạn xác nhận`}
               </p>
             </div>
           </div>
@@ -413,15 +592,17 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                 )}
                 <div className="space-y-1">
                   <p className="text-base font-bold">
-                    {saveResult.savedQuestions.length > 0
-                      ? 'Đã hoàn tất lưu câu hỏi vào Firestore!'
+                    {saveResult.savedQuestions.length > 0 && saveResult.failedItems.length === 0
+                      ? `Đã lưu thành công ${saveResult.savedQuestions.length} câu hỏi vào Ngân hàng!`
+                      : saveResult.savedQuestions.length > 0 && saveResult.failedItems.length > 0
+                      ? `Lưu một phần: ${saveResult.savedQuestions.length} câu thành công, ${saveResult.failedItems.length} câu thất bại.`
                       : saveResult.failedItems.length > 0
                       ? 'Không lưu được câu hỏi vào Firestore — vui lòng kiểm tra chi tiết lỗi bên dưới.'
                       : 'Tất cả câu hỏi được chọn đều đã tồn tại trong Ngân hàng câu hỏi.'}
                   </p>
                   <p className="text-xs opacity-90">
                     Dữ liệu lưu thành công đã được ghi trực tiếp vào collection{' '}
-                    <code className="font-mono font-semibold">/questions</code> gắn với tài khoản giáo viên hiện tại và sẽ giữ nguyên khi tải lại trang hoặc đăng nhập lại.
+                    <code className="font-mono font-semibold">/questions</code> gắn với tài khoản giáo viên hiện tại và giữ nguyên dữ liệu gốc của lượt bóc tách.
                   </p>
                 </div>
               </div>
@@ -447,7 +628,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                   </p>
                 </div>
                 <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200">
-                  <p className="text-xs font-semibold text-rose-800">Lỗi ghi Firestore</p>
+                  <p className="text-xs font-semibold text-rose-800">Lưu thất bại</p>
                   <p className="text-2xl font-bold text-rose-700 mt-1">
                     {saveResult.failedItems.length}
                   </p>
@@ -508,7 +689,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                 </div>
               )}
 
-              {/* Saved sample confirmation */}
+              {/* Saved summary confirmation */}
               {saveResult.savedQuestions.length > 0 && (
                 <div className="rounded-xl border border-emerald-200 bg-emerald-50/40 p-3.5 text-xs text-emerald-900 space-y-1.5">
                   <p className="font-bold flex items-center gap-1.5">
@@ -517,164 +698,230 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                       Đã ghi thành công {saveResult.savedQuestions.length} câu hỏi mới vào Ngân hàng của bạn
                     </span>
                   </p>
-                  <p className="text-emerald-800">
-                    Môn: <strong>{curriculumValue.subjectName}</strong> · Lớp:{' '}
-                    <strong>{curriculumValue.grade}</strong>
-                    {curriculumValue.chapterName ? ` · ${curriculumValue.chapterName}` : ''}
-                    {curriculumValue.lessonName ? ` · ${curriculumValue.lessonName}` : ''}
-                  </p>
+                  {applyToAll ? (
+                    <p className="text-emerald-800">
+                      Phân loại áp dụng: <strong>{curriculumValue.subjectName}</strong> · Lớp{' '}
+                      <strong>{curriculumValue.grade}</strong>
+                      {curriculumValue.chapterName ? ` · ${curriculumValue.chapterName}` : ''}
+                      {curriculumValue.lessonName ? ` · ${curriculumValue.lessonName}` : ''}
+                    </p>
+                  ) : (
+                    <p className="text-emerald-800">
+                      Đã lưu theo cấu hình metadata riêng của từng câu hỏi (không ghi đè đồng loạt).
+                    </p>
+                  )}
                 </div>
               )}
             </div>
           ) : (
-            /* VIEW 2: CLASSIFICATION & PRE-SAVE CONFIRMATION */
+            /* VIEW 2: CONFIGURATION FORM */
             <div className="space-y-5">
-              {/* Step A: Cascading Curriculum Classification */}
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3.5">
-                <div className="flex items-center justify-between gap-2">
-                  <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                    <BookOpen className="w-4 h-4 text-teal-600 shrink-0" />
-                    <span>1. Phân loại chương trình SGK (Môn · Lớp · Bộ sách · Chương · Bài học)</span>
-                  </h4>
-                  {loadedLessonsCount > 0 && (
-                    <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
-                      {loadedLessonsCount} bài học SGK
-                    </span>
-                  )}
-                </div>
-
-                <CurriculumCascadeSelector
-                  value={curriculumValue}
-                  subjects={subjects}
-                  onChange={(next) => setCurriculumValue(next)}
-                  onLessonsLoaded={(loaded: CurriculumLesson[]) => {
-                    setLoadedLessonsCount(loaded.length);
-                    if (loaded.length > 0 && !curriculumValue.textbookSeries) {
-                      setCurriculumValue((prev) => ({
-                        ...prev,
-                        textbookSeries: prev.textbookSeries || loaded[0].textbookSeries || schoolTextbookSeries,
-                      }));
-                    }
+              {/* Primary Option Checkbox (Section 2E) */}
+              <label className="flex items-start gap-3 p-4 rounded-2xl bg-teal-50/70 border border-teal-200 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={applyToAll}
+                  disabled={isSaving}
+                  onChange={(e) => {
+                    setApplyToAll(e.target.checked);
+                    setValidationError(null);
                   }}
+                  className="mt-0.5 w-4 h-4 rounded border-teal-400 text-teal-600 focus:ring-teal-500"
                 />
+                <div className="space-y-0.5">
+                  <span className="text-sm font-bold text-slate-900 block">
+                    Áp dụng đồng loạt cho toàn bộ câu hỏi trong lượt bóc tách này
+                  </span>
+                  <span className="text-xs text-slate-600 block">
+                    {applyToAll
+                      ? 'Môn học, Khối lớp, Chương và Bài học chọn bên dưới sẽ được gán đồng loạt cho tất cả câu hỏi đang lưu.'
+                      : 'Chế độ phân loại riêng: Hệ thống giữ nguyên metadata đã gán cho từng câu hoặc cho phép cấu hình riêng từng câu bên dưới (không tự động ghi đè đồng loạt).'}
+                  </span>
+                </div>
+              </label>
 
-                {/* Explicit Textbook Series override/display if needed */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      Bộ sách giáo khoa áp dụng
-                    </label>
-                    <input
-                      type="text"
-                      value={curriculumValue.textbookSeries || ''}
-                      onChange={(e) =>
-                        setCurriculumValue((prev) => ({
-                          ...prev,
-                          textbookSeries: e.target.value,
-                        }))
-                      }
-                      placeholder={
-                        schoolTextbookSeries || 'Ví dụ: Kết nối tri thức, Chân trời sáng tạo, Cánh diều'
-                      }
-                      className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    />
+              {/* MODE A: Apply to all questions */}
+              {applyToAll ? (
+                <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      <BookOpen className="w-4 h-4 text-teal-600 shrink-0" />
+                      <span>Phân loại câu hỏi (Môn học · Khối lớp · Chương / Chủ đề · Bài học)</span>
+                    </h4>
+                    {loadedLessons.length > 0 && !isCatalogLoading && (
+                      <span className="text-[11px] font-semibold text-teal-700 tabular-nums">
+                        {loadedLessons.length} bài học từ Firestore
+                      </span>
+                    )}
                   </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      Nguồn gốc câu hỏi (Source)
-                    </label>
-                    <div className="relative">
-                      <FileText className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        value={sourceLabel}
-                        onChange={(e) => setSourceLabel(e.target.value)}
-                        placeholder="Import từ Word (.docx)"
-                        className="w-full min-h-[40px] pl-8 pr-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                      />
+                  <CurriculumCascadeSelector
+                    value={curriculumValue}
+                    subjects={subjects}
+                    requireChapterBeforeLesson
+                    preserveGradeOnSubjectChange
+                    onChange={(next) => {
+                      setCurriculumValue(next);
+                      setValidationError(null);
+                    }}
+                    onLoadingChange={(loading) => setIsCatalogLoading(loading)}
+                    onLessonsLoaded={(loaded: CurriculumLesson[]) => {
+                      setLoadedLessons(loaded);
+                      if (loaded.length > 0) {
+                        setCurriculumValue((prev) => {
+                          // Verify any previously carried chapter/lesson still belongs to the freshly loaded catalog
+                          const validChapter = loaded.some((l) => l.chapterId === prev.chapterId);
+                          const validLesson =
+                            validChapter &&
+                            loaded.some(
+                              (l) =>
+                                l.chapterId === prev.chapterId &&
+                                (l.lessonId === prev.lessonId || l.id === prev.lessonId)
+                            );
+                          return {
+                            ...prev,
+                            textbookSeries:
+                              prev.textbookSeries || loaded[0].textbookSeries || schoolTextbookSeries,
+                            chapterId: validChapter ? prev.chapterId : '',
+                            chapterName: validChapter ? prev.chapterName : '',
+                            lessonId: validLesson ? prev.lessonId : '',
+                            lessonName: validLesson ? prev.lessonName : '',
+                          };
+                        });
+                      }
+                    }}
+                  />
+                </div>
+              ) : (
+                /* MODE B: Individual per-question metadata configuration */
+                <div className="rounded-2xl border border-slate-200 bg-slate-50/70 overflow-hidden">
+                  <div className="px-4 py-3 bg-slate-100/80 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <Layers className="w-4 h-4 text-teal-600 shrink-0" />
+                      <h4 className="text-sm font-bold text-slate-900">
+                        Cấu hình phân loại riêng cho từng câu hỏi ({activeCandidates.length} câu đang chọn)
+                      </h4>
                     </div>
+                    <span className="text-[11px] font-semibold text-slate-600">
+                      Giữ nguyên metadata riêng từng câu · Không tự động gán đồng loạt
+                    </span>
+                  </div>
+
+                  <div className="divide-y divide-slate-200 max-h-[360px] overflow-y-auto bg-white">
+                    {questionsToSave.map((q, idx) => {
+                      const isChecked = checkedIds.has(q.id);
+                      const isExpanded = expandedQuestionId === q.id;
+                      const meta = perQuestionMeta[q.id] || {
+                        subjectId: q.subjectId || initialSubject.id,
+                        subjectName: q.subjectName || initialSubject.name,
+                        grade: q.grade || initialGrade,
+                        chapterId: q.chapterId || '',
+                        chapterName: q.chapterName || '',
+                        lessonId: q.lessonId || '',
+                        lessonName: q.lessonName || q.lessonTopic || '',
+                      };
+                      const dup = duplicateMap.get(q.id);
+
+                      return (
+                        <div
+                          key={q.id}
+                          className={`p-3.5 transition-colors ${
+                            isChecked ? 'bg-white' : 'bg-slate-50/70 opacity-60'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div
+                              onClick={() => toggleCandidate(q.id)}
+                              className="flex items-start gap-2.5 min-w-0 flex-1 cursor-pointer"
+                            >
+                              <div className="mt-0.5 text-teal-600 shrink-0">
+                                {isChecked ? (
+                                  <CheckSquare className="w-4 h-4" />
+                                ) : (
+                                  <Square className="w-4 h-4 text-slate-400" />
+                                )}
+                              </div>
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="flex flex-wrap items-center gap-2 text-xs">
+                                  <span className="font-bold text-slate-900">Câu {idx + 1}</span>
+                                  <span className="font-mono text-slate-500">{q.code}</span>
+                                  <span className="text-teal-700 font-semibold">
+                                    {QUESTION_TYPE_SHORT_LABELS[q.type]}
+                                  </span>
+                                  {dup?.isDuplicate && (
+                                    <span className="text-amber-700 font-bold">
+                                      · Trùng ({dup.matchedQuestionCode})
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-xs text-slate-700 line-clamp-1">
+                                  <ChemRenderer text={q.content} inline />
+                                </div>
+                                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
+                                  <span className="font-semibold text-slate-800">
+                                    {meta.subjectName || 'Chưa chọn môn'}
+                                  </span>
+                                  <span>·</span>
+                                  <span className="font-semibold text-slate-800">
+                                    {meta.grade ? `Lớp ${meta.grade}` : 'Chưa chọn lớp'}
+                                  </span>
+                                  {meta.chapterName && (
+                                    <>
+                                      <span>·</span>
+                                      <span className="truncate max-w-[200px]">{meta.chapterName}</span>
+                                    </>
+                                  )}
+                                  {meta.lessonName && (
+                                    <>
+                                      <span>·</span>
+                                      <span className="text-teal-700 font-medium truncate max-w-[220px]">
+                                        {meta.lessonName}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              disabled={!isChecked || isSaving}
+                              onClick={() =>
+                                setExpandedQuestionId((prev) => (prev === q.id ? null : q.id))
+                              }
+                              className="px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-xs font-semibold text-slate-700 inline-flex items-center gap-1 shrink-0 disabled:opacity-40"
+                            >
+                              <span>{isExpanded ? 'Thu gọn' : 'Cấu hình riêng'}</span>
+                              {isExpanded ? (
+                                <ChevronUp className="w-3.5 h-3.5" />
+                              ) : (
+                                <ChevronDown className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          </div>
+
+                          {isExpanded && isChecked && (
+                            <div className="mt-3 pt-3 border-t border-slate-100 pl-6">
+                              <CurriculumCascadeSelector
+                                value={meta}
+                                subjects={subjects}
+                                requireChapterBeforeLesson
+                                preserveGradeOnSubjectChange
+                                compact
+                                onChange={(nextVal) => handlePerQuestionMetaChange(q.id, nextVal)}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Step B: Cognitive Level & Question Type Settings */}
-              <div className="p-4 rounded-2xl bg-slate-50 border border-slate-200 space-y-3.5">
-                <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-teal-600 shrink-0" />
-                  <span>2. Mức độ nhận thức &amp; Dạng câu hỏi</span>
-                </h4>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold text-slate-700">
-                      Mức độ nhận thức
-                    </label>
-                    <select
-                      value={levelMode}
-                      onChange={(e) =>
-                        setLevelMode(e.target.value as 'keep_per_question' | 'apply_all')
-                      }
-                      className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    >
-                      <option value="keep_per_question">
-                        Giữ nguyên mức độ từng câu đã nhận diện / chỉnh sửa
-                      </option>
-                      <option value="apply_all">
-                        Áp dụng cùng 1 mức độ cho toàn bộ câu đang lưu
-                      </option>
-                    </select>
-                    {levelMode === 'apply_all' && (
-                      <select
-                        value={defaultLevel}
-                        onChange={(e) => setDefaultLevel(e.target.value as CognitiveLevel)}
-                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                      >
-                        {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map((lvl) => (
-                          <option key={lvl} value={lvl}>
-                            {COGNITIVE_LEVEL_LABELS[lvl]}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-
-                  <div className="space-y-2">
-                    <label className="block text-xs font-bold text-slate-700">Dạng câu hỏi</label>
-                    <select
-                      value={typeMode}
-                      onChange={(e) =>
-                        setTypeMode(e.target.value as 'keep_per_question' | 'apply_all')
-                      }
-                      className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                    >
-                      <option value="keep_per_question">
-                        Giữ nguyên dạng câu hỏi đã bóc tách (Phần I, II, III)
-                      </option>
-                      <option value="apply_all">
-                        Ghi đè dạng câu hỏi cho toàn bộ danh sách
-                      </option>
-                    </select>
-                    {typeMode === 'apply_all' && (
-                      <select
-                        value={defaultType}
-                        onChange={(e) => setDefaultType(e.target.value as QuestionType)}
-                        className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
-                      >
-                        {(Object.keys(QUESTION_TYPE_SHORT_LABELS) as QuestionType[]).map((qt) => (
-                          <option key={qt} value={qt}>
-                            {QUESTION_TYPE_SHORT_LABELS[qt]}
-                          </option>
-                        ))}
-                      </select>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Step C: Duplicate Detection Banner */}
+              {/* Duplicate Detection Status */}
               <div
-                className={`p-4 rounded-2xl border space-y-3 ${
+                className={`p-4 rounded-2xl border space-y-2.5 ${
                   duplicateCandidates.length > 0
                     ? 'bg-amber-50/80 border-amber-300'
                     : 'bg-emerald-50/60 border-emerald-200'
@@ -701,7 +948,7 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                       <>
                         <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
                         <span className="text-emerald-900">
-                          Không phát hiện câu trùng lặp · Sẵn sàng lưu {activeCandidates.length} câu hỏi mới vào Firestore
+                          Không phát hiện câu trùng lặp · Sẵn sàng lưu {activeCandidates.length} câu hỏi vào Ngân hàng
                         </span>
                       </>
                     )}
@@ -734,16 +981,17 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                   <input
                     type="checkbox"
                     checked={skipDuplicates}
+                    disabled={isSaving}
                     onChange={(e) => setSkipDuplicates(e.target.checked)}
                     className="mt-0.5 w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
                   />
                   <span>
-                    <strong>Tự động bỏ qua câu hỏi trùng</strong> (so sánh cả nội dung, công thức hóa học/toán, phương án/mệnh đề và hình ảnh; tuyệt đối không tự ghi đè câu hỏi cũ).
+                    <strong>Tự động bỏ qua câu hỏi trùng</strong> (so sánh nội dung, công thức hóa học/toán, phương án/mệnh đề và hình ảnh; không ghi đè câu cũ).
                   </span>
                 </label>
 
                 {showDuplicatePreview && duplicateCandidates.length > 0 && (
-                  <div className="rounded-xl bg-white border border-amber-200 divide-y divide-amber-100 max-h-44 overflow-y-auto">
+                  <div className="rounded-xl bg-white border border-amber-200 divide-y divide-amber-100 max-h-40 overflow-y-auto">
                     {duplicateCandidates.map((q) => {
                       const info = duplicateMap.get(q.id);
                       return (
@@ -764,72 +1012,195 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                 )}
               </div>
 
-              {/* Step D: Collapsible Candidate Checklist */}
+              {/* Optional Collapsible Advanced Settings (Level, Question Type, Source) */}
               <div className="border border-slate-200 rounded-2xl overflow-hidden">
                 <button
                   type="button"
-                  onClick={() => setShowCandidateList((prev) => !prev)}
+                  onClick={() => setShowAdvancedOptions((prev) => !prev)}
                   className="w-full px-4 py-3 bg-slate-50 hover:bg-slate-100/80 flex items-center justify-between text-xs font-bold text-slate-800 transition-colors"
                 >
-                  <span>
-                    Danh sách câu hỏi sẽ lưu ({activeCandidates.length} / {questionsToSave.length} câu đang chọn)
+                  <span className="inline-flex items-center gap-2">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-teal-600" />
+                    <span>Tùy chọn nâng cao (Mức độ nhận thức, Dạng câu hỏi, Nguồn tài liệu)</span>
                   </span>
-                  {showCandidateList ? (
+                  {showAdvancedOptions ? (
                     <ChevronUp className="w-4 h-4 text-slate-500" />
                   ) : (
                     <ChevronDown className="w-4 h-4 text-slate-500" />
                   )}
                 </button>
 
-                {showCandidateList && (
-                  <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto bg-white">
-                    {questionsToSave.map((q, idx) => {
-                      const isChecked = checkedIds.has(q.id);
-                      const dup = duplicateMap.get(q.id);
-                      return (
-                        <div
-                          key={q.id}
-                          onClick={() => toggleCandidate(q.id)}
-                          className={`px-4 py-2.5 flex items-start gap-3 cursor-pointer text-xs hover:bg-slate-50 ${
-                            isChecked ? 'bg-white' : 'bg-slate-50/70 opacity-60'
-                          }`}
+                {showAdvancedOptions && (
+                  <div className="p-4 bg-white space-y-4 border-t border-slate-200">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold text-slate-700">
+                          Mức độ nhận thức
+                        </label>
+                        <select
+                          value={levelMode}
+                          onChange={(e) =>
+                            setLevelMode(e.target.value as 'keep_per_question' | 'apply_all')
+                          }
+                          className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
                         >
-                          <div className="mt-0.5 text-teal-600 shrink-0">
-                            {isChecked ? (
-                              <CheckSquare className="w-4 h-4" />
-                            ) : (
-                              <Square className="w-4 h-4 text-slate-400" />
+                          <option value="keep_per_question">
+                            Giữ nguyên mức độ từng câu đã nhận diện / chỉnh sửa
+                          </option>
+                          <option value="apply_all">
+                            Áp dụng cùng 1 mức độ cho toàn bộ câu đang lưu
+                          </option>
+                        </select>
+                        {levelMode === 'apply_all' && (
+                          <select
+                            value={defaultLevel}
+                            onChange={(e) => setDefaultLevel(e.target.value as CognitiveLevel)}
+                            className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          >
+                            {(Object.keys(COGNITIVE_LEVEL_LABELS) as CognitiveLevel[]).map(
+                              (lvl) => (
+                                <option key={lvl} value={lvl}>
+                                  {COGNITIVE_LEVEL_LABELS[lvl]}
+                                </option>
+                              )
                             )}
-                          </div>
-                          <div className="min-w-0 flex-1 space-y-0.5">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-bold text-slate-900">Câu {idx + 1}</span>
-                              <span className="font-mono text-slate-500">{q.code}</span>
-                              <span className="text-teal-700 font-semibold">
-                                {QUESTION_TYPE_SHORT_LABELS[q.type]}
-                              </span>
-                              {dup?.isDuplicate && (
-                                <span className="text-amber-700 font-bold">
-                                  · Trùng ({dup.matchedQuestionCode})
-                                </span>
-                              )}
-                            </div>
-                            <div className="text-slate-700 line-clamp-2">
-                              <ChemRenderer text={q.content} inline />
-                            </div>
-                          </div>
-                        </div>
-                      );
-                    })}
+                          </select>
+                        )}
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-xs font-bold text-slate-700">
+                          Dạng câu hỏi
+                        </label>
+                        <select
+                          value={typeMode}
+                          onChange={(e) =>
+                            setTypeMode(e.target.value as 'keep_per_question' | 'apply_all')
+                          }
+                          className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        >
+                          <option value="keep_per_question">
+                            Giữ nguyên dạng câu hỏi đã bóc tách (Phần I, II, III)
+                          </option>
+                          <option value="apply_all">
+                            Ghi đè dạng câu hỏi cho toàn bộ danh sách
+                          </option>
+                        </select>
+                        {typeMode === 'apply_all' && (
+                          <select
+                            value={defaultType}
+                            onChange={(e) => setDefaultType(e.target.value as QuestionType)}
+                            className="w-full min-h-[38px] px-3 py-1.5 rounded-xl border border-teal-300 bg-teal-50/40 text-xs font-bold text-teal-900 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                          >
+                            {(Object.keys(QUESTION_TYPE_SHORT_LABELS) as QuestionType[]).map(
+                              (qt) => (
+                                <option key={qt} value={qt}>
+                                  {QUESTION_TYPE_SHORT_LABELS[qt]}
+                                </option>
+                              )
+                            )}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1.5">
+                        Nguồn gốc câu hỏi (Source)
+                      </label>
+                      <div className="relative">
+                        <FileText className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          type="text"
+                          value={sourceLabel}
+                          onChange={(e) => setSourceLabel(e.target.value)}
+                          placeholder="Import từ Word/PDF"
+                          className="w-full min-h-[38px] pl-8 pr-3 py-1.5 rounded-xl border border-slate-300 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-teal-500"
+                        />
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Validation Error */}
-              {validationError && (
-                <div className="p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
-                  <span>{validationError}</span>
+              {/* Collapsible Candidate Checklist when applyToAll === true */}
+              {applyToAll && (
+                <div className="border border-slate-200 rounded-2xl overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setShowCandidateList((prev) => !prev)}
+                    className="w-full px-4 py-3 bg-slate-50 hover:bg-slate-100/80 flex items-center justify-between text-xs font-bold text-slate-800 transition-colors"
+                  >
+                    <span>
+                      Danh sách câu hỏi sẽ lưu ({activeCandidates.length} / {questionsToSave.length} câu đang chọn)
+                    </span>
+                    {showCandidateList ? (
+                      <ChevronUp className="w-4 h-4 text-slate-500" />
+                    ) : (
+                      <ChevronDown className="w-4 h-4 text-slate-500" />
+                    )}
+                  </button>
+
+                  {showCandidateList && (
+                    <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto bg-white">
+                      {questionsToSave.map((q, idx) => {
+                        const isChecked = checkedIds.has(q.id);
+                        const dup = duplicateMap.get(q.id);
+                        return (
+                          <div
+                            key={q.id}
+                            onClick={() => toggleCandidate(q.id)}
+                            className={`px-4 py-2.5 flex items-start gap-3 cursor-pointer text-xs hover:bg-slate-50 ${
+                              isChecked ? 'bg-white' : 'bg-slate-50/70 opacity-60'
+                            }`}
+                          >
+                            <div className="mt-0.5 text-teal-600 shrink-0">
+                              {isChecked ? (
+                                <CheckSquare className="w-4 h-4" />
+                              ) : (
+                                <Square className="w-4 h-4 text-slate-400" />
+                              )}
+                            </div>
+                            <div className="min-w-0 flex-1 space-y-0.5">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="font-bold text-slate-900">Câu {idx + 1}</span>
+                                <span className="font-mono text-slate-500">{q.code}</span>
+                                <span className="text-teal-700 font-semibold">
+                                  {QUESTION_TYPE_SHORT_LABELS[q.type]}
+                                </span>
+                                {dup?.isDuplicate && (
+                                  <span className="text-amber-700 font-bold">
+                                    · Trùng ({dup.matchedQuestionCode})
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-slate-700 line-clamp-2">
+                                <ChemRenderer text={q.content} inline />
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Validation Error / Missing Required Fields Notice */}
+              {(validationError || (!formValidationStatus.valid && !isSaving)) && (
+                <div
+                  className={`p-3.5 rounded-xl border text-xs font-semibold flex items-start gap-2 ${
+                    validationError
+                      ? 'bg-rose-50 border-rose-200 text-rose-800'
+                      : 'bg-amber-50 border-amber-200 text-amber-900'
+                  }`}
+                >
+                  <AlertCircle
+                    className={`w-4 h-4 shrink-0 mt-0.5 ${
+                      validationError ? 'text-rose-600' : 'text-amber-600'
+                    }`}
+                  />
+                  <span>{validationError || formValidationStatus.reason}</span>
                 </div>
               )}
 
@@ -905,28 +1276,26 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                 type="button"
                 disabled={isSaving}
                 onClick={onClose}
-                className="px-4 min-h-[42px] rounded-xl text-slate-700 hover:bg-slate-200 text-sm font-semibold disabled:opacity-50"
+                className="px-4 min-h-[42px] rounded-xl border border-slate-300 bg-white text-slate-700 hover:bg-slate-100 text-sm font-semibold disabled:opacity-50"
               >
-                Hủy bỏ
+                Hủy
               </button>
 
               <button
                 type="button"
-                disabled={isSaving || activeCandidates.length === 0}
+                disabled={isSaving || !formValidationStatus.valid}
                 onClick={() => void handleConfirmSave()}
-                className="px-5 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white text-sm font-semibold shadow-xs inline-flex items-center gap-2"
+                className="px-5 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 disabled:text-slate-500 disabled:cursor-not-allowed text-white text-sm font-semibold shadow-xs inline-flex items-center gap-2 transition-colors"
               >
                 {isSaving ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin shrink-0" />
-                    <span>Đang lưu vào Firestore...</span>
+                    <span>Đang lưu vào Ngân hàng...</span>
                   </>
                 ) : (
                   <>
                     <Save className="w-4 h-4 shrink-0" />
-                    <span>
-                      Xác nhận lưu {activeCandidates.length} câu vào Ngân hàng
-                    </span>
+                    <span>Xác nhận lưu vào Ngân hàng</span>
                   </>
                 )}
               </button>
