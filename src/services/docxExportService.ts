@@ -58,15 +58,188 @@ const TABLE_BORDERS_ALL = {
   insideVertical: THIN_BORDER,
 };
 
-interface InlineStyleFlags {
+export interface InlineStyleFlags {
   bold?: boolean;
   italics?: boolean;
   size?: number;
+  subScript?: boolean;
+  superScript?: boolean;
+}
+
+interface TextRunSpec {
+  text: string;
+  size: number;
+  bold: boolean;
+  italics: boolean;
+  subScript: boolean;
+  superScript: boolean;
+}
+
+const ESCAPED_LBRACE_SENTINEL = '\uE001';
+const ESCAPED_RBRACE_SENTINEL = '\uE002';
+
+const UNICODE_SUBSCRIPT_MAP: Record<string, string> = {
+  '₀': '0',
+  '₁': '1',
+  '₂': '2',
+  '₃': '3',
+  '₄': '4',
+  '₅': '5',
+  '₆': '6',
+  '₇': '7',
+  '₈': '8',
+  '₉': '9',
+  '₊': '+',
+  '₋': '-',
+  '₍': '(',
+  '₎': ')',
+};
+
+const UNICODE_SUPERSCRIPT_MAP: Record<string, string> = {
+  '⁰': '0',
+  '¹': '1',
+  '²': '2',
+  '³': '3',
+  '⁴': '4',
+  '⁵': '5',
+  '⁶': '6',
+  '⁷': '7',
+  '⁸': '8',
+  '⁹': '9',
+  '⁺': '+',
+  '⁻': '-',
+  '⁽': '(',
+  '⁾': ')',
+};
+
+/**
+ * Extracts a balanced `{ ... }` group starting at `openIndex`.
+ * Returns `null` if no matching closing brace exists.
+ */
+function extractBalancedBraces(
+  input: string,
+  openIndex: number
+): { content: string; endIndex: number } | null {
+  if (input[openIndex] !== '{') return null;
+  let depth = 0;
+  for (let i = openIndex; i < input.length; i++) {
+    const ch = input[i];
+    if (ch === '{') {
+      depth += 1;
+    } else if (ch === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return {
+          content: input.slice(openIndex + 1, i),
+          endIndex: i + 1,
+        };
+      }
+    }
+  }
+  return null;
 }
 
 /**
- * Cleans common LaTeX/HTML tokens from parsed Word text and converts inline bold/italic/sub/sup
- * into native Word TextRun objects formatted in Times New Roman 12pt.
+ * Replaces a 1-argument LaTeX command like `\text{...}`, `\mathrm{...}`, `\ce{...}`, `\sqrt{...}`
+ * while properly handling nested curly braces.
+ */
+function replaceUnaryLatexCommand(
+  input: string,
+  commandName: string,
+  transform: (inner: string) => string
+): string {
+  const token = `\\${commandName}`;
+  let result = '';
+  let idx = 0;
+
+  while (idx < input.length) {
+    const found = input.indexOf(token, idx);
+    if (found === -1) {
+      result += input.slice(idx);
+      break;
+    }
+
+    const afterCmd = found + token.length;
+    // Ensure command boundary (not prefix of a longer command name)
+    if (afterCmd < input.length && /[a-zA-Z]/.test(input[afterCmd])) {
+      result += input.slice(idx, afterCmd);
+      idx = afterCmd;
+      continue;
+    }
+
+    let braceStart = afterCmd;
+    while (braceStart < input.length && input[braceStart] === ' ') {
+      braceStart += 1;
+    }
+
+    const group = extractBalancedBraces(input, braceStart);
+    if (!group) {
+      result += input.slice(idx, afterCmd);
+      idx = afterCmd;
+      continue;
+    }
+
+    result += input.slice(idx, found) + transform(group.content);
+    idx = group.endIndex;
+  }
+
+  return result;
+}
+
+/**
+ * Replaces a 2-argument LaTeX command like `\frac{num}{den}` with balanced brace support.
+ */
+function replaceBinaryLatexCommand(
+  input: string,
+  commandName: string,
+  transform: (first: string, second: string) => string
+): string {
+  const token = `\\${commandName}`;
+  let result = '';
+  let idx = 0;
+
+  while (idx < input.length) {
+    const found = input.indexOf(token, idx);
+    if (found === -1) {
+      result += input.slice(idx);
+      break;
+    }
+
+    const afterCmd = found + token.length;
+    if (afterCmd < input.length && /[a-zA-Z]/.test(input[afterCmd])) {
+      result += input.slice(idx, afterCmd);
+      idx = afterCmd;
+      continue;
+    }
+
+    let pos = afterCmd;
+    while (pos < input.length && input[pos] === ' ') pos += 1;
+    const first = extractBalancedBraces(input, pos);
+    if (!first) {
+      result += input.slice(idx, afterCmd);
+      idx = afterCmd;
+      continue;
+    }
+
+    pos = first.endIndex;
+    while (pos < input.length && input[pos] === ' ') pos += 1;
+    const second = extractBalancedBraces(input, pos);
+    if (!second) {
+      result += input.slice(idx, afterCmd);
+      idx = afterCmd;
+      continue;
+    }
+
+    result += input.slice(idx, found) + transform(first.content, second.content);
+    idx = second.endIndex;
+  }
+
+  return result;
+}
+
+/**
+ * Normalizes HTML/LaTeX/OMML chemical and math markup into a clean intermediate format
+ * ready for native Word TextRun tokenization without losing bold/italic/sub/sup attributes.
  */
 function normalizeRichTextForWord(raw: string): string {
   if (!raw) return '';
@@ -77,9 +250,53 @@ function normalizeRichTextForWord(raw: string): string {
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&amp;/gi, '&')
-    .replace(/\\xrightarrow\{([^}]*)\}/g, ' →[$1] ')
-    .replace(/\\rightarrow|\\to\b/g, ' → ')
-    .replace(/\\rightleftharpoons|\\leftrightarrow/g, ' ⇌ ')
+    // Protect explicitly escaped literal braces \{ and \}
+    .replace(/\\\{/g, ESCAPED_LBRACE_SENTINEL)
+    .replace(/\\\}/g, ESCAPED_RBRACE_SENTINEL);
+
+  // Convert \ce{...} chemical expressions (auto-mark element-attached digits as subscripts)
+  text = replaceUnaryLatexCommand(text, 'ce', (inner) =>
+    inner.replace(/([A-Za-z)\]])(\d+)/g, '$1_{$2}')
+  );
+
+  // Convert nested \frac and \dfrac
+  for (let pass = 0; pass < 3; pass++) {
+    const prev = text;
+    text = replaceBinaryLatexCommand(text, 'frac', (n, d) => `(${n}/${d})`);
+    text = replaceBinaryLatexCommand(text, 'dfrac', (n, d) => `(${n}/${d})`);
+    text = replaceBinaryLatexCommand(text, 'tfrac', (n, d) => `(${n}/${d})`);
+    if (text === prev) break;
+  }
+
+  // Convert \sqrt[n]{x} and \sqrt{x}
+  text = text.replace(/\\sqrt\[([^\]]+)\]/g, '^{$1}\\sqrt');
+  text = replaceUnaryLatexCommand(text, 'sqrt', (rad) => `√(${rad})`);
+
+  // Convert LaTeX inline styling & text wrappers while preserving bold/italic
+  text = replaceUnaryLatexCommand(text, 'textbf', (inner) => `**${inner}**`);
+  text = replaceUnaryLatexCommand(text, 'mathbf', (inner) => `**${inner}**`);
+  text = replaceUnaryLatexCommand(text, 'textit', (inner) => `*${inner}*`);
+  text = replaceUnaryLatexCommand(text, 'emph', (inner) => `*${inner}*`);
+  text = replaceUnaryLatexCommand(text, 'text', (inner) => inner);
+  text = replaceUnaryLatexCommand(text, 'mathrm', (inner) => inner);
+  text = replaceUnaryLatexCommand(text, 'mathit', (inner) => inner);
+  text = replaceUnaryLatexCommand(text, 'operatorname', (inner) => inner);
+  text = replaceUnaryLatexCommand(text, 'rm', (inner) => inner);
+
+  // Convert reaction arrows with optional conditions
+  text = text
+    .replace(/\\xrightarrow(?:\[([^\]]*)\])?\{([^}]*)\}/g, (_m, below, above) => {
+      const cond = [above, below].map((s) => (s || '').trim()).filter(Boolean).join(', ');
+      return cond ? ` →(${cond}) ` : ' → ';
+    })
+    .replace(/\\xleftarrow(?:\[([^\]]*)\])?\{([^}]*)\}/g, ' ← ')
+    .replace(/\\xrightleftharpoons(?:\[([^\]]*)\])?\{([^}]*)\}/g, ' ⇌ ')
+    .replace(/\\xleftrightarrow(?:\[([^\]]*)\])?\{([^}]*)\}/g, ' ↔ ')
+    .replace(/\\rightarrow|\\longrightarrow|\\to\b/g, ' → ')
+    .replace(/\\leftarrow|\\longleftarrow/g, ' ← ')
+    .replace(/\\rightleftharpoons|\\leftrightarrow|\\longleftrightarrow/g, ' ⇌ ')
+    .replace(/\\Rightarrow/g, ' ⇒ ')
+    .replace(/\\Leftrightarrow/g, ' ⇔ ')
     .replace(/\\uparrow/g, '↑')
     .replace(/\\downarrow/g, '↓')
     .replace(/\\times/g, '×')
@@ -87,28 +304,42 @@ function normalizeRichTextForWord(raw: string): string {
     .replace(/\\pm/g, '±')
     .replace(/\\le\b|\\leq\b/g, '≤')
     .replace(/\\ge\b|\\geq\b/g, '≥')
-    .replace(/\\neq\b/g, '≠')
+    .replace(/\\neq\b|\\ne\b/g, '≠')
     .replace(/\\approx\b/g, '≈')
+    .replace(/\\equiv\b/g, '≡')
     .replace(/\\Delta\b/g, 'Δ')
     .replace(/\\alpha\b/g, 'α')
     .replace(/\\beta\b/g, 'β')
     .replace(/\\gamma\b/g, 'γ')
+    .replace(/\\delta\b/g, 'δ')
+    .replace(/\\lambda\b/g, 'λ')
+    .replace(/\\mu\b/g, 'μ')
     .replace(/\\pi\b/g, 'π')
-    .replace(/\\degree|\^\\circ|\^\{\\circ\}/g, '°')
-    .replace(/\\text\{([^}]*)\}/g, '$1')
-    .replace(/\\mathrm\{([^}]*)\}/g, '$1')
-    .replace(/\\ce\{([^}]*)\}/g, '$1')
-    .replace(/\\frac\{([^}]*)\}\{([^}]*)\}/g, '($1/$2)')
-    .replace(/\\sqrt\{([^}]*)\}/g, '√($1)')
-    .replace(/\\,/g, ' ')
-    .replace(/\\;/g, ' ')
+    .replace(/\\sigma\b/g, 'σ')
+    .replace(/\\omega\b/g, 'ω')
+    .replace(/\\degree|\^\{\s*\\circ\s*\}|\^\\circ|\\circ\b/g, '°')
+    .replace(/\\left\b|\\right\b/g, '')
+    .replace(/\\%/g, '%')
+    .replace(/\\[,;:!]/g, ' ')
+    .replace(/\\q?quad\b/g, ' ')
     .replace(/\$\$/g, '')
     .replace(/\$/g, '');
+
+  // Convert Unicode subscript/superscript runs into explicit <sub>/<sup> tags so Word renders crisp native Times New Roman scripts
+  text = text
+    .replace(/[₀₁₂₃₄₅₆₇₈₉₊₋₍₎]+/g, (seq) => {
+      const mapped = [...seq].map((ch) => UNICODE_SUBSCRIPT_MAP[ch] ?? ch).join('');
+      return `<sub>${mapped}</sub>`;
+    })
+    .replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁽⁾]+/g, (seq) => {
+      const mapped = [...seq].map((ch) => UNICODE_SUPERSCRIPT_MAP[ch] ?? ch).join('');
+      return `<sup>${mapped}</sup>`;
+    });
 
   // Strip stray HTML tags except <sub>, <sup>, <b>, <strong>, <i>, <em>
   text = text.replace(/<\/?(?!sub\b|sup\b|b\b|strong\b|i\b|em\b)[a-z][^>]*>/gi, '');
 
-  // Normalize <strong>/<b> and <em>/<i> to markdown tokens for uniform parsing
+  // Normalize HTML bold/italic tags to markdown markers for unified recursive parsing
   text = text
     .replace(/<(?:b|strong)>([\s\S]*?)<\/(?:b|strong)>/gi, '**$1**')
     .replace(/<(?:i|em)>([\s\S]*?)<\/(?:i|em)>/gi, '*$1*');
@@ -116,143 +347,306 @@ function normalizeRichTextForWord(raw: string): string {
   return text.trim();
 }
 
-function buildTextRunsFromLine(line: string, base: InlineStyleFlags = {}): TextRun[] {
-  const fontSize = base.size ?? FONT_SIZE_12PT;
-  const runs: TextRun[] = [];
+function pushRunSpec(
+  out: TextRunSpec[],
+  rawText: string,
+  style: Omit<TextRunSpec, 'text'>
+): void {
+  if (!rawText) return;
+  const restored = rawText
+    .replace(new RegExp(ESCAPED_LBRACE_SENTINEL, 'g'), '{')
+    .replace(new RegExp(ESCAPED_RBRACE_SENTINEL, 'g'), '}');
+  if (!restored) return;
 
-  // Tokenize bold (**...**), <sub>...</sub>, <sup>...</sup>, _{...}, ^{...}, _2, ^+
-  const tokenRegex =
-    /(\*\*[^*]+\*\*|<sub>[^<]+<\/sub>|<sup>[^<]+<\/sup>|_\{[^}]+\}|\^\{[^}]+\}|_[0-9]+|\^[0-9+-]+)/g;
+  const prev = out[out.length - 1];
+  if (
+    prev &&
+    prev.size === style.size &&
+    prev.bold === style.bold &&
+    prev.italics === style.italics &&
+    prev.subScript === style.subScript &&
+    prev.superScript === style.superScript
+  ) {
+    prev.text += restored;
+  } else {
+    out.push({
+      text: restored,
+      size: style.size,
+      bold: style.bold,
+      italics: style.italics,
+      subScript: style.subScript,
+      superScript: style.superScript,
+    });
+  }
+}
 
-  let lastIndex = 0;
-  let match: RegExpExecArray | null;
+/**
+ * Recursively tokenizes inline formatting (`***`, `**`, `*`, `<sub>`, `<sup>`)
+ * and chemical/LaTeX subscripts & superscripts (`{CH}_{3}`, `{CH}_3`, `{CH}3`, `C_6H_5`, `H_2O`, `Fe^{3+}`)
+ * while stripping all stray LaTeX grouping braces `{}` and redundant `_` / `^`.
+ */
+function parseFormulaToRunSpecs(
+  input: string,
+  style: Omit<TextRunSpec, 'text'>,
+  out: TextRunSpec[]
+): void {
+  let i = 0;
+  const len = input.length;
 
-  while ((match = tokenRegex.exec(line)) !== null) {
-    if (match.index > lastIndex) {
-      const plain = line.slice(lastIndex, match.index);
-      if (plain) {
-        runs.push(
-          new TextRun({
-            text: plain,
-            font: FONT_FAMILY,
-            size: fontSize,
-            bold: base.bold,
-            italics: base.italics,
-          })
+  while (i < len) {
+    // 1. Bold + Italic: ***...***
+    if (input.startsWith('***', i)) {
+      const closeIdx = input.indexOf('***', i + 3);
+      if (closeIdx > i + 3) {
+        parseFormulaToRunSpecs(
+          input.slice(i + 3, closeIdx),
+          { ...style, bold: true, italics: true },
+          out
         );
+        i = closeIdx + 3;
+        continue;
       }
     }
 
-    const token = match[0];
-    if (token.startsWith('**') && token.endsWith('**')) {
-      runs.push(
-        new TextRun({
-          text: token.slice(2, -2),
-          font: FONT_FAMILY,
-          size: fontSize,
-          bold: true,
-          italics: base.italics,
-        })
-      );
-    } else if (token.toLowerCase().startsWith('<sub>')) {
-      runs.push(
-        new TextRun({
-          text: token.slice(5, -6),
-          font: FONT_FAMILY,
-          size: fontSize,
-          subScript: true,
-          bold: base.bold,
-          italics: base.italics,
-        })
-      );
-    } else if (token.toLowerCase().startsWith('<sup>')) {
-      runs.push(
-        new TextRun({
-          text: token.slice(5, -6),
-          font: FONT_FAMILY,
-          size: fontSize,
-          superScript: true,
-          bold: base.bold,
-          italics: base.italics,
-        })
-      );
-    } else if (token.startsWith('_{') && token.endsWith('}')) {
-      runs.push(
-        new TextRun({
-          text: token.slice(2, -1),
-          font: FONT_FAMILY,
-          size: fontSize,
-          subScript: true,
-          bold: base.bold,
-          italics: base.italics,
-        })
-      );
-    } else if (token.startsWith('^{') && token.endsWith('}')) {
-      runs.push(
-        new TextRun({
-          text: token.slice(2, -1),
-          font: FONT_FAMILY,
-          size: fontSize,
-          superScript: true,
-          bold: base.bold,
-          italics: base.italics,
-        })
-      );
-    } else if (token.startsWith('_')) {
-      runs.push(
-        new TextRun({
-          text: token.slice(1),
-          font: FONT_FAMILY,
-          size: fontSize,
-          subScript: true,
-          bold: base.bold,
-          italics: base.italics,
-        })
-      );
-    } else if (token.startsWith('^')) {
-      runs.push(
-        new TextRun({
-          text: token.slice(1),
-          font: FONT_FAMILY,
-          size: fontSize,
-          superScript: true,
-          bold: base.bold,
-          italics: base.italics,
-        })
-      );
+    // 2. Bold: **...**
+    if (input.startsWith('**', i)) {
+      const closeIdx = input.indexOf('**', i + 2);
+      if (closeIdx > i + 2) {
+        parseFormulaToRunSpecs(
+          input.slice(i + 2, closeIdx),
+          { ...style, bold: true },
+          out
+        );
+        i = closeIdx + 2;
+        continue;
+      }
     }
 
-    lastIndex = match.index + token.length;
-  }
-
-  if (lastIndex < line.length) {
-    const rest = line.slice(lastIndex);
-    if (rest) {
-      runs.push(
-        new TextRun({
-          text: rest,
-          font: FONT_FAMILY,
-          size: fontSize,
-          bold: base.bold,
-          italics: base.italics,
-        })
-      );
+    // 3. Italic: *...* (only when non-whitespace borders inside, preserving math multiplication "2 * 3")
+    if (input[i] === '*' && input[i + 1] !== '*' && i + 1 < len && !/\s/.test(input[i + 1])) {
+      let closeIdx = -1;
+      for (let j = i + 1; j < len; j++) {
+        if (input[j] === '\n') break;
+        if (
+          input[j] === '*' &&
+          input[j - 1] !== '*' &&
+          input[j + 1] !== '*' &&
+          !/\s/.test(input[j - 1])
+        ) {
+          closeIdx = j;
+          break;
+        }
+      }
+      if (closeIdx > i + 1) {
+        parseFormulaToRunSpecs(
+          input.slice(i + 1, closeIdx),
+          { ...style, italics: true },
+          out
+        );
+        i = closeIdx + 1;
+        continue;
+      }
     }
-  }
 
-  if (runs.length === 0) {
-    runs.push(
+    // 4. HTML <sub>...</sub> and <sup>...</sup>
+    if (input[i] === '<') {
+      const subMatch = /^<sub>([\s\S]*?)<\/sub>/i.exec(input.slice(i));
+      if (subMatch) {
+        parseFormulaToRunSpecs(
+          subMatch[1],
+          { ...style, subScript: true, superScript: false },
+          out
+        );
+        i += subMatch[0].length;
+        continue;
+      }
+      const supMatch = /^<sup>([\s\S]*?)<\/sup>/i.exec(input.slice(i));
+      if (supMatch) {
+        parseFormulaToRunSpecs(
+          supMatch[1],
+          { ...style, superScript: true, subScript: false },
+          out
+        );
+        i += supMatch[0].length;
+        continue;
+      }
+    }
+
+    // 5. Subscript: _{...} or _<digits> or _<single letter> (while preserving fill-in blanks like "____")
+    if (input[i] === '_') {
+      const blankLineMatch = /^_{2,}/.exec(input.slice(i));
+      if (blankLineMatch) {
+        pushRunSpec(out, blankLineMatch[0], style);
+        i += blankLineMatch[0].length;
+        continue;
+      }
+      if (input[i + 1] === '{') {
+        const group = extractBalancedBraces(input, i + 1);
+        if (group) {
+          parseFormulaToRunSpecs(
+            group.content,
+            { ...style, subScript: true, superScript: false },
+            out
+          );
+          i = group.endIndex;
+          continue;
+        }
+      }
+      const shortSubMatch = /^([0-9]+|[a-zA-Z](?![a-zA-Z0-9_]))/.exec(input.slice(i + 1));
+      if (shortSubMatch) {
+        pushRunSpec(out, shortSubMatch[1], {
+          ...style,
+          subScript: true,
+          superScript: false,
+        });
+        i += 1 + shortSubMatch[1].length;
+        continue;
+      }
+      // Drop stray standalone underscore before non-blank formula tokens
+      i += 1;
+      continue;
+    }
+
+    // 6. Superscript: ^{...} or ^<charge/digits/single letter>
+    if (input[i] === '^') {
+      if (input[i + 1] === '{') {
+        const group = extractBalancedBraces(input, i + 1);
+        if (group) {
+          parseFormulaToRunSpecs(
+            group.content,
+            { ...style, superScript: true, subScript: false },
+            out
+          );
+          i = group.endIndex;
+          continue;
+        }
+      }
+      const shortSupMatch = /^([0-9]*[+-]|[0-9]+|[a-zA-Z](?![a-zA-Z0-9_]))/.exec(
+        input.slice(i + 1)
+      );
+      if (shortSupMatch) {
+        pushRunSpec(out, shortSupMatch[1], {
+          ...style,
+          superScript: true,
+          subScript: false,
+        });
+        i += 1 + shortSupMatch[1].length;
+        continue;
+      }
+      i += 1;
+      continue;
+    }
+
+    // 7. LaTeX / OMML braced group `{...}` (e.g. `{CH}_{3}`, `{C}_6{H}_5`, or `{HCOOCH}2{C}6{H}5`)
+    if (input[i] === '{') {
+      const group = extractBalancedBraces(input, i);
+      if (group) {
+        parseFormulaToRunSpecs(group.content, style, out);
+        i = group.endIndex;
+
+        // Handle braced chemical fragments followed directly by bare subscript digits
+        // such as `{HCOOCH}2{C}6{H}5` or `{CH}3{COOCH}2{C}6{H}5`
+        const looksLikeChemBase = /[A-Za-z)\]]/.test(group.content);
+        if (looksLikeChemBase && !style.subScript && !style.superScript) {
+          const trailingDigits = /^(\d+)/.exec(input.slice(i));
+          if (trailingDigits) {
+            pushRunSpec(out, trailingDigits[1], {
+              ...style,
+              subScript: true,
+              superScript: false,
+            });
+            i += trailingDigits[1].length;
+          }
+        }
+        continue;
+      }
+      // Drop unmatched stray `{`
+      i += 1;
+      continue;
+    }
+
+    // 8. Drop any stray closing brace `}`
+    if (input[i] === '}') {
+      i += 1;
+      continue;
+    }
+
+    // 9. Normal character
+    pushRunSpec(out, input[i], style);
+    i += 1;
+  }
+}
+
+/**
+ * Parses chemical/math formula text (including `{CH}_3`, `{CH}_{3}`, `{HCOOCH}2{C}6{H}5`,
+ * `C_6H_5`, `H_2O`, `<sub>...</sub>`, `<sup>...</sup>`, bold `**...**`, italic `*...*`)
+ * into clean native Word `TextRun[]` in Times New Roman without stray `{}` or `_`.
+ */
+export function renderFormulaTextRuns(
+  text: string,
+  base: InlineStyleFlags = {}
+): TextRun[] {
+  const fontSize = base.size ?? FONT_SIZE_12PT;
+  const normalized = normalizeRichTextForWord(text || '');
+  const specs: TextRunSpec[] = [];
+
+  parseFormulaToRunSpecs(
+    normalized,
+    {
+      size: fontSize,
+      bold: Boolean(base.bold),
+      italics: Boolean(base.italics),
+      subScript: Boolean(base.subScript),
+      superScript: Boolean(base.superScript),
+    },
+    specs
+  );
+
+  if (specs.length === 0) {
+    return [
       new TextRun({
         text: '',
         font: FONT_FAMILY,
         size: fontSize,
         bold: base.bold,
         italics: base.italics,
-      })
-    );
+      }),
+    ];
   }
 
-  return runs;
+  return specs.map(
+    (spec) =>
+      new TextRun({
+        text: spec.text,
+        font: FONT_FAMILY,
+        size: spec.size,
+        ...(spec.bold ? { bold: true } : {}),
+        ...(spec.italics ? { italics: true } : {}),
+        ...(spec.subScript ? { subScript: true } : {}),
+        ...(spec.superScript ? { superScript: true } : {}),
+      })
+  );
+}
+
+/**
+ * Computes visible printed text length (excluding LaTeX braces, HTML tags, and markdown markers)
+ * so Part I option column layout (4-col / 2x2 / vertical) sizes accurately for chemical formulas.
+ */
+function getVisibleFormulaLength(text: string): number {
+  const normalized = normalizeRichTextForWord(text || '');
+  const specs: TextRunSpec[] = [];
+  parseFormulaToRunSpecs(
+    normalized,
+    {
+      size: FONT_SIZE_12PT,
+      bold: false,
+      italics: false,
+      subScript: false,
+      superScript: false,
+    },
+    specs
+  );
+  return specs.reduce((acc, s) => acc + s.text.length, 0);
 }
 
 /**
@@ -503,8 +897,10 @@ function buildExamHeaderBlock(meta: ExamHeaderMeta, variantCode: string): (Parag
 }
 
 function buildQuestionParagraphs(label: string, rawContent: string): Paragraph[] {
-  const normalized = normalizeRichTextForWord(stripLeadingQuestionPrefix(rawContent));
-  const lines = normalized.split('\n').filter((l, idx) => idx === 0 || l.trim().length > 0);
+  const cleaned = stripLeadingQuestionPrefix(rawContent || '')
+    .replace(/\r\n/g, '\n')
+    .replace(/<br\s*\/?>/gi, '\n');
+  const lines = cleaned.split('\n').filter((l, idx) => idx === 0 || l.trim().length > 0);
   if (lines.length === 0) {
     return [
       new Paragraph({
@@ -533,7 +929,7 @@ function buildQuestionParagraphs(label: string, rawContent: string): Paragraph[]
             size: FONT_SIZE_12PT,
             bold: true,
           }),
-          ...buildTextRunsFromLine(line),
+          ...renderFormulaTextRuns(line),
         ],
       });
     }
@@ -541,7 +937,7 @@ function buildQuestionParagraphs(label: string, rawContent: string): Paragraph[]
       spacing: { before: 20, after: 50, line: 276 },
       indent: { left: convertMillimetersToTwip(5) },
       alignment: AlignmentType.JUSTIFIED,
-      children: buildTextRunsFromLine(line),
+      children: renderFormulaTextRuns(line),
     });
   });
 }
@@ -551,15 +947,21 @@ function buildPart1OptionsElements(
 ): (Paragraph | Table)[] {
   if (options.length === 0) return [];
 
-  const cleanedOpts = options.map((opt) => ({
-    id: opt.id,
-    text: normalizeRichTextForWord(stripLeadingOptionPrefix(opt.text || '')),
-  }));
+  const cleanedOpts = options.map((opt) => {
+    const raw = stripLeadingOptionPrefix(opt.text || '')
+      .replace(/\r\n/g, '\n')
+      .replace(/<br\s*\/?>/gi, '\n');
+    return {
+      id: opt.id,
+      raw,
+      visibleLength: getVisibleFormulaLength(raw),
+    };
+  });
 
-  const maxLen = Math.max(...cleanedOpts.map((o) => o.text.length));
-  const hasMultiline = cleanedOpts.some((o) => o.text.includes('\n'));
+  const maxLen = Math.max(...cleanedOpts.map((o) => o.visibleLength));
+  const hasMultiline = cleanedOpts.some((o) => o.raw.includes('\n'));
 
-  // 4-column single row for short options (<= 16 chars)
+  // 4-column single row for short options (<= 16 visible chars)
   if (!hasMultiline && cleanedOpts.length === 4 && maxLen <= 16) {
     return [
       new Table({
@@ -582,7 +984,7 @@ function buildPart1OptionsElements(
                           size: FONT_SIZE_12PT,
                           bold: true,
                         }),
-                        ...buildTextRunsFromLine(opt.text),
+                        ...renderFormulaTextRuns(opt.raw),
                       ],
                     }),
                   ],
@@ -594,7 +996,7 @@ function buildPart1OptionsElements(
     ];
   }
 
-  // 2x2 grid for medium options (<= 38 chars)
+  // 2x2 grid for medium options (<= 38 visible chars)
   if (!hasMultiline && cleanedOpts.length === 4 && maxLen <= 38) {
     const buildRow = (pair: typeof cleanedOpts) =>
       new TableRow({
@@ -613,7 +1015,7 @@ function buildPart1OptionsElements(
                       size: FONT_SIZE_12PT,
                       bold: true,
                     }),
-                    ...buildTextRunsFromLine(opt.text),
+                    ...renderFormulaTextRuns(opt.raw),
                   ],
                 }),
               ],
@@ -644,7 +1046,7 @@ function buildPart1OptionsElements(
             size: FONT_SIZE_12PT,
             bold: true,
           }),
-          ...buildTextRunsFromLine(opt.text.replace(/\n/g, ' ')),
+          ...renderFormulaTextRuns(opt.raw.replace(/\n/g, ' ')),
         ],
       })
   );
@@ -717,7 +1119,9 @@ export function buildVariantExamDocument(
       children.push(...buildQuestionParagraphs(`Câu ${item.newNumber}.`, item.question.content));
       const statements = Array.isArray(item.question.statements) ? item.question.statements : [];
       for (const st of statements) {
-        const cleanSt = normalizeRichTextForWord(stripLeadingStatementPrefix(st.statement || ''));
+        const cleanSt = stripLeadingStatementPrefix(st.statement || '')
+          .replace(/<br\s*\/?>/gi, ' ')
+          .replace(/\r\n|\n/g, ' ');
         children.push(
           new Paragraph({
             spacing: { before: 30, after: 40, line: 276 },
@@ -730,7 +1134,7 @@ export function buildVariantExamDocument(
                 size: FONT_SIZE_12PT,
                 bold: true,
               }),
-              ...buildTextRunsFromLine(cleanSt.replace(/\n/g, ' ')),
+              ...renderFormulaTextRuns(cleanSt),
             ],
           })
         );
@@ -886,14 +1290,7 @@ function makeMatrixCell(text: string, widthPercent: number, bold = false): Table
     children: [
       new Paragraph({
         alignment: AlignmentType.CENTER,
-        children: [
-          new TextRun({
-            text,
-            font: FONT_FAMILY,
-            size: FONT_SIZE_11PT,
-            bold,
-          }),
-        ],
+        children: renderFormulaTextRuns(text, { size: FONT_SIZE_11PT, bold }),
       }),
     ],
   });
