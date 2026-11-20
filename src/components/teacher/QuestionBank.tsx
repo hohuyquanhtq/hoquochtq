@@ -115,6 +115,26 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setTimeout(() => setToastMessage(null), 3200);
   };
 
+  // Helper tìm đối tượng môn Hóa học chuẩn trong danh mục
+  const defaultChemSubject = useMemo(() => {
+    return (
+      subjects.find(
+        (s) =>
+          s.id === 'chemistry' ||
+          s.name.toLowerCase().includes('hóa') ||
+          s.id.toLowerCase().includes('chem')
+      ) || subjects[0]
+    );
+  }, [subjects]);
+
+  // Helper phân giải môn học chuẩn xác, ưu tiên mã HH
+  const getResolvedSubject = (q: Question) => {
+    if (q.code?.startsWith('HH') && defaultChemSubject) {
+      return defaultChemSubject;
+    }
+    return resolveQuestionSubject(q, subjects);
+  };
+
   // Fetch danh mục bài học SGK khi chọn môn & khối lớp chuẩn
   useEffect(() => {
     let active = true;
@@ -155,7 +175,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     const byId = new Map<string, number>();
     const byLabel = new Map<string, number>();
     questions.forEach((q) => {
-      const sub = resolveQuestionSubject(q, subjects);
+      const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
       if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
       if (q.lessonId) {
@@ -165,12 +185,12 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       byLabel.set(label, (byLabel.get(label) || 0) + 1);
     });
     return { byId, byLabel };
-  }, [questions, subjects, subjectFilter, gradeFilter]);
+  }, [questions, subjects, subjectFilter, gradeFilter, defaultChemSubject]);
 
   const availableTopicOptions = useMemo(() => {
     const map = new Map<string, number>();
     questions.forEach((q) => {
-      const sub = resolveQuestionSubject(q, subjects);
+      const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
       if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
       if (chapterFilter !== 'all' && q.chapterId !== chapterFilter) return;
@@ -178,7 +198,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       map.set(label, (map.get(label) || 0) + 1);
     });
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0], 'vi'));
-  }, [questions, subjects, subjectFilter, gradeFilter, chapterFilter]);
+  }, [questions, subjects, subjectFilter, gradeFilter, chapterFilter, defaultChemSubject]);
 
   const legacyTopicsOutsideCatalog = useMemo(() => {
     if (catalogLessons.length === 0) return [];
@@ -186,7 +206,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     const catalogNames = new Set(catalogLessons.map((l) => l.lessonName.trim().toLowerCase()));
     const map = new Map<string, number>();
     questions.forEach((q) => {
-      const sub = resolveQuestionSubject(q, subjects);
+      const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
       if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
       if (q.lessonId && catalogIds.has(q.lessonId)) return;
@@ -195,13 +215,13 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       map.set(label, (map.get(label) || 0) + 1);
     });
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0], 'vi'));
-  }, [catalogLessons, questions, subjects, subjectFilter, gradeFilter]);
+  }, [catalogLessons, questions, subjects, subjectFilter, gradeFilter, defaultChemSubject]);
 
   // Bộ lọc danh sách câu hỏi
   const filtered = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return questions.filter((q) => {
-      const sub = resolveQuestionSubject(q, subjects);
+      const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return false;
       if (gradeFilter !== 'all' && q.grade !== gradeFilter) return false;
       if (chapterFilter !== 'all' && q.chapterId !== chapterFilter) return false;
@@ -256,6 +276,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     typeFilter,
     levelFilter,
     searchTerm,
+    defaultChemSubject,
   ]);
 
   useEffect(() => {
@@ -306,7 +327,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     >();
 
     questions.forEach((q) => {
-      const sub = resolveQuestionSubject(q, subjects);
+      const sub = getResolvedSubject(q);
       const curr = bySubject.get(sub.id) || { id: sub.id, name: sub.name, count: 0 };
       curr.count += 1;
       bySubject.set(sub.id, curr);
@@ -338,7 +359,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       byLevel,
       topicBreakdown: Array.from(byTopic.values()).sort((a, b) => b.total - a.total),
     };
-  }, [questions, filtered, subjects]);
+  }, [questions, filtered, subjects, defaultChemSubject]);
 
   const hasActiveFilters =
     subjectFilter !== 'all' ||
@@ -376,7 +397,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
   const handleDuplicateQuestion = (q: Question) => {
     const nowIso = new Date().toISOString();
-    const sub = resolveQuestionSubject(q, subjects);
+    const sub = getResolvedSubject(q);
     const cloned: Question = {
       ...structuredClone(q),
       id: `q_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
@@ -457,8 +478,10 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       const buffer = await file.arrayBuffer();
 
       // 1. Xác định chính xác Môn học & Khối lớp từ bộ lọc hiện tại
-      const activeSubjectId = subjectFilter !== 'all' ? subjectFilter : (subjects[0]?.id || 'chemistry');
-      const activeSubject = subjects.find((s) => s.id === activeSubjectId) || subjects[0];
+      const activeSubject =
+        (subjectFilter !== 'all' ? subjects.find((s) => s.id === subjectFilter) : null) ||
+        defaultChemSubject;
+      const activeSubjectId = activeSubject.id;
       const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
 
       // 2. Xác định Chương & Bài học đang chọn
@@ -486,7 +509,8 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
       // 4. ÉP BUỘC ĐỒNG BỘ: Ghi đè toàn bộ Môn, Lớp, Chương, Bài, Mức độ cho từng câu hỏi
       const forcedQuestions = result.questions.map((q) => {
-        const finalLevel = levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : (q.level || 'nhan_biet');
+        const finalLevel =
+          levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : q.level || 'nhan_biet';
         return {
           ...q,
           subjectId: activeSubjectId,
@@ -508,7 +532,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         };
       });
 
-      // Gán lại danh sách câu hỏi đã được chuẩn hóa tuyệt đối
       result.questions = forcedQuestions;
       if (result.examMetadata) {
         result.examMetadata.subject = activeSubject.name;
@@ -518,7 +541,9 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       setActiveWordResult({ ...result });
       setActiveWordFileName(file.name);
       setActiveWordFileSize(file.size);
-      showToast(`Đã bóc tách ${result.questions.length} câu theo chuẩn: ${activeSubject.name} · Lớp ${activeGrade}!`);
+      showToast(
+        `Đã bóc tách ${result.questions.length} câu theo chuẩn: ${activeSubject.name} · Lớp ${activeGrade}!`
+      );
     } catch (err: any) {
       console.error(err);
       showToast(err.message || 'Lỗi khi đọc file Word.');
@@ -577,7 +602,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             {showStatsPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
-          {/* NÚT BÓC TÁCH TỪ FILE WORD: HIỂN THỊ TRỰC QUAN MỨC ĐỘ ĐANG CHỌN */}
+          {/* NÚT BÓC TÁCH TỪ FILE WORD */}
           <button
             type="button"
             disabled={isExtractingWord}
@@ -976,7 +1001,8 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         ) : (
           paginatedQuestions.map((q) => {
             const isSelected = selectedIds.has(q.id);
-            const sub = resolveQuestionSubject(q, subjects);
+            // SỬ DỤNG HÀM NHẬN DIỆN MÔN CHUẨN XÁC THEO MÃ HH
+            const sub = getResolvedSubject(q);
             const topicLabel = getQuestionTopicDisplay(q);
 
             return (
@@ -1190,7 +1216,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       )}
 
-      {/* MODAL BÓC TÁCH WORD CHUẨN: KẾ THỪA MỨC ĐỘ VÀ BÀI HỌC TỪ BỘ LỌC */}
+      {/* MODAL BÓC TÁCH WORD CHUẨN */}
       {activeWordResult && (
         <WordImportReviewModal
           isOpen={!!activeWordResult}
@@ -1199,7 +1225,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           parsedResult={activeWordResult}
           parsedQuestionsCount={activeWordResult.questions.length}
           inheritedMetadata={{
-            subjectId: subjectFilter !== 'all' ? subjectFilter : subjects[0]?.id || 'chemistry',
+            subjectId: subjectFilter !== 'all' ? subjectFilter : defaultChemSubject.id,
             grade: (gradeFilter !== 'all' ? gradeFilter : '11') as any,
             chapterId: chapterFilter !== 'all' ? chapterFilter : undefined,
             lessonId: lessonTopicFilter.startsWith('lessonId:') ? lessonTopicFilter.slice(9) : undefined,
@@ -1208,16 +1234,10 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           existingQuestions={questions}
           subjects={subjects}
           currentUserId={currentUserId}
-onConfirmSave={async (questionsToSave) => {
-            // 1. Tự động tìm môn Hóa học nếu bộ lọc đang là 'all' hoặc chọn môn Hóa
-            const chemSub = subjects.find(
-              (s) => s.id === 'chemistry' || s.name.toLowerCase().includes('hóa') || s.id.toLowerCase().includes('chem')
-            );
-            const activeSubject = (subjectFilter !== 'all' ? subjects.find((s) => s.id === subjectFilter) : null)
-              || chemSub
-              || subjects[0];
-            const activeSubjectId = activeSubject.id;
-
+          onConfirmSave={async (questionsToSave) => {
+            const activeSubject =
+              (subjectFilter !== 'all' ? subjects.find((s) => s.id === subjectFilter) : null) ||
+              defaultChemSubject;
             const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
             const targetLevel = levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined;
 
@@ -1236,9 +1256,8 @@ onConfirmSave={async (questionsToSave) => {
             }
 
             const finalizedQuestions = questionsToSave.map((q) => {
-              // 2. Nếu mã câu bắt đầu bằng HH hoặc môn đang chọn là Hóa thì ép cứng tuyệt đối là Hóa học
               const isChemCode = q.code?.startsWith('HH');
-              const finalSubject = (isChemCode && chemSub) ? chemSub : activeSubject;
+              const finalSubject = (isChemCode && defaultChemSubject) ? defaultChemSubject : activeSubject;
 
               return {
                 ...q,
@@ -1262,6 +1281,7 @@ onConfirmSave={async (questionsToSave) => {
           onClose={() => setActiveWordResult(null)}
         />
       )}
+
       {/* Modal Thêm câu hỏi thủ công */}
       <QuestionFormModal
         isOpen={isAddModalOpen}
@@ -1305,7 +1325,7 @@ onConfirmSave={async (questionsToSave) => {
               <div>
                 <h3 className="font-bold text-sm">Chi tiết câu hỏi {viewingQuestion.code}</h3>
                 <p className="text-xs text-slate-300 mt-0.5">
-                  {resolveQuestionSubject(viewingQuestion, subjects).name} ·{' '}
+                  {getResolvedSubject(viewingQuestion).name} ·{' '}
                   {GRADE_LABELS[viewingQuestion.grade]} ·{' '}
                   {viewingQuestion.chapterName ? `${viewingQuestion.chapterName} · ` : ''}
                   {getQuestionTopicDisplay(viewingQuestion)}
@@ -1324,7 +1344,7 @@ onConfirmSave={async (questionsToSave) => {
                 <div>
                   <span className="text-slate-500 block">Môn học</span>
                   <span className="font-bold text-slate-900">
-                    {resolveQuestionSubject(viewingQuestion, subjects).name}
+                    {getResolvedSubject(viewingQuestion).name}
                   </span>
                 </div>
                 <div>
