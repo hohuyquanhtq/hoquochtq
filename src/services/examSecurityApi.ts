@@ -475,6 +475,8 @@ export async function allocateExamPublicCodeOnServer(params: {
   ok: boolean;
   publicCode?: string;
   alreadyExisted?: boolean;
+  fallback?: boolean;
+  warning?: string;
   error?: string;
   code?: string;
 }> {
@@ -486,6 +488,9 @@ export async function allocateExamPublicCodeOnServer(params: {
       error: '[AUTH_ERROR] Cần đăng nhập tài khoản giáo viên để cấp mã đường dẫn 6 ký tự.',
     };
   }
+
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller ? setTimeout(() => controller.abort(), 8000) : null;
 
   try {
     const res = await fetch('/api/exams/allocate-public-code', {
@@ -501,6 +506,7 @@ export async function allocateExamPublicCodeOnServer(params: {
         isPublished: params.isPublished !== false,
         ...(params.existingPublicCode ? { existingPublicCode: params.existingPublicCode } : {}),
       }),
+      ...(controller ? { signal: controller.signal } : {}),
     });
 
     const { data, isHtml } = await parseApiResponsePayload(res);
@@ -514,9 +520,13 @@ export async function allocateExamPublicCodeOnServer(params: {
       };
     }
 
-    const publicCode = normalizePublicExamCode(
-      typeof data.publicCode === 'string' ? data.publicCode : ''
-    );
+    const rawCode =
+      typeof data.publicCode === 'string'
+        ? data.publicCode
+        : typeof data.code === 'string'
+        ? data.code
+        : '';
+    const publicCode = normalizePublicExamCode(rawCode);
     if (!res.ok || !data.ok || !publicCode) {
       return {
         ok: false,
@@ -532,6 +542,8 @@ export async function allocateExamPublicCodeOnServer(params: {
       ok: true,
       publicCode,
       alreadyExisted: Boolean(data.alreadyExisted),
+      fallback: Boolean(data.fallback),
+      warning: typeof data.warning === 'string' ? data.warning : undefined,
     };
   } catch (err) {
     return {
@@ -542,6 +554,10 @@ export async function allocateExamPublicCodeOnServer(params: {
           ? err.message
           : 'Không thể kết nối máy chủ để cấp mã đường dẫn 6 ký tự.',
     };
+  } finally {
+    if (timeoutId !== null) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 

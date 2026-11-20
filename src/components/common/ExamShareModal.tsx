@@ -22,6 +22,7 @@ import {
 import { Exam } from '../../types';
 import { APP_CONFIG } from '../../constants/brand';
 import {
+  generateFallbackExamCode6,
   getExamShortUrl,
   getPublicDomain,
   getUnifiedExamCode,
@@ -114,23 +115,33 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
       let activeExam = exam;
       if (!existingPublicCode) {
         if (!cancelled) setIsAllocatingCode(true);
-        const alloc = await allocateExamPublicCodeOnServer({
-          examId: exam.id,
-          examCode: exam.code,
-          isPublished: exam.isPublished,
-        });
+        let resolvedCode = '';
+        try {
+          const alloc = await allocateExamPublicCodeOnServer({
+            examId: exam.id,
+            examCode: exam.code,
+            isPublished: exam.isPublished,
+          });
+          if (alloc.ok && alloc.publicCode) {
+            resolvedCode = alloc.publicCode;
+          } else {
+            console.warn('[ExamShareModal] Server allocation failed, using local fallback code:', alloc.error);
+            resolvedCode = generateFallbackExamCode6();
+          }
+        } catch (err) {
+          console.warn('[ExamShareModal] Exception allocating code, using local fallback code:', err);
+          resolvedCode = generateFallbackExamCode6();
+        }
         if (!cancelled) setIsAllocatingCode(false);
-        if (alloc.ok && alloc.publicCode) {
-          if (!cancelled) setLocalPublicCode(alloc.publicCode);
+        if (resolvedCode) {
+          if (!cancelled) setLocalPublicCode(resolvedCode);
           activeExam = {
             ...exam,
-            publicCode: alloc.publicCode,
-            shortId: alloc.publicCode,
-            slug: `/${alloc.publicCode}`,
+            publicCode: resolvedCode,
+            shortId: resolvedCode,
+            slug: `/${resolvedCode}`,
           };
           onExamUpdated?.(activeExam);
-        } else if (!cancelled) {
-          setAllocationError(alloc.error || 'Chưa thể cấp mã đường dẫn 6 ký tự.');
         }
       }
 

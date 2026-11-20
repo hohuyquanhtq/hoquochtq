@@ -22,7 +22,16 @@ async function startServer() {
   const curriculumImportHandlers = createCurriculumImportHandlers();
 
   const wrapExpress =
-    (fn: (req: { method?: string; headers: express.Request['headers']; body?: unknown; ip?: string }) => Promise<{ status: number; body: Record<string, unknown> }>) =>
+    (
+      fn: (req: {
+        method?: string;
+        headers: express.Request['headers'];
+        body?: unknown;
+        query?: Record<string, string | string[] | undefined>;
+        url?: string;
+        ip?: string;
+      }) => Promise<{ status: number; body: Record<string, unknown> }>
+    ) =>
     async (req: express.Request, res: express.Response) => {
       if ((req.method || '').toUpperCase() === 'OPTIONS') {
         res.setHeader('Allow', 'GET, POST, HEAD, OPTIONS');
@@ -32,14 +41,24 @@ async function startServer() {
       try {
         res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
         res.setHeader('Pragma', 'no-cache');
+        const normalizedQuery: Record<string, string | string[] | undefined> = {};
+        for (const [k, v] of Object.entries(req.query || {})) {
+          if (typeof v === 'string') {
+            normalizedQuery[k] = v;
+          } else if (Array.isArray(v)) {
+            normalizedQuery[k] = v.map((item) => String(item));
+          }
+        }
         const out = await fn({
           method: (req.method || 'GET').toUpperCase(),
           headers: req.headers,
           body: req.body,
+          query: normalizedQuery,
+          url: req.originalUrl || req.url,
           ip: req.ip,
         });
         if (out.status === 405) {
-          res.setHeader('Allow', 'POST, OPTIONS');
+          res.setHeader('Allow', 'GET, POST, OPTIONS');
         }
         res.status(out.status).json(out.body);
       } catch (err) {

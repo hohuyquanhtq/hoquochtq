@@ -970,6 +970,15 @@ export async function fetchPublicExamByPublicCode(
   try {
     const linkSnap = await getDoc(doc(db, 'examLinks', cleanPublicCode));
     if (!linkSnap.exists()) {
+      // Fallback: when an exam was created with unified 6-char code during server fallback,
+      // examStatus/{code} and publicExams/{code} still hold the exam directly.
+      const directRes = await fetchPublicExamFromFirestore(cleanPublicCode);
+      if (directRes.status !== 'not_found') {
+        return {
+          ...directRes,
+          exam: directRes.exam ? { ...directRes.exam, publicCode: cleanPublicCode } : undefined,
+        };
+      }
       return {
         status: 'not_found',
         message: 'Đường dẫn đề thi không hợp lệ hoặc không tồn tại',

@@ -36,6 +36,7 @@ import { ExamShareModal } from '../common/ExamShareModal';
 import { QuestionBankPickerModal, cloneQuestionsForExam } from './QuestionBankPickerModal';
 import {
   generateExamCode6,
+  generateFallbackExamCode6,
   isValidNewPublicCode,
   normalizeExamCode,
   normalizePublicExamCode,
@@ -388,21 +389,63 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         pendingDraftRef.current?.publicCode ??
         (isValidNewPublicCode(cleanCode) ? cleanCode : null);
 
-      const allocRes = await allocateExamPublicCodeOnServer({
-        examId,
-        examCode: cleanCode,
-        isPublished: true,
-        existingPublicCode: preferredPublicCode,
-      });
-      if (!allocRes.ok || !allocRes.publicCode) {
-        setFormError(
-          allocRes.error ||
-            'Không thể cấp mã đường dẫn 6 ký tự duy nhất từ máy chủ. Vui lòng thử lại!'
+      const resolveClientFallbackCode = (): string => {
+        const localExams = StorageService.getExams(currentUserId || auth.currentUser?.uid);
+        const hasLocalConflict = (candidate: string) =>
+          localExams.some(
+            (e) =>
+              e.id !== examId &&
+              (normalizeExamCode(e.code) === candidate ||
+                normalizePublicExamCode(e.publicCode) === candidate ||
+                normalizePublicExamCode(e.shortId) === candidate)
+          );
+
+        if (preferredPublicCode && isValidNewPublicCode(preferredPublicCode) && !hasLocalConflict(preferredPublicCode)) {
+          return preferredPublicCode;
+        }
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const candidate = generateExamCode6();
+          if (!hasLocalConflict(candidate)) return candidate;
+        }
+        return generateFallbackExamCode6();
+      };
+
+      let allocatedPublicCode = '';
+      let usedFallbackAllocation = false;
+      try {
+        const allocRes = await allocateExamPublicCodeOnServer({
+          examId,
+          examCode: cleanCode,
+          isPublished: true,
+          existingPublicCode: preferredPublicCode,
+        });
+        if (allocRes.ok && allocRes.publicCode) {
+          allocatedPublicCode = allocRes.publicCode;
+          usedFallbackAllocation = Boolean(allocRes.fallback);
+          if (allocRes.fallback) {
+            console.warn(
+              '[ExamCreator] Server used fallback 6-char publicCode:',
+              allocatedPublicCode,
+              allocRes.warning || ''
+            );
+          }
+        } else {
+          console.warn(
+            '[ExamCreator] API /api/exams/allocate-public-code failed, falling back to local 6-char code:',
+            allocRes.error || allocRes.code
+          );
+          allocatedPublicCode = resolveClientFallbackCode();
+          usedFallbackAllocation = true;
+        }
+      } catch (allocErr) {
+        console.warn(
+          '[ExamCreator] Exception calling /api/exams/allocate-public-code, falling back to local 6-char code:',
+          allocErr
         );
-        return;
+        allocatedPublicCode = resolveClientFallbackCode();
+        usedFallbackAllocation = true;
       }
 
-      const allocatedPublicCode = allocRes.publicCode;
       const finalUnifiedCode = allocatedPublicCode;
 
       if (pendingDraftRef.current) {
@@ -411,13 +454,13 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       }
 
       // If server resolved a collision with a different 6-char code, ensure examLinks/{code}.examCode is also synchronized
-      if (normalizeExamCode(cleanCode) !== finalUnifiedCode) {
+      if (!usedFallbackAllocation && normalizeExamCode(cleanCode) !== finalUnifiedCode) {
         await allocateExamPublicCodeOnServer({
           examId,
           examCode: finalUnifiedCode,
           isPublished: true,
           existingPublicCode: finalUnifiedCode,
-        });
+        }).catch(() => undefined);
       }
 
       const unifiedExamBase: Exam = {

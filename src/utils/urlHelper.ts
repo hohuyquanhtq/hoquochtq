@@ -144,6 +144,20 @@ export function generateExamCode6(length = 6): string {
   return result;
 }
 
+/**
+ * Generates a unique 6-character fallback exam code combining compact base-32
+ * timestamp chars (3 chars) with random entropy (3 chars) from EXAM_LINK_ALPHABET
+ * (excluding 0, O, 1, I). Always matches PUBLIC_CODE_NEW_REGEX.
+ */
+export function generateFallbackExamCode6(nowMs: number = Date.now()): string {
+  const alphabet = EXAM_LINK_ALPHABET;
+  const ts = Math.abs(Math.floor(nowMs));
+  const t1 = alphabet[(ts >> 10) & 31];
+  const t2 = alphabet[(ts >> 5) & 31];
+  const t3 = alphabet[ts & 31];
+  return `${t1}${t2}${t3}${generateExamCode6(3)}`;
+}
+
 export function isValidNewPublicCode(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   return PUBLIC_CODE_NEW_REGEX.test(value.trim().toUpperCase());

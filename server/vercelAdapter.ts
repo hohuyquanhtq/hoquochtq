@@ -4,6 +4,7 @@ import type { ApiRequest, ApiResponse } from './examApiHandlers.ts';
 type ServerlessReq = IncomingMessage & {
   body?: unknown;
   ip?: string;
+  query?: Record<string, string | string[] | undefined>;
 };
 
 type ServerlessRes = ServerResponse & {
@@ -11,7 +12,42 @@ type ServerlessRes = ServerResponse & {
   json?: (body: unknown) => void;
 };
 
+function parseQueryParams(req: ServerlessReq): Record<string, string | string[] | undefined> {
+  const merged: Record<string, string | string[] | undefined> = {};
+  if (req.url) {
+    try {
+      const parsed = new URL(req.url, 'http://localhost');
+      parsed.searchParams.forEach((val, key) => {
+        if (key === '__path') return;
+        const existing = merged[key];
+        if (existing === undefined) {
+          merged[key] = val;
+        } else if (Array.isArray(existing)) {
+          existing.push(val);
+        } else {
+          merged[key] = [existing, val];
+        }
+      });
+    } catch {
+      // ignore malformed URL
+    }
+  }
+  if (req.query && typeof req.query === 'object') {
+    for (const [k, v] of Object.entries(req.query)) {
+      if (k === '__path') continue;
+      if (merged[k] === undefined && v !== undefined) {
+        merged[k] = v;
+      }
+    }
+  }
+  return merged;
+}
+
 async function parseRequestBody(req: ServerlessReq): Promise<unknown> {
+  const method = (req.method || 'GET').toUpperCase();
+  if (method === 'GET' || method === 'HEAD') {
+    return {};
+  }
   if (req.body !== undefined) {
     if (typeof req.body === 'string') {
       try {
@@ -55,6 +91,7 @@ export function createVercelHandler(handler: (req: ApiRequest) => Promise<ApiRes
 
     try {
       const body = await parseRequestBody(req);
+      const query = parseQueryParams(req);
       const forwarded = req.headers['x-forwarded-for'];
       const ip =
         typeof forwarded === 'string'
@@ -67,13 +104,15 @@ export function createVercelHandler(handler: (req: ApiRequest) => Promise<ApiRes
         method: (req.method || 'GET').toUpperCase(),
         headers: req.headers,
         body,
+        query,
+        url: req.url,
         ip,
       });
 
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
       if (result.status === 405) {
-        res.setHeader('Allow', 'POST, OPTIONS');
+        res.setHeader('Allow', 'GET, POST, OPTIONS');
       }
       if (typeof res.status === 'function' && typeof res.json === 'function') {
         res.status(result.status);

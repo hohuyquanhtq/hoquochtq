@@ -7,6 +7,7 @@ import {
   getFirebaseAdminFieldValue,
   getFirebaseAdminState,
   logFirebaseAdminEvent,
+  sanitizeSensitiveLogText,
 } from './firebaseAdmin.ts';
 import {
   hasServiceAccountConfigured,
@@ -20,7 +21,8 @@ export const EXAM_LINK_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 const NEW_PUBLIC_CODE_REGEX = /^[A-HJ-NP-Z2-9]{6}$/;
 const LEGACY_PUBLIC_CODE_REGEX = /^[0-9]{6}$/;
 const SAFE_DOC_ID_REGEX = /^[a-zA-Z0-9_-]{1,128}$/;
-const MAX_ALLOCATION_ATTEMPTS = 30;
+export const MAX_ALLOCATION_ATTEMPTS = 5;
+const FIRESTORE_ALLOCATE_TIMEOUT_MS = 4500;
 
 export interface PublicExamLinkDoc {
   publicCode: string;
@@ -50,6 +52,7 @@ export interface PublicExamLinkStore {
     uid: string,
     bearerToken?: string
   ): Promise<{ role?: string; status?: string; isAdmin: boolean }>;
+  isCodeTaken?(code: string): Promise<boolean>;
   allocatePublicCodeTransaction(params: {
     examId: string;
     examCode: string;
@@ -117,6 +120,55 @@ export function generateAlphanumericPublicCode(): string {
 
 export function generateSixDigitPublicCode(): string {
   return generateAlphanumericPublicCode();
+}
+
+/**
+ * Generates a unique 6-character fallback code combining a compact base-32
+ * timestamp prefix (3 chars) with cryptographic random entropy (3 chars),
+ * strictly within EXAM_LINK_ALPHABET (excluding 0, O, 1, I).
+ */
+export function generateFallbackPublicCode6(nowMs: number = Date.now()): string {
+  const ts = Math.abs(Math.floor(nowMs));
+  const t1 = EXAM_LINK_ALPHABET[(ts >> 10) & 31];
+  const t2 = EXAM_LINK_ALPHABET[(ts >> 5) & 31];
+  const t3 = EXAM_LINK_ALPHABET[ts & 31];
+  const r1 = EXAM_LINK_ALPHABET[crypto.randomInt(0, EXAM_LINK_ALPHABET.length)];
+  const r2 = EXAM_LINK_ALPHABET[crypto.randomInt(0, EXAM_LINK_ALPHABET.length)];
+  const r3 = EXAM_LINK_ALPHABET[crypto.randomInt(0, EXAM_LINK_ALPHABET.length)];
+  return `${t1}${t2}${t3}${r1}${r2}${r3}`;
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Timeout after ${ms}ms during ${label}`));
+        }, ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      clearTimeout(timer);
+    }
+  }
+}
+
+function readQueryValue(req: ApiRequest, key: string): string {
+  const q = req.query?.[key];
+  if (typeof q === 'string') return q;
+  if (Array.isArray(q) && q.length > 0) return String(q[0] || '');
+  if (req.url) {
+    try {
+      const parsed = new URL(req.url, 'http://localhost');
+      return parsed.searchParams.get(key) || '';
+    } catch {
+      return '';
+    }
+  }
+  return '';
 }
 
 function sanitizeDocId(raw: unknown): string {
@@ -198,6 +250,19 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
       return { role, status, isAdmin };
     },
 
+    async isCodeTaken(code: string): Promise<boolean> {
+      const db = getFirebaseAdminDb();
+      const [linkSnap, examSnap] = await withTimeout(
+        Promise.all([
+          db.collection('examLinks').doc(code).get(),
+          db.collection('exams').where('publicCode', '==', code).limit(1).get(),
+        ]),
+        FIRESTORE_ALLOCATE_TIMEOUT_MS,
+        'isCodeTaken'
+      );
+      return linkSnap.exists || !examSnap.empty;
+    },
+
     async allocatePublicCodeTransaction({
       examId,
       examCode,
@@ -210,11 +275,12 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
       const db = getFirebaseAdminDb();
       const FieldValue = getFirebaseAdminFieldValue();
 
-      return db.runTransaction(async (tx) => {
-        const masterRef = db.collection('exams').doc(examId);
-        const statusRef = db.collection('examStatus').doc(examCode);
-        const pubRef = db.collection('publicExams').doc(examCode);
-        const linksCol = db.collection('examLinks');
+      return withTimeout(
+        db.runTransaction(async (tx) => {
+          const masterRef = db.collection('exams').doc(examId);
+          const statusRef = db.collection('examStatus').doc(examCode);
+          const pubRef = db.collection('publicExams').doc(examCode);
+          const linksCol = db.collection('examLinks');
 
         const [masterSnap, statusSnap, pubSnap] = await Promise.all([
           tx.get(masterRef),
@@ -410,7 +476,7 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
           }
         }
 
-        // Allocate a fresh unique 6-character alphanumeric code atomically
+        // Allocate a fresh unique 6-character alphanumeric code atomically (max 5 attempts)
         const tried = new Set<string>();
         for (let attempt = 0; attempt < MAX_ALLOCATION_ATTEMPTS; attempt++) {
           const candidate = normalizePublicCodeServer(String(codeGenerator()));
@@ -420,8 +486,11 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
           tried.add(candidate);
 
           const linkRef = linksCol.doc(candidate);
-          const linkSnap = await tx.get(linkRef);
-          if (!linkSnap.exists) {
+          const [linkSnap, examByPublicCodeSnap] = await Promise.all([
+            tx.get(linkRef),
+            tx.get(db.collection('exams').where('publicCode', '==', candidate).limit(1)),
+          ]);
+          if (!linkSnap.exists && examByPublicCodeSnap.empty) {
             tx.create(linkRef, {
               publicCode: candidate,
               examId,
@@ -468,11 +537,14 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
 
         throw new PublicExamLinkError(
           409,
-          'EXAM_SAVE_ERROR',
+          'MAX_ATTEMPTS_EXCEEDED',
           'allocate_public_code',
-          'Không thể cấp mã truy cập 6 ký tự duy nhất sau nhiều lần thử. Vui lòng thử lại.'
+          `Không thể cấp mã truy cập 6 ký tự duy nhất sau ${MAX_ALLOCATION_ATTEMPTS} lần thử.`
         );
-      });
+      }),
+      FIRESTORE_ALLOCATE_TIMEOUT_MS,
+      'allocatePublicCodeTransaction'
+      );
     },
 
     async syncLinkStatus({
@@ -562,95 +634,240 @@ export function createPublicExamLinkHandlers(
 ) {
   return {
     async handleAllocatePublicCode(req: ApiRequest): Promise<ApiResponse> {
-      const apiName = 'POST /api/exams/allocate-public-code';
+      const method = (req.method || 'GET').toUpperCase();
+      const apiName = `${method} /api/exams/allocate-public-code`;
       let stage = 'method_check';
-      if ((req.method || '').toUpperCase() !== 'POST') {
+
+      const buildSafeFallbackResponse = (params: {
+        reason: string;
+        preferredCode?: string | null;
+        preferFreshOnCollision?: boolean;
+        examId?: string;
+        examCode?: string;
+        isPublished?: boolean;
+        errorCode?: string | null;
+      }): ApiResponse => {
+        const reusableCode =
+          !params.preferFreshOnCollision && params.preferredCode
+            ? normalizePublicCodeServer(params.preferredCode)
+            : '';
+        const fallbackCode = reusableCode || generateFallbackPublicCode6();
         return {
-          status: 405,
+          status: 200,
           body: {
-            stage,
-            errorStage: stage,
-            code: 'API_ROUTE_ERROR',
-            error: 'Phương thức không hợp lệ. API /api/exams/allocate-public-code chỉ hỗ trợ POST.',
+            ok: true,
+            publicCode: fallbackCode,
+            code: fallbackCode,
+            alreadyExisted: Boolean(reusableCode),
+            fallback: true,
+            source: 'fallback',
+            ...(params.examId ? { examId: params.examId } : {}),
+            ...(params.examCode ? { examCode: params.examCode } : {}),
+            isActive: params.isPublished !== false,
+            warning: sanitizeSensitiveLogText(params.reason),
+            ...(params.errorCode ? { fallbackReasonCode: params.errorCode } : {}),
           },
         };
-      }
+      };
 
-      stage = 'auth_verify_id_token';
-      const bearer = readBearerToken(req);
-      if (!bearer) {
-        return {
-          status: 401,
-          body: {
-            stage,
-            errorStage: stage,
-            code: 'AUTH_ERROR',
-            error: 'Thiếu token xác thực giáo viên.',
-          },
-        };
-      }
+      const generateCodeWithReadChecks = async (
+        preferredCode?: string | null
+      ): Promise<{ publicCode: string; fallback: boolean; reason?: string }> => {
+        if (!store.hasAdminAccess() || typeof store.isCodeTaken !== 'function') {
+          const diag = store.getAdminError();
+          console.error('[Allocate-Code-Error]:', {
+            api: apiName,
+            stage: 'admin_sdk_check',
+            code: diag.code,
+            message: sanitizeSensitiveLogText(diag.message),
+          });
+          return {
+            publicCode: normalizePublicCodeServer(preferredCode) || generateFallbackPublicCode6(),
+            fallback: true,
+            reason: diag.message,
+          };
+        }
 
-      const caller = await store.verifyIdToken(bearer);
-      if (!caller) {
-        return {
-          status: 401,
-          body: {
-            stage,
-            errorStage: stage,
-            code: 'AUTH_ERROR',
-            error: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.',
-          },
-        };
-      }
+        const tried = new Set<string>();
+        const preferred = normalizePublicCodeServer(preferredCode);
+        if (preferred) {
+          tried.add(preferred);
+          const taken = await store.isCodeTaken(preferred);
+          if (!taken) {
+            return { publicCode: preferred, fallback: false };
+          }
+        }
 
-      stage = 'validate_request_body';
-      const body = parseJsonBody(req.body);
-      const examId = sanitizeDocId(body.examId);
-      const examCode = normalizeExamCodeServer(String(body.examCode || ''));
-      const isPublished = body.isPublished !== false;
-      const normalizedExisting = normalizePublicCodeServer(body.existingPublicCode);
-      const existingPublicCode = normalizedExisting || null;
+        for (let attempt = 0; attempt < MAX_ALLOCATION_ATTEMPTS; attempt++) {
+          const candidate = generateAlphanumericPublicCode();
+          if (tried.has(candidate)) continue;
+          tried.add(candidate);
+          const taken = await store.isCodeTaken(candidate);
+          if (!taken) {
+            return { publicCode: candidate, fallback: false };
+          }
+        }
 
-      if (!examId || !examCode || !/^[A-Z0-9-]{2,32}$/.test(examCode)) {
-        return {
-          status: 400,
-          body: {
-            stage,
-            errorStage: stage,
-            code: 'EXAM_SAVE_ERROR',
-            error: 'Thiếu hoặc sai định dạng examId / examCode.',
-          },
-        };
-      }
-
-      stage = 'admin_sdk_check';
-      if (!store.hasAdminAccess()) {
-        const diag = store.getAdminError();
-        logFirebaseAdminEvent({
+        console.error('[Allocate-Code-Error]:', {
           api: apiName,
-          errorStage: stage,
-          errorType: 'AdminSdkNotReady',
-          errorCode: diag.code,
-          message: diag.message,
-          firestoreStatus: 'not_attempted',
+          stage: 'max_attempts_exceeded',
+          attempts: MAX_ALLOCATION_ATTEMPTS,
         });
         return {
-          status: 503,
-          body: {
-            stage,
-            errorStage: stage,
-            code: diag.code || 'CONFIG_MISSING',
-            error: diag.message,
-          },
+          publicCode: generateFallbackPublicCode6(),
+          fallback: true,
+          reason: `Đã đạt tối đa ${MAX_ALLOCATION_ATTEMPTS} lần kiểm tra trùng mã, sử dụng mã dự phòng kèm timestamp.`,
         };
-      }
+      };
 
       try {
+        if (method !== 'POST' && method !== 'GET') {
+          return {
+            status: 405,
+            body: {
+              stage,
+              errorStage: stage,
+              code: 'API_ROUTE_ERROR',
+              error: 'Phương thức không hợp lệ. API /api/exams/allocate-public-code hỗ trợ POST và GET.',
+            },
+          };
+        }
+
+        const body = method === 'POST' ? parseJsonBody(req.body) : {};
+        const rawExamId = body.examId ?? readQueryValue(req, 'examId');
+        const rawExamCode = body.examCode ?? readQueryValue(req, 'examCode');
+        const rawExistingPublicCode =
+          body.existingPublicCode ?? readQueryValue(req, 'existingPublicCode');
+        const examId = sanitizeDocId(rawExamId);
+        const examCode = normalizeExamCodeServer(String(rawExamCode || ''));
+        const isPublished = body.isPublished !== false;
+        const normalizedExisting = normalizePublicCodeServer(rawExistingPublicCode);
+        const existingPublicCode = normalizedExisting || null;
+
+        // Lightweight GET (or POST without examId/examCode): generate a unique 6-char code with max 5 Firestore checks + fallback
+        if (method === 'GET') {
+          stage = 'get_generate_code';
+          try {
+            const generated = await generateCodeWithReadChecks(existingPublicCode);
+            return {
+              status: 200,
+              body: {
+                ok: true,
+                publicCode: generated.publicCode,
+                code: generated.publicCode,
+                alreadyExisted: false,
+                fallback: generated.fallback,
+                source: generated.fallback ? 'fallback' : 'firestore',
+                ...(examId ? { examId } : {}),
+                ...(examCode ? { examCode } : {}),
+                isActive: isPublished,
+                ...(generated.reason ? { warning: sanitizeSensitiveLogText(generated.reason) } : {}),
+              },
+            };
+          } catch (err) {
+            console.error('[Allocate-Code-Error]:', err);
+            return buildSafeFallbackResponse({
+              reason: err instanceof Error ? err.message : 'Lỗi kết nối Firestore khi kiểm tra mã.',
+              preferredCode: existingPublicCode,
+              examId,
+              examCode,
+              isPublished,
+              errorCode: classifyFirestoreError(err),
+            });
+          }
+        }
+
+        stage = 'auth_verify_id_token';
+        const bearer = readBearerToken(req);
+        if (!bearer) {
+          return {
+            status: 401,
+            body: {
+              stage,
+              errorStage: stage,
+              code: 'AUTH_ERROR',
+              error: 'Thiếu token xác thực giáo viên.',
+            },
+          };
+        }
+
+        const caller = await store.verifyIdToken(bearer);
+        if (!caller) {
+          return {
+            status: 401,
+            body: {
+              stage,
+              errorStage: stage,
+              code: 'AUTH_ERROR',
+              error: 'Phiên đăng nhập không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.',
+            },
+          };
+        }
+
+        stage = 'validate_request_body';
+        // If caller calls POST without examId/examCode, still allocate a clean 6-char code with read checks + fallback
+        if (!examId && !examCode) {
+          const generated = await generateCodeWithReadChecks(existingPublicCode);
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              publicCode: generated.publicCode,
+              code: generated.publicCode,
+              alreadyExisted: false,
+              fallback: generated.fallback,
+              source: generated.fallback ? 'fallback' : 'firestore',
+              isActive: isPublished,
+              ...(generated.reason ? { warning: sanitizeSensitiveLogText(generated.reason) } : {}),
+            },
+          };
+        }
+
+        if (!examId || !examCode || !/^[A-Z0-9-]{2,32}$/.test(examCode)) {
+          return {
+            status: 400,
+            body: {
+              stage,
+              errorStage: stage,
+              code: 'EXAM_SAVE_ERROR',
+              error: 'Thiếu hoặc sai định dạng examId / examCode.',
+            },
+          };
+        }
+
+        stage = 'admin_sdk_check';
+        if (!store.hasAdminAccess()) {
+          const diag = store.getAdminError();
+          console.error('[Allocate-Code-Error]:', {
+            api: apiName,
+            stage,
+            code: diag.code,
+            message: sanitizeSensitiveLogText(diag.message),
+          });
+          logFirebaseAdminEvent({
+            api: apiName,
+            errorStage: stage,
+            errorType: 'AdminSdkNotReady',
+            errorCode: diag.code,
+            message: diag.message,
+            firestoreStatus: 'not_attempted',
+          });
+          return buildSafeFallbackResponse({
+            reason: diag.message,
+            preferredCode: existingPublicCode,
+            examId,
+            examCode,
+            isPublished,
+            errorCode: diag.code || 'CONFIG_MISSING',
+          });
+        }
+
         stage = 'role_check';
         const roleInfo = await store.getUserRoleInfo(caller.uid, bearer);
+        const hasLoadedRoleProfile = roleInfo.isAdmin || Boolean(roleInfo.role);
         const canManage =
           roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
-        if (!canManage) {
+        if (hasLoadedRoleProfile && !canManage) {
           return {
             status: 403,
             body: {
@@ -678,14 +895,17 @@ export function createPublicExamLinkHandlers(
           body: {
             ok: true,
             publicCode: result.publicCode,
+            code: result.publicCode,
             alreadyExisted: result.alreadyExisted,
+            fallback: false,
+            source: 'firestore',
             examId: result.examId,
             examCode: result.examCode,
             isActive: result.isActive,
           },
         };
       } catch (err) {
-        if (err instanceof PublicExamLinkError) {
+        if (err instanceof PublicExamLinkError && err.status === 403) {
           return {
             status: err.status,
             body: {
@@ -696,8 +916,11 @@ export function createPublicExamLinkHandlers(
             },
           };
         }
-        const classified = classifyFirestoreError(err);
-        const msg = err instanceof Error ? err.message : 'Lỗi cấp mã truy cập 6 chữ số.';
+
+        const classified =
+          err instanceof PublicExamLinkError ? err.code : classifyFirestoreError(err);
+        const msg = err instanceof Error ? err.message : 'Lỗi cấp mã truy cập 6 ký tự.';
+        console.error('[Allocate-Code-Error]:', err);
         logFirebaseAdminEvent({
           api: apiName,
           errorStage: stage,
@@ -706,15 +929,27 @@ export function createPublicExamLinkHandlers(
           message: msg,
           firestoreStatus: 'write_failed',
         });
-        return {
-          status: classified === 'DATABASE_PERMISSION_ERROR' ? 403 : 500,
-          body: {
-            stage,
-            errorStage: stage,
-            code: classified,
-            error: formatFirebaseAdminErrorMessage(classified),
-          },
-        };
+
+        const bodyFallback = method === 'POST' ? parseJsonBody(req.body) : {};
+        const fallbackExamId = sanitizeDocId(bodyFallback.examId ?? readQueryValue(req, 'examId'));
+        const fallbackExamCode = normalizeExamCodeServer(
+          String(bodyFallback.examCode ?? readQueryValue(req, 'examCode') ?? '')
+        );
+        const fallbackExisting = normalizePublicCodeServer(
+          bodyFallback.existingPublicCode ?? readQueryValue(req, 'existingPublicCode')
+        );
+        const isCollisionExhausted =
+          err instanceof PublicExamLinkError && err.code === 'MAX_ATTEMPTS_EXCEEDED';
+
+        return buildSafeFallbackResponse({
+          reason: msg,
+          preferredCode: fallbackExisting || null,
+          preferFreshOnCollision: isCollisionExhausted,
+          examId: fallbackExamId || undefined,
+          examCode: fallbackExamCode || undefined,
+          isPublished: bodyFallback.isPublished !== false,
+          errorCode: classified,
+        });
       }
     },
 

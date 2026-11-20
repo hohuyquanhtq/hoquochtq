@@ -15,9 +15,11 @@ export const EXPECTED_FIRESTORE_DATABASE_ID =
 
 export const SERVICE_ACCOUNT_ENV_VAR = 'FIREBASE_SERVICE_ACCOUNT_JSON' as const;
 export const PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR = 'FIREBASE_SERVICE_ACCOUNT' as const;
+export const SPLIT_ENV_VAR_SOURCE = 'FIREBASE_PRIVATE_KEY' as const;
 export type ServiceAccountEnvVarName =
   | typeof SERVICE_ACCOUNT_ENV_VAR
-  | typeof PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR;
+  | typeof PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR
+  | typeof SPLIT_ENV_VAR_SOURCE;
 
 export type FirebaseAdminErrorCode =
   | 'CONFIG_MISSING'
@@ -71,18 +73,25 @@ let cachedEnvFingerprint: string | null = null;
 let cachedInitResult: FirebaseAdminInitResult | null = null;
 
 /**
- * Resolves the active Service Account JSON string from
- * process.env.FIREBASE_SERVICE_ACCOUNT_JSON or process.env.FIREBASE_SERVICE_ACCOUNT.
+ * Resolves the active Service Account credential source from either:
+ * 1. JSON string in process.env.FIREBASE_SERVICE_ACCOUNT_JSON / FIREBASE_SERVICE_ACCOUNT, or
+ * 2. Split env vars process.env.FIREBASE_PRIVATE_KEY + process.env.FIREBASE_CLIENT_EMAIL (+ optional FIREBASE_PROJECT_ID).
  */
 export function resolveServiceAccountEnvSource(
   preferPrimaryClaimEnv = false
 ): {
   envVarName: ServiceAccountEnvVarName | null;
   rawValue: string;
+  splitCredentials?: {
+    projectId: string;
+    clientEmail: string;
+    privateKey: string;
+  };
 } {
-  const candidates: ServiceAccountEnvVarName[] = preferPrimaryClaimEnv
-    ? [PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR, SERVICE_ACCOUNT_ENV_VAR]
-    : [SERVICE_ACCOUNT_ENV_VAR, PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR];
+  const candidates: Array<typeof SERVICE_ACCOUNT_ENV_VAR | typeof PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR> =
+    preferPrimaryClaimEnv
+      ? [PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR, SERVICE_ACCOUNT_ENV_VAR]
+      : [SERVICE_ACCOUNT_ENV_VAR, PRIMARY_CLAIM_SERVICE_ACCOUNT_ENV_VAR];
 
   for (const envVarName of candidates) {
     const rawValue = (process.env[envVarName] || '').trim();
@@ -94,6 +103,22 @@ export function resolveServiceAccountEnvSource(
     }
   }
 
+  const splitPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || '').trim();
+  const splitClientEmail = (process.env.FIREBASE_CLIENT_EMAIL || '').trim();
+  const splitProjectId = (process.env.FIREBASE_PROJECT_ID || EXPECTED_FIREBASE_PROJECT_ID).trim();
+
+  if (splitPrivateKey.length > 0 || splitClientEmail.length > 0) {
+    return {
+      envVarName: SPLIT_ENV_VAR_SOURCE,
+      rawValue: `split:${splitProjectId}:${splitClientEmail}:${splitPrivateKey.length}`,
+      splitCredentials: {
+        projectId: splitProjectId,
+        clientEmail: splitClientEmail,
+        privateKey: splitPrivateKey,
+      },
+    };
+  }
+
   return {
     envVarName: null,
     rawValue: '',
@@ -102,13 +127,20 @@ export function resolveServiceAccountEnvSource(
 
 /**
  * Normalizes private_key PEM newlines safely:
- * - Converts literal "\\n" sequences into actual newline characters when present.
- * - Preserves private keys that already contain real "\n" line breaks.
+ * - Strips accidental outer quotes when pasted into Vercel env vars.
+ * - Converts literal "\\n" (and double-escaped "\\\\n") sequences into actual "\n" newlines.
  * - Normalizes CRLF ("\r\n") to LF ("\n").
  */
 export function normalizeServiceAccountPrivateKey(rawKey: string): string {
-  const withLf = rawKey.replace(/\r\n/g, '\n');
-  const unescaped = withLf.includes('\\n') ? withLf.replace(/\\n/g, '\n') : withLf;
+  let cleaned = (rawKey || '').trim();
+  if (
+    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+    (cleaned.startsWith("'") && cleaned.endsWith("'"))
+  ) {
+    cleaned = cleaned.slice(1, -1).trim();
+  }
+  const withLf = cleaned.replace(/\r\n/g, '\n');
+  const unescaped = withLf.replace(/\\\\n/g, '\n').replace(/\\n/g, '\n');
   return unescaped.trim();
 }
 
@@ -123,11 +155,11 @@ export function formatFirebaseAdminErrorMessage(
     case null:
       return 'Firebase Admin SDK đã khởi tạo và kết nối Firestore thành công.';
     case 'CONFIG_MISSING':
-      return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT hoặc FIREBASE_SERVICE_ACCOUNT_JSON trên máy chủ Vercel.';
+      return 'Thiếu biến môi trường FIREBASE_SERVICE_ACCOUNT / FIREBASE_SERVICE_ACCOUNT_JSON hoặc bộ FIREBASE_PRIVATE_KEY + FIREBASE_CLIENT_EMAIL trên máy chủ.';
     case 'CONFIG_PARSE_ERROR':
       return 'Không thể đọc/parse biến Service Account JSON, thiếu trường bắt buộc (type, project_id, private_key_id, private_key, client_email, client_id), type != service_account hoặc project_id không khớp hqtest-online.';
     case 'PRIVATE_KEY_ERROR':
-      return 'Trường private_key trong Service Account JSON không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
+      return 'Trường private_key / FIREBASE_PRIVATE_KEY không đúng định dạng PEM hợp lệ hoặc lỗi ký tự xuống dòng (\\n).';
     case 'ADMIN_INIT_ERROR':
       return 'Không thể khởi tạo Firebase Admin SDK trên backend.';
     case 'AUTH_ERROR':
@@ -213,6 +245,62 @@ export function classifyFirestoreError(err: unknown): FirebaseAdminErrorCode {
   return 'DATABASE_ERROR';
 }
 
+function validateAndBuildCredentials(params: {
+  projectId: string;
+  clientEmail: string;
+  rawPrivateKey: string;
+  sourceLabel: string;
+}): {
+  parsed?: { projectId: string; clientEmail: string; privateKey: string };
+  errorCode?: FirebaseAdminErrorCode;
+  errorDetail?: string;
+} {
+  const { projectId, clientEmail, rawPrivateKey, sourceLabel } = params;
+
+  if (!clientEmail || !rawPrivateKey.trim()) {
+    const missing = [
+      !clientEmail ? 'FIREBASE_CLIENT_EMAIL' : '',
+      !rawPrivateKey.trim() ? 'FIREBASE_PRIVATE_KEY' : '',
+    ].filter(Boolean);
+    return {
+      errorCode: missing.length === 1 && missing[0] === 'FIREBASE_PRIVATE_KEY' ? 'PRIVATE_KEY_ERROR' : 'CONFIG_PARSE_ERROR',
+      errorDetail: `${sourceLabel} thiếu thông tin bắt buộc: ${missing.join(', ')}.`,
+    };
+  }
+
+  if (projectId !== EXPECTED_FIREBASE_PROJECT_ID) {
+    return {
+      errorCode: 'CONFIG_PARSE_ERROR',
+      errorDetail: `project_id ("${projectId}") trong ${sourceLabel} không khớp với dự án Firebase thực tế "${EXPECTED_FIREBASE_PROJECT_ID}".`,
+    };
+  }
+
+  const privateKey = normalizeServiceAccountPrivateKey(rawPrivateKey);
+  if (!privateKey.includes('-----BEGIN') || !privateKey.includes('PRIVATE KEY-----')) {
+    return {
+      errorCode: 'PRIVATE_KEY_ERROR',
+      errorDetail: `private_key trong ${sourceLabel} không đúng định dạng PEM hợp lệ.`,
+    };
+  }
+
+  try {
+    crypto.createPrivateKey(privateKey);
+  } catch {
+    return {
+      errorCode: 'PRIVATE_KEY_ERROR',
+      errorDetail: `Không thể giải mã private_key trong ${sourceLabel} (kiểm tra ký tự xuống dòng \\n).`,
+    };
+  }
+
+  return {
+    parsed: {
+      projectId,
+      clientEmail,
+      privateKey,
+    },
+  };
+}
+
 function parseServiceAccountJson(
   rawValue: string,
   envVarName: ServiceAccountEnvVarName
@@ -221,9 +309,21 @@ function parseServiceAccountJson(
   errorCode?: FirebaseAdminErrorCode;
   errorDetail?: string;
 } {
+  let candidateJson = rawValue.trim();
+  if (!candidateJson.startsWith('{') && !candidateJson.startsWith('"')) {
+    try {
+      const b64Decoded = Buffer.from(candidateJson, 'base64').toString('utf8').trim();
+      if (b64Decoded.startsWith('{')) {
+        candidateJson = b64Decoded;
+      }
+    } catch {
+      // fall through to JSON.parse error handling
+    }
+  }
+
   let decoded: unknown;
   try {
-    decoded = JSON.parse(rawValue);
+    decoded = JSON.parse(candidateJson);
     if (typeof decoded === 'string') {
       decoded = JSON.parse(decoded);
     }
@@ -280,51 +380,24 @@ function parseServiceAccountJson(
     };
   }
 
-  if (projectId !== EXPECTED_FIREBASE_PROJECT_ID) {
-    return {
-      errorCode: 'CONFIG_PARSE_ERROR',
-      errorDetail: `project_id ("${projectId}") trong ${envVarName} không khớp với dự án Firebase thực tế "${EXPECTED_FIREBASE_PROJECT_ID}". Hãy tải toàn bộ Service Account JSON mới từ Firebase Console của dự án "${EXPECTED_FIREBASE_PROJECT_ID}", cập nhật lại biến ${envVarName} trên Vercel và Redeploy.`,
-    };
-  }
-
-  const privateKey = normalizeServiceAccountPrivateKey(rawPrivateKey);
-  if (
-    !privateKey.includes('-----BEGIN') ||
-    !privateKey.includes('PRIVATE KEY-----')
-  ) {
-    return {
-      errorCode: 'PRIVATE_KEY_ERROR',
-      errorDetail: `Trường private_key trong ${envVarName} không đúng định dạng PEM hợp lệ.`,
-    };
-  }
-
-  try {
-    crypto.createPrivateKey(privateKey);
-  } catch {
-    return {
-      errorCode: 'PRIVATE_KEY_ERROR',
-      errorDetail: `Không thể giải mã private_key trong ${envVarName} (kiểm tra ký tự xuống dòng \\n trong JSON).`,
-    };
-  }
-
-  return {
-    parsed: {
-      projectId,
-      clientEmail,
-      privateKey,
-    },
-  };
+  return validateAndBuildCredentials({
+    projectId,
+    clientEmail,
+    rawPrivateKey,
+    sourceLabel: envVarName,
+  });
 }
 
 /**
- * Initializes Firebase Admin SDK once in serverless/Node runtime from
- * process.env.FIREBASE_SERVICE_ACCOUNT_JSON / FIREBASE_SERVICE_ACCOUNT and binds Firestore strictly to
- * EXPECTED_FIRESTORE_DATABASE_ID.
+ * Initializes Firebase Admin SDK once (Singleton: getApps().length === 0) in serverless/Node runtime
+ * from process.env.FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT, or
+ * FIREBASE_PRIVATE_KEY + FIREBASE_CLIENT_EMAIL (+ optional FIREBASE_PROJECT_ID),
+ * and binds Firestore strictly to EXPECTED_FIRESTORE_DATABASE_ID.
  */
 export function getFirebaseAdminState(
   preferPrimaryClaimEnv = false
 ): FirebaseAdminInitResult {
-  const { envVarName, rawValue } = resolveServiceAccountEnvSource(preferPrimaryClaimEnv);
+  const { envVarName, rawValue, splitCredentials } = resolveServiceAccountEnvSource(preferPrimaryClaimEnv);
   const environmentVariablePresent = envVarName !== null && rawValue.length > 0;
 
   if (!environmentVariablePresent || !envVarName) {
@@ -349,7 +422,14 @@ export function getFirebaseAdminState(
     return cachedInitResult;
   }
 
-  const { parsed, errorCode, errorDetail } = parseServiceAccountJson(rawValue, envVarName);
+  const { parsed, errorCode, errorDetail } = splitCredentials
+    ? validateAndBuildCredentials({
+        projectId: splitCredentials.projectId,
+        clientEmail: splitCredentials.clientEmail,
+        rawPrivateKey: splitCredentials.privateKey,
+        sourceLabel: 'FIREBASE_PRIVATE_KEY / FIREBASE_CLIENT_EMAIL',
+      })
+    : parseServiceAccountJson(rawValue, envVarName);
   if (!parsed || errorCode) {
     cachedEnvFingerprint = fingerprint;
     cachedInitResult = {
@@ -368,18 +448,17 @@ export function getFirebaseAdminState(
   }
 
   try {
-    const existingApps = getApps();
     const app: App =
-      existingApps.length > 0
-        ? getApp()
-        : initializeApp({
+      getApps().length === 0
+        ? initializeApp({
             credential: cert({
               projectId: parsed.projectId,
               clientEmail: parsed.clientEmail,
               privateKey: parsed.privateKey,
             }),
             projectId: EXPECTED_FIREBASE_PROJECT_ID,
-          });
+          })
+        : getApp();
 
     const auth = getAuth(app);
     const db = getFirestore(app, EXPECTED_FIRESTORE_DATABASE_ID);
@@ -462,6 +541,45 @@ export function getFirebaseAdminState(
 export function isFirebaseAdminReady(): boolean {
   const state = getFirebaseAdminState();
   return state.initialized && state.projectIdMatched && state.databaseIdMatched && state.db !== null;
+}
+
+/**
+ * Non-throwing Singleton accessor for serverless handlers.
+ */
+export function getSafeFirebaseAdmin(): {
+  ready: boolean;
+  app: App | null;
+  auth: Auth | null;
+  db: Firestore | null;
+  errorCode: FirebaseAdminErrorCode | null;
+  errorDetail: string | null;
+} {
+  try {
+    const state = getFirebaseAdminState();
+    const ready =
+      state.initialized &&
+      state.projectIdMatched &&
+      state.databaseIdMatched &&
+      state.db !== null;
+    return {
+      ready,
+      app: ready ? state.app : null,
+      auth: ready ? state.auth : null,
+      db: ready ? state.db : null,
+      errorCode: ready ? null : state.errorCode || 'ADMIN_INIT_ERROR',
+      errorDetail: ready ? null : state.errorDetail,
+    };
+  } catch (err) {
+    console.error('[Firebase-Admin-Init-Error]:', err);
+    return {
+      ready: false,
+      app: null,
+      auth: null,
+      db: null,
+      errorCode: 'ADMIN_INIT_ERROR',
+      errorDetail: err instanceof Error ? err.message : 'Firebase Admin initialization error',
+    };
+  }
 }
 
 export function getFirebaseAdminDb(): Firestore {
