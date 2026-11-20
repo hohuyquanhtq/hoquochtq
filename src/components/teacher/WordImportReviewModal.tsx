@@ -1,3 +1,5 @@
+'use client';
+
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
@@ -6,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   Copy,
+  Edit3,
   FileText,
   Filter,
   Loader2,
@@ -106,13 +109,37 @@ function hasMissingAnswer(q: Question): boolean {
   return false;
 }
 
-interface PerQuestionLessonSelectProps {
+function safeReclassifyQuestion(q: Question, targetType: QuestionType): Question {
+  if (targetType === 'part1_multiple_choice') {
+    const base = reclassifyQuestionType(q, 'part1_single_choice');
+    const existingIds =
+      q.correctOptionIds && q.correctOptionIds.length > 0
+        ? q.correctOptionIds
+        : base.correctOptionId
+        ? [base.correctOptionId]
+        : [];
+    const options = (base.options || []).map((opt) => ({
+      ...opt,
+      isCorrect: existingIds.includes(opt.id),
+    }));
+    return {
+      ...base,
+      type: 'part1_multiple_choice',
+      options,
+      correctOptionIds: existingIds,
+      correctOptionId: existingIds[0],
+    };
+  }
+  return reclassifyQuestionType(q, targetType);
+}
+
+interface PerQuestionEditorProps {
   question: Question;
   subjects: SubjectItem[];
   onChange: (patch: Partial<Question>) => void;
 }
 
-const PerQuestionMetadataEditor: React.FC<PerQuestionLessonSelectProps> = ({
+const PerQuestionQuickEditor: React.FC<PerQuestionEditorProps> = ({
   question,
   subjects,
   onChange,
@@ -216,10 +243,10 @@ const PerQuestionMetadataEditor: React.FC<PerQuestionLessonSelectProps> = ({
   };
 
   return (
-    <div className="mt-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3 text-xs">
+    <div className="mt-3 p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3.5 text-xs">
       <div className="flex items-center justify-between">
         <span className="font-bold text-slate-800">
-          Chỉnh sửa metadata riêng cho câu hỏi này
+          Chỉnh sửa nhanh nội dung, đáp án &amp; metadata riêng câu này
         </span>
         {isLoading && (
           <span className="inline-flex items-center gap-1 text-[11px] text-teal-700">
@@ -340,7 +367,8 @@ const PerQuestionMetadataEditor: React.FC<PerQuestionLessonSelectProps> = ({
             onChange={(e) => onChange({ type: e.target.value as QuestionType })}
             className="w-full min-h-[36px] px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 font-medium"
           >
-            <option value="part1_single_choice">Phần I · 4 lựa chọn</option>
+            <option value="part1_single_choice">Phần I · 4 lựa chọn (1 đáp án)</option>
+            <option value="part1_multiple_choice">Phần I · Nhiều lựa chọn đúng</option>
             <option value="part2_true_false">Phần II · Đúng - Sai 4 ý</option>
             <option value="part3_short_answer">Phần III · Trả lời ngắn</option>
           </select>
@@ -360,6 +388,239 @@ const PerQuestionMetadataEditor: React.FC<PerQuestionLessonSelectProps> = ({
             <option value="van_dung">Vận dụng</option>
             <option value="van_dung_cao">Vận dụng cao</option>
           </select>
+        </div>
+      </div>
+
+      {/* Quick Content Editor (preserves LaTeX / Unicode / chemistry formulas) */}
+      <div className="pt-2 border-t border-slate-200/80 space-y-2.5">
+        <div>
+          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+            Nội dung câu hỏi (giữ nguyên LaTeX $...$, công thức hóa học, chỉ số trên/dưới)
+          </label>
+          <textarea
+            rows={3}
+            value={question.content}
+            onChange={(e) => onChange({ content: e.target.value })}
+            className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-900 text-xs leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+          />
+        </div>
+
+        {/* Quick Answer Editor by QuestionType */}
+        {(question.type === 'part1_single_choice' ||
+          question.type === 'part1_multiple_choice') && (
+          <div className="space-y-1.5">
+            <label className="block text-[11px] font-semibold text-slate-600">
+              Các phương án &amp; Đáp án đúng
+            </label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {(question.options && question.options.length > 0
+                ? question.options
+                : [
+                    { id: 'A', text: '' },
+                    { id: 'B', text: '' },
+                    { id: 'C', text: '' },
+                    { id: 'D', text: '' },
+                  ]
+              ).map((opt, optIdx, arr) => {
+                const isSelectedCorrect =
+                  question.type === 'part1_multiple_choice'
+                    ? (question.correctOptionIds || []).includes(opt.id)
+                    : question.correctOptionId === opt.id;
+                return (
+                  <div key={opt.id} className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (question.type === 'part1_multiple_choice') {
+                          const curr = new Set(question.correctOptionIds || []);
+                          if (curr.has(opt.id)) curr.delete(opt.id);
+                          else curr.add(opt.id);
+                          const nextIds = Array.from(curr);
+                          onChange({
+                            correctOptionIds: nextIds,
+                            correctOptionId: nextIds[0],
+                            options: arr.map((o) => ({
+                              ...o,
+                              isCorrect: nextIds.includes(o.id),
+                            })),
+                          });
+                        } else {
+                          onChange({
+                            correctOptionId: opt.id,
+                            options: arr.map((o) => ({
+                              ...o,
+                              isCorrect: o.id === opt.id,
+                            })),
+                          });
+                        }
+                      }}
+                      title="Đánh dấu đáp án đúng"
+                      className={`w-7 h-8 rounded-lg font-bold text-xs shrink-0 border transition-colors ${
+                        isSelectedCorrect
+                          ? 'bg-emerald-600 border-emerald-600 text-white'
+                          : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {opt.id}
+                    </button>
+                    <input
+                      type="text"
+                      value={opt.text}
+                      onChange={(e) => {
+                        const nextOpts = arr.map((o, i) =>
+                          i === optIdx ? { ...o, text: e.target.value } : o
+                        );
+                        onChange({ options: nextOpts });
+                      }}
+                      placeholder={`Nội dung phương án ${opt.id}...`}
+                      className="flex-1 min-h-[32px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {question.type === 'part2_true_false' && (
+          <div className="space-y-1.5">
+            <label className="block text-[11px] font-semibold text-slate-600">
+              Các ý Đúng / Sai (a, b, c, d)
+            </label>
+            {(question.statements && question.statements.length > 0
+              ? question.statements
+              : [
+                  { id: 'a', statement: '', correctAnswer: true },
+                  { id: 'b', statement: '', correctAnswer: false },
+                  { id: 'c', statement: '', correctAnswer: true },
+                  { id: 'd', statement: '', correctAnswer: false },
+                ]
+            ).map((st, stIdx, arr) => (
+              <div key={st.id} className="flex items-center gap-2">
+                <span className="font-bold text-slate-700 w-5 shrink-0">{st.id})</span>
+                <input
+                  type="text"
+                  value={st.statement}
+                  onChange={(e) => {
+                    const nextStmts = arr.map((s, i) =>
+                      i === stIdx ? { ...s, statement: e.target.value } : s
+                    );
+                    onChange({ statements: nextStmts });
+                  }}
+                  placeholder={`Nội dung ý ${st.id}...`}
+                  className="flex-1 min-h-[32px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextStmts = arr.map((s, i) =>
+                      i === stIdx
+                        ? {
+                            ...s,
+                            correctAnswer: !s.correctAnswer,
+                            explanation: !s.correctAnswer ? 'Đúng' : 'Sai',
+                          }
+                        : s
+                    );
+                    onChange({ statements: nextStmts });
+                  }}
+                  className={`px-2.5 py-1 rounded-lg font-bold text-[11px] shrink-0 transition-colors ${
+                    st.correctAnswer
+                      ? 'bg-emerald-600 text-white'
+                      : 'bg-rose-600 text-white'
+                  }`}
+                >
+                  {st.correctAnswer ? 'Đúng' : 'Sai'}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {question.type === 'part3_short_answer' && (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="sm:col-span-2">
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                Đáp án chấp nhận (ngăn cách bằng dấu ;)
+              </label>
+              <input
+                type="text"
+                value={(question.shortAnswerConfig?.acceptableAnswers || []).join('; ')}
+                onChange={(e) => {
+                  const parts = e.target.value
+                    .split(';')
+                    .map((s) => s.trim())
+                    .filter(Boolean);
+                  const firstNum =
+                    parts.length > 0 ? Number(parts[0].replace(',', '.')) : Number.NaN;
+                  onChange({
+                    shortAnswerConfig: {
+                      ...(question.shortAnswerConfig || {
+                        acceptableAnswers: [],
+                        isNumeric: false,
+                      }),
+                      acceptableAnswers: parts,
+                      isNumeric: Number.isFinite(firstNum),
+                      numericValue: Number.isFinite(firstNum) ? firstNum : undefined,
+                    },
+                  });
+                }}
+                placeholder="VD: 12,5; 12.5"
+                className="w-full min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs font-mono"
+              />
+            </div>
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                Đơn vị (nếu có)
+              </label>
+              <input
+                type="text"
+                value={question.shortAnswerConfig?.unit || ''}
+                onChange={(e) =>
+                  onChange({
+                    shortAnswerConfig: {
+                      ...(question.shortAnswerConfig || {
+                        acceptableAnswers: [],
+                        isNumeric: false,
+                      }),
+                      unit: e.target.value.trim() || undefined,
+                    },
+                  })
+                }
+                placeholder="VD: g, mol, M..."
+                className="w-full min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Explanation & optional image URL */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              Lời giải chi tiết (tùy chọn)
+            </label>
+            <textarea
+              rows={2}
+              value={question.explanation || ''}
+              onChange={(e) => onChange({ explanation: e.target.value || undefined })}
+              placeholder="Hướng dẫn giải chi tiết..."
+              className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs"
+            />
+          </div>
+          <div>
+            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              URL hình ảnh minh họa (tối đa 1000 ký tự)
+            </label>
+            <input
+              type="text"
+              maxLength={1000}
+              value={question.imageUrl || ''}
+              onChange={(e) => onChange({ imageUrl: e.target.value.trim() || undefined })}
+              placeholder="https://..."
+              className="w-full min-h-[34px] px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-slate-800 text-xs"
+            />
+          </div>
         </div>
       </div>
     </div>
@@ -402,9 +663,8 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
   const [batchSource, setBatchSource] = useState<string>(defaultSource);
   const [showBatchPanel, setShowBatchPanel] = useState<boolean>(true);
 
-  // Working copy of extracted questions (inheriting active QuestionBank metadata on mount)
+  // Working copy of extracted questions (deterministic draft IDs, inheriting active QuestionBank metadata)
   const [draftQuestions, setDraftQuestions] = useState<Question[]>(() => {
-    const nowIso = new Date().toISOString();
     return parsedResult.questions.map((rawQ, idx) => {
       let cloned = structuredClone(rawQ);
       const effectiveGrade = inheritedMetadata.grade || cloned.grade || '12';
@@ -423,7 +683,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
           cloned.type === 'part2_true_false' &&
           (!cloned.statements || cloned.statements.length < 2);
         if (isWeakPart1 || isWeakPart2) {
-          const reclassified = reclassifyQuestionType(
+          const reclassified = safeReclassifyQuestion(
             cloned,
             inheritedMetadata.defaultQuestionType
           );
@@ -437,7 +697,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
 
       return {
         ...cloned,
-        id: `q_word_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
+        id: `draft_word_${idx}`,
         subjectId: effectiveSubjectId,
         subjectName: effectiveSubjectName,
         grade: effectiveGrade,
@@ -453,8 +713,6 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
         source: cloned.source || defaultSource,
         ownerId: currentUserId || cloned.ownerId,
         authorId: currentUserId || cloned.authorId || 'teacher',
-        createdAt: cloned.createdAt || nowIso,
-        updatedAt: nowIso,
       };
     });
   });
@@ -613,7 +871,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
         if (q.id !== id) return q;
         if (patch.type && patch.type !== q.type) {
           // Reuse existing docxParser reclassification logic while preserving all metadata, images, and explanations
-          const reclassified = reclassifyQuestionType(q, patch.type);
+          const reclassified = safeReclassifyQuestion(q, patch.type);
           return {
             ...reclassified,
             id: q.id,
@@ -666,7 +924,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
         };
 
         if (includeQuestionType && batchDefaultType && batchDefaultType !== nextQ.type) {
-          const reclassified = reclassifyQuestionType(nextQ, batchDefaultType);
+          const reclassified = safeReclassifyQuestion(nextQ, batchDefaultType);
           nextQ = {
             ...reclassified,
             id: nextQ.id,
@@ -906,8 +1164,9 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
                       }
                       className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
                     >
-                      <option value="">Giữ nguyên dạng AI/bộ máy nhận diện</option>
-                      <option value="part1_single_choice">Phần I · 4 lựa chọn</option>
+                      <option value="">Giữ nguyên dạng bộ máy bóc tách nhận diện</option>
+                      <option value="part1_single_choice">Phần I · 4 lựa chọn (1 đáp án)</option>
+                      <option value="part1_multiple_choice">Phần I · Nhiều lựa chọn đúng</option>
                       <option value="part2_true_false">Phần II · Đúng - Sai 4 ý</option>
                       <option value="part3_short_answer">Phần III · Trả lời ngắn</option>
                     </select>
@@ -1128,13 +1387,14 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
                           <button
                             type="button"
                             onClick={() => toggleEditor(q.id)}
-                            className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors ${
+                            className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold transition-colors inline-flex items-center gap-1 ${
                               isEditorOpen
                                 ? 'bg-blue-600 border-blue-600 text-white'
                                 : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
                             }`}
                           >
-                            {isEditorOpen ? 'Ẩn sửa metadata' : 'Sửa metadata'}
+                            <Edit3 className="w-3 h-3" />
+                            <span>{isEditorOpen ? 'Đóng chỉnh sửa' : 'Chỉnh sửa nhanh'}</span>
                           </button>
                           <button
                             type="button"
@@ -1246,9 +1506,9 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
                         </div>
                       )}
 
-                      {/* Per-question metadata editor */}
+                      {/* Per-question quick content, answer & metadata editor */}
                       {isEditorOpen && (
-                        <PerQuestionMetadataEditor
+                        <PerQuestionQuickEditor
                           question={q}
                           subjects={subjects}
                           onChange={(patch) => handleUpdateSingleQuestion(q.id, patch)}
