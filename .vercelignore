@@ -1,3 +1,8 @@
 server.ts
 server.js
-api/
+server/adminQuestionBankHandler.ts
+api/admin/
+api/exams/
+api/health/
+api/health.ts
+api/submissions/

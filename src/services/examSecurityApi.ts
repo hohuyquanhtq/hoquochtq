@@ -492,6 +492,7 @@ export async function allocateExamPublicCodeOnServer(params: {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        Accept: 'application/json',
         ...headers,
       },
       body: JSON.stringify({
@@ -504,10 +505,12 @@ export async function allocateExamPublicCodeOnServer(params: {
 
     const { data, isHtml } = await parseApiResponsePayload(res);
     if (res.status === 404 || res.status === 405 || isHtml) {
+      const serverDetail =
+        typeof data.error === 'string' && data.error.trim() ? ` ${data.error.trim()}` : '';
       return {
         ok: false,
         code: 'API_ROUTE_ERROR',
-        error: `[API_ROUTE_ERROR] Không gọi được API /api/exams/allocate-public-code (HTTP ${res.status}).`,
+        error: `[API_ROUTE_ERROR] Không gọi được API /api/exams/allocate-public-code (HTTP ${res.status}).${serverDetail}`,
       };
     }
 

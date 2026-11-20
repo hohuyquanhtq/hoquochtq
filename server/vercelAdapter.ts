@@ -46,7 +46,8 @@ async function parseRequestBody(req: ServerlessReq): Promise<unknown> {
 
 export function createVercelHandler(handler: (req: ApiRequest) => Promise<ApiResponse>) {
   return async function vercelHandler(req: ServerlessReq, res: ServerlessRes): Promise<void> {
-    if (req.method === 'OPTIONS') {
+    if ((req.method || '').toUpperCase() === 'OPTIONS') {
+      res.setHeader('Allow', 'GET, POST, HEAD, OPTIONS');
       res.statusCode = 204;
       res.end();
       return;
@@ -63,7 +64,7 @@ export function createVercelHandler(handler: (req: ApiRequest) => Promise<ApiRes
           : req.ip || req.socket?.remoteAddress || '';
 
       const result = await handler({
-        method: req.method,
+        method: (req.method || 'GET').toUpperCase(),
         headers: req.headers,
         body,
         ip,
@@ -71,6 +72,9 @@ export function createVercelHandler(handler: (req: ApiRequest) => Promise<ApiRes
 
       res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
       res.setHeader('Pragma', 'no-cache');
+      if (result.status === 405) {
+        res.setHeader('Allow', 'POST, OPTIONS');
+      }
       if (typeof res.status === 'function' && typeof res.json === 'function') {
         res.status(result.status);
         res.json(result.body);

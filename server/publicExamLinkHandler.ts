@@ -564,10 +564,15 @@ export function createPublicExamLinkHandlers(
     async handleAllocatePublicCode(req: ApiRequest): Promise<ApiResponse> {
       const apiName = 'POST /api/exams/allocate-public-code';
       let stage = 'method_check';
-      if (req.method !== 'POST') {
+      if ((req.method || '').toUpperCase() !== 'POST') {
         return {
           status: 405,
-          body: { stage, errorStage: stage, code: 'API_ROUTE_ERROR', error: 'Method Not Allowed' },
+          body: {
+            stage,
+            errorStage: stage,
+            code: 'API_ROUTE_ERROR',
+            error: 'Phương thức không hợp lệ. API /api/exams/allocate-public-code chỉ hỗ trợ POST.',
+          },
         };
       }
 
@@ -716,10 +721,15 @@ export function createPublicExamLinkHandlers(
     async handleSyncPublicExamLinkStatus(req: ApiRequest): Promise<ApiResponse> {
       const apiName = 'POST /api/exams/sync-link-status';
       let stage = 'method_check';
-      if (req.method !== 'POST') {
+      if ((req.method || '').toUpperCase() !== 'POST') {
         return {
           status: 405,
-          body: { stage, errorStage: stage, code: 'API_ROUTE_ERROR', error: 'Method Not Allowed' },
+          body: {
+            stage,
+            errorStage: stage,
+            code: 'API_ROUTE_ERROR',
+            error: 'Phương thức không hợp lệ. API /api/exams/sync-link-status chỉ hỗ trợ POST.',
+          },
         };
       }
 
