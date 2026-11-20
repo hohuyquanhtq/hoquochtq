@@ -1,0 +1,637 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile with server-enforced RBAC role and account approval status.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "role": { "type": "string", "enum": ["teacher", "student", "admin"] },
+        "status": { "type": "string", "enum": ["pending", "active", "locked", "rejected"] },
+        "phone": { "type": "string", "maxLength": 32 },
+        "school": { "type": "string", "maxLength": 200 },
+        "className": { "type": "string", "maxLength": 80 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "approvedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "name", "role", "status", "createdAt", "updatedAt"]
+    },
+    "TeacherQuestion": {
+      "title": "TeacherQuestion",
+      "description": "Private teacher-owned Chemistry question stored in isolated teacher question bank.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "content": { "type": "string", "minLength": 1, "maxLength": 20000 },
+        "type": { "type": "string", "enum": ["part1_single_choice", "part1_multiple_choice", "part2_true_false", "part3_short_answer"] },
+        "subjectId": { "type": "string", "maxLength": 64 },
+        "subjectName": { "type": "string", "maxLength": 120 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "topic": { "type": "string", "maxLength": 64 },
+        "chapterId": { "type": "string", "maxLength": 128 },
+        "chapterName": { "type": "string", "maxLength": 250 },
+        "lessonId": { "type": "string", "maxLength": 128 },
+        "lessonName": { "type": "string", "maxLength": 250 },
+        "lessonTopic": { "type": "string", "maxLength": 200 },
+        "level": { "type": "string", "enum": ["nhan_biet", "thong_hieu", "van_dung", "van_dung_cao"] },
+        "folderId": { "type": "string", "maxLength": 128 },
+        "options": { "type": "array" },
+        "correctOptionId": { "type": "string", "maxLength": 8 },
+        "correctOptionIds": { "type": "array" },
+        "statements": { "type": "array" },
+        "shortAnswerConfig": { "type": "object" },
+        "imageUrl": { "type": "string", "maxLength": 1000 },
+        "explanation": { "type": "string", "maxLength": 20000 },
+        "source": { "type": "string", "maxLength": 300 },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "parseStatus": { "type": "string", "enum": ["verified", "needs_review", "error"] },
+        "parseWarning": { "type": "string", "maxLength": 500 },
+        "teacherVerified": { "type": "boolean" },
+        "section": { "type": "string", "maxLength": 64 },
+        "sectionTitle": { "type": "string", "maxLength": 300 },
+        "textbookSeries": { "type": "string", "maxLength": 150 },
+        "copiedFromQuestionId": { "type": "string", "maxLength": 128 },
+        "copiedFromOwnerId": { "type": "string", "maxLength": 128 },
+        "copiedFromOwnerName": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "code", "content", "type", "grade", "topic", "level", "createdAt", "updatedAt"]
+    },
+    "TeacherFolder": {
+      "title": "TeacherFolder",
+      "description": "Private teacher/admin-owned folder for organizing exams and questions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "folderId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "parentId": { "type": ["string", "null"], "maxLength": 128 },
+        "description": { "type": "string", "maxLength": 500 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "color": { "type": "string", "maxLength": 32 },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "itemCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "createdAt", "updatedAt"]
+    },
+    "Classroom": {
+      "title": "Classroom",
+      "description": "Teacher-managed class workspace with join code and assigned exam codes.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "school": { "type": "string", "maxLength": 200 },
+        "className": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "description": { "type": "string", "maxLength": 500 },
+        "assignedExamCodes": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "teacherName", "className", "classCode", "assignedExamCodes", "isActive", "createdAt", "updatedAt"]
+    },
+    "ClassJoinLookup": {
+      "title": "ClassJoinLookup",
+      "description": "Single-document lookup by class join code for authenticated students.",
+      "type": "object",
+      "properties": {
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "className": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "school": { "type": "string", "maxLength": 200 },
+        "assignedExamCodes": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["classCode", "classId", "className", "teacherId", "teacherName", "assignedExamCodes", "isActive", "updatedAt"]
+    },
+    "ClassEnrollment": {
+      "title": "ClassEnrollment",
+      "description": "Student membership link between a student UID and a teacher class.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "className": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "studentId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "studentClassName": { "type": "string", "maxLength": 80 },
+        "joinedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "classId", "classCode", "className", "teacherId", "teacherName", "studentId", "studentName", "studentEmail", "joinedAt"]
+    },
+    "TeacherUploadRecord": {
+      "title": "TeacherUploadRecord",
+      "description": "Metadata record of teacher DOCX/PDF exam uploads.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "fileType": { "type": "string", "enum": ["docx", "pdf", "text"] },
+        "examTitle": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "totalQuestions": { "type": "number" },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "fileName", "fileType", "examTitle", "totalQuestions", "grade", "createdAt"]
+    },
+    "ExamMaster": {
+      "title": "ExamMaster",
+      "description": "Teacher-owned complete exam definition including answer keys and detailed solutions.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "subjectId": { "type": "string", "maxLength": 64 },
+        "subjectName": { "type": "string", "maxLength": 120 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "topic": { "type": "string", "maxLength": 64 },
+        "folderId": { "type": ["string", "null"], "maxLength": 128 },
+        "durationMinutes": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "questions": { "type": "array" },
+        "rules": { "type": "object" },
+        "shuffleQuestions": { "type": "boolean" },
+        "shuffleOptions": { "type": "boolean" },
+        "isPublished": { "type": "boolean" },
+        "openAt": { "type": "string", "maxLength": 64 },
+        "closeAt": { "type": "string", "maxLength": 64 },
+        "maxAttempts": { "type": "number" },
+        "showScoreAfterSubmit": { "type": "boolean" },
+        "showAnswersAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "allowReviewLater": { "type": "boolean" },
+        "assignedClassCodes": { "type": "array" },
+        "requiresPassword": { "type": "boolean" },
+        "passwordUpdatedAt": { "type": ["string", "null"], "maxLength": 64 },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "authorName": { "type": "string", "maxLength": 150 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "code", "title", "grade", "durationMinutes", "totalQuestions",
+        "totalScore", "questions", "rules", "isPublished", "ownerId",
+        "authorName", "createdAt", "updatedAt"
+      ]
+    },
+    "ExamStatus": {
+      "title": "ExamStatus",
+      "description": "Publicly queryable non-sensitive exam availability metadata keyed by normalized exam code.",
+      "type": "object",
+      "properties": {
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "durationMinutes": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "isPublished": { "type": "boolean" },
+        "openAt": { "type": "string", "maxLength": 64 },
+        "closeAt": { "type": "string", "maxLength": 64 },
+        "requiresPassword": { "type": "boolean" },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
+        "showScoreAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "maxAttempts": { "type": "number" },
+        "authorName": { "type": "string", "maxLength": 150 },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "examCode", "examId", "title", "grade", "durationMinutes",
+        "totalQuestions", "totalScore", "isPublished", "authorName",
+        "ownerId", "updatedAt"
+      ]
+    },
+    "PublicExam": {
+      "title": "PublicExam",
+      "description": "Student-safe published exam projection stripped of correct answers, solutions, and teacher internal fields.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "code": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^[0-9]{6}$" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 300 },
+        "grade": { "type": "string", "enum": ["10", "11", "12", "chuyen_hsg"] },
+        "topic": { "type": "string", "maxLength": 64 },
+        "durationMinutes": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "questions": { "type": "array" },
+        "rules": { "type": "object" },
+        "shuffleQuestions": { "type": "boolean" },
+        "shuffleOptions": { "type": "boolean" },
+        "isPublished": { "type": "boolean" },
+        "openAt": { "type": "string", "maxLength": 64 },
+        "closeAt": { "type": "string", "maxLength": 64 },
+        "maxAttempts": { "type": "number" },
+        "showScoreAfterSubmit": { "type": "boolean" },
+        "showAnswersAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "allowReviewLater": { "type": "boolean" },
+        "requiresPassword": { "type": "boolean" },
+        "passwordUpdatedAt": { "type": ["string", "null"], "maxLength": 64 },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
+        "authorName": { "type": "string", "maxLength": 150 },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "maxLength": 64 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "code", "title", "grade", "durationMinutes", "totalQuestions",
+        "totalScore", "questions", "rules", "isPublished",
+        "showScoreAfterSubmit", "showAnswersAfterSubmit", "showSolutionsAfterSubmit",
+        "authorName", "ownerId", "updatedAt"
+      ]
+    },
+    "ExamAnswerKey": {
+      "title": "ExamAnswerKey",
+      "description": "Teacher/Admin-only answer keys and explanations. Never readable directly by students.",
+      "type": "object",
+      "properties": {
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isPublished": { "type": "boolean" },
+        "showAnswersAfterSubmit": { "type": "boolean" },
+        "showSolutionsAfterSubmit": { "type": "boolean" },
+        "allowAnswerReview": { "type": "boolean" },
+        "answerReviewMinScore": { "type": "number" },
+        "answerReviewEnabledAt": { "type": ["string", "null"], "maxLength": 64 },
+        "answerMap": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "examCode", "examId", "ownerId", "isPublished",
+        "showAnswersAfterSubmit", "showSolutionsAfterSubmit", "answerMap", "updatedAt"
+      ]
+    },
+    "StudentSubmission": {
+      "title": "StudentSubmission",
+      "description": "Student exam submission stored for teacher review and authenticated student history.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "attemptId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examTitle": { "type": "string", "maxLength": 300 },
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^([0-9]{6}|[A-HJ-NP-Z2-9]{6})$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "studentClass": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "startedAt": { "type": "string", "maxLength": 64 },
+        "submittedAt": { "type": "string", "maxLength": 64 },
+        "durationSeconds": { "type": "number" },
+        "answers": { "type": "object" },
+        "part1Score": { "type": "number" },
+        "part2Score": { "type": "number" },
+        "part3Score": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "maxPossibleScore": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "correctQuestionsCount": { "type": "number" },
+        "wrongQuestionsCount": { "type": "number" },
+        "unansweredQuestionsCount": { "type": "number" },
+        "tabSwitchesCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "in_progress", "timed_out"] },
+        "gradedByServer": { "type": "boolean" },
+        "serverGradeDigest": { "type": "string" },
+        "serverGradedAt": { "type": "string" },
+        "examVersionUpdatedAt": { "type": "string" },
+        "hasSubmissionSnapshot": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "examId", "examTitle", "examCode", "ownerId", "studentId",
+        "studentName", "studentClass", "startedAt", "submittedAt",
+        "durationSeconds", "answers", "part1Score", "part2Score",
+        "part3Score", "totalScore", "maxPossibleScore",
+        "correctQuestionsCount", "status", "createdAt"
+      ]
+    },
+    "SubmissionSnapshot": {
+      "title": "SubmissionSnapshot",
+      "description": "Immutable per-attempt snapshot capturing exact question version, options, keys, student answers, and per-question scores. Teacher-owner and Admin only.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "submissionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "attemptId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^([0-9]{6}|[A-HJ-NP-Z2-9]{6})$" },
+        "variantCode": { "type": "string", "maxLength": 32 },
+        "examTitle": { "type": "string", "maxLength": 300 },
+        "examVersionUpdatedAt": { "type": "string", "maxLength": 64 },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "studentClass": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "startedAt": { "type": "string", "maxLength": 64 },
+        "submittedAt": { "type": "string", "maxLength": 64 },
+        "durationSeconds": { "type": "number" },
+        "part1Score": { "type": "number" },
+        "part2Score": { "type": "number" },
+        "part3Score": { "type": "number" },
+        "totalScore": { "type": "number" },
+        "maxPossibleScore": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "correctQuestionsCount": { "type": "number" },
+        "wrongQuestionsCount": { "type": "number" },
+        "unansweredQuestionsCount": { "type": "number" },
+        "tabSwitchesCount": { "type": "number" },
+        "status": { "type": "string", "enum": ["completed", "in_progress", "timed_out"] },
+        "gradedByServer": { "type": "boolean" },
+        "isLegacyReconstructed": { "type": "boolean" },
+        "capturedAt": { "type": "string", "maxLength": 64 },
+        "questionResults": { "type": "array" }
+      },
+      "required": [
+        "id", "submissionId", "examId", "examCode", "examTitle", "ownerId",
+        "studentId", "studentName", "studentClass", "startedAt", "submittedAt",
+        "durationSeconds", "part1Score", "part2Score", "part3Score", "totalScore",
+        "maxPossibleScore", "totalQuestions", "correctQuestionsCount",
+        "wrongQuestionsCount", "unansweredQuestionsCount", "status", "capturedAt", "questionResults"
+      ]
+    },
+    "AdminMarker": {
+      "title": "AdminMarker",
+      "description": "Trusted admin marker document keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["admin"] }
+      },
+      "required": ["uid", "role"]
+    },
+    "ExamLink": {
+      "title": "ExamLink",
+      "description": "Server-allocated unique 6-character alphanumeric (or legacy 6-digit numeric) short link mapping to an internal exam.",
+      "type": "object",
+      "properties": {
+        "publicCode": { "type": "string", "minLength": 6, "maxLength": 6, "pattern": "^([0-9]{6}|[A-HJ-NP-Z2-9]{6})$" },
+        "examId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "examCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["publicCode", "examId", "examCode", "ownerId", "isActive", "createdAt", "updatedAt"]
+    },
+    "TeacherSubject": {
+      "title": "TeacherSubject",
+      "description": "Teacher-created custom subject extending the GDPT 2018 subject catalog.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorId": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "shortName": { "type": "string", "maxLength": 40 },
+        "codePrefix": { "type": "string", "maxLength": 16 },
+        "isDefault": { "type": "boolean" },
+        "order": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "name", "createdAt", "updatedAt"]
+    },
+    "CurriculumConfig": {
+      "title": "CurriculumConfig",
+      "description": "School-wide approved GDPT 2018 textbook series configuration managed by Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "textbookSeries": { "type": "string", "maxLength": 150 },
+        "textbookYear": { "type": "string", "maxLength": 64 },
+        "schoolName": { "type": "string", "maxLength": 200 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "textbookSeries", "textbookYear", "updatedAt"]
+    },
+    "CurriculumLesson": {
+      "title": "CurriculumLesson",
+      "description": "Admin-curated GDPT 2018 textbook chapter and lesson entry indexed by subjectId and grade.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectId": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "grade": { "type": "string", "enum": ["10", "11", "12"] },
+        "textbookSeries": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "textbookYear": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "chapterId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "chapterName": { "type": "string", "minLength": 1, "maxLength": 250 },
+        "chapterOrder": { "type": "number" },
+        "lessonId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "lessonName": { "type": "string", "minLength": 1, "maxLength": 250 },
+        "lessonOrder": { "type": "number" },
+        "status": { "type": "string", "enum": ["active", "inactive"] },
+        "createdBy": { "type": "string", "maxLength": 128 },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "subjectId", "subjectName", "grade", "textbookSeries", "textbookYear",
+        "chapterId", "chapterName", "lessonId", "lessonName", "lessonOrder", "status",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "CurriculumImportLog": {
+      "title": "CurriculumImportLog",
+      "description": "Immutable admin audit log for Excel/CSV curriculum bulk imports.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fileName": { "type": "string", "minLength": 1, "maxLength": 250 },
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "importedAt": { "type": "string", "format": "date-time" },
+        "mode": { "type": "string", "enum": ["append", "sync"] },
+        "subjectsCount": { "type": "number" },
+        "gradesCount": { "type": "number" },
+        "chaptersCount": { "type": "number" },
+        "lessonsCount": { "type": "number" },
+        "addedCount": { "type": "number" },
+        "updatedCount": { "type": "number" },
+        "skippedCount": { "type": "number" },
+        "deletedCount": { "type": "number" },
+        "errorCount": { "type": "number" },
+        "duplicateCount": { "type": "number" },
+        "textbooks": { "type": "array" }
+      },
+      "required": [
+        "id", "fileName", "actorUid", "actorName", "importedAt", "mode",
+        "subjectsCount", "gradesCount", "chaptersCount", "lessonsCount",
+        "addedCount", "updatedCount", "skippedCount", "deletedCount",
+        "errorCount", "duplicateCount"
+      ]
+    },
+    "AdminQuestionAuditLog": {
+      "title": "AdminQuestionAuditLog",
+      "description": "Immutable Admin-only audit record for copying, editing, or deleting teacher questions from the school-wide question bank.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "action": { "type": "string", "enum": ["copy_to_admin", "edit_original", "delete_original"] },
+        "questionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "questionCode": { "type": "string", "maxLength": 64 },
+        "copiedQuestionId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "originalOwnerId": { "type": "string", "maxLength": 128 },
+        "originalOwnerName": { "type": "string", "maxLength": 150 },
+        "originalOwnerEmail": { "type": "string", "maxLength": 200 },
+        "actorUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "actorName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "actorEmail": { "type": "string", "maxLength": 200 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 1000 },
+        "beforeSummary": { "type": "string", "maxLength": 2000 },
+        "afterSummary": { "type": "string", "maxLength": 2000 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "id", "action", "questionId", "questionCode", "originalOwnerId",
+        "originalOwnerName", "actorUid", "actorName", "reason", "beforeSummary", "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles with admin-approved teacher status and non-escalatable role."
+    },
+    "/questions/{questionId}": {
+      "schema": { "$ref": "#/entities/TeacherQuestion" },
+      "description": "Teacher-isolated Chemistry question bank documents."
+    },
+    "/folders/{folderId}": {
+      "schema": { "$ref": "#/entities/TeacherFolder" },
+      "description": "Teacher-isolated folder hierarchy documents."
+    },
+    "/subjects/{subjectId}": {
+      "schema": { "$ref": "#/entities/TeacherSubject" },
+      "description": "Teacher-isolated custom GDPT 2018 subject extensions."
+    },
+    "/classes/{classId}": {
+      "schema": { "$ref": "#/entities/Classroom" },
+      "description": "Teacher-owned classrooms with join codes and assigned exam codes."
+    },
+    "/classJoinCodes/{classCode}": {
+      "schema": { "$ref": "#/entities/ClassJoinLookup" },
+      "description": "Single-doc lookup by classCode for authenticated student enrollment."
+    },
+    "/classEnrollments/{enrollmentId}": {
+      "schema": { "$ref": "#/entities/ClassEnrollment" },
+      "description": "Enrollment links keyed by {classId}_{studentUid}."
+    },
+    "/uploadRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/TeacherUploadRecord" },
+      "description": "Teacher-isolated DOCX/PDF upload history records."
+    },
+    "/exams/{examId}": {
+      "schema": { "$ref": "#/entities/ExamMaster" },
+      "description": "Private teacher-owned master exams with answer keys and explanations."
+    },
+    "/examStatus/{examCode}": {
+      "schema": { "$ref": "#/entities/ExamStatus" },
+      "description": "Public single-doc status lookup by exam code without question or answer payloads."
+    },
+    "/publicExams/{examCode}": {
+      "schema": { "$ref": "#/entities/PublicExam" },
+      "description": "Sanitized published exam questions readable via single-doc get by exam code."
+    },
+    "/examLinks/{publicCode}": {
+      "schema": { "$ref": "#/entities/ExamLink" },
+      "description": "Server-managed 6-digit public link lookup docs (single-doc get only; zero client list or write)."
+    },
+    "/examKeys/{examCode}": {
+      "schema": { "$ref": "#/entities/ExamAnswerKey" },
+      "description": "Teacher/Admin-only answer keys. Students must request floor-score-gated review via backend API."
+    },
+    "/submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/StudentSubmission" },
+      "description": "Student exam submissions readable by exam owner teacher, submitting student, or admin."
+    },
+    "/submissionSnapshots/{submissionId}": {
+      "schema": { "$ref": "#/entities/SubmissionSnapshot" },
+      "description": "Teacher-owner and Admin-only immutable per-attempt question/answer/key snapshots. Students have zero access."
+    },
+    "/admins/{userId}": {
+      "schema": { "$ref": "#/entities/AdminMarker" },
+      "description": "Admin role assignment documents."
+    },
+    "/examSecrets/{examCode}": {
+      "description": "Server-private vault containing scrypt password hash, server grading rules, and answer keys (client read: false)."
+    },
+    "/examPasswordAttempts/{attemptId}": {
+      "description": "Server-only brute-force attempt counters and lockout windows (client read/write: false)."
+    },
+    "/examAccessGrants/{grantId}": {
+      "description": "Server-issued per-student-per-exam unlock grants keyed by {examCode}_{uid} (client write: false)."
+    },
+    "/answerReviewAccess/{accessId}": {
+      "description": "Server-verified floor-score qualification audit grants keyed by {examCode}_{uid} (client write: false)."
+    },
+    "/curriculumConfig/{configId}": {
+      "schema": { "$ref": "#/entities/CurriculumConfig" },
+      "description": "Centralized school textbook series setting managed by Admin and readable by authenticated teachers."
+    },
+    "/curriculumLessons/{lessonId}": {
+      "schema": { "$ref": "#/entities/CurriculumLesson" },
+      "description": "Centralized GDPT 2018 chapter/lesson catalog managed by Admin and consumed by Teachers via cascading dropdown."
+    },
+    "/curriculumImportLogs/{logId}": {
+      "schema": { "$ref": "#/entities/CurriculumImportLog" },
+      "description": "Admin-only immutable audit history of Excel/CSV bulk curriculum imports."
+    },
+    "/adminQuestionAuditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminQuestionAuditLog" },
+      "description": "Admin-only immutable audit log for privileged Super Admin actions on school-wide question bank records."
+    }
+  }
+}

@@ -117,9 +117,8 @@ service cloud.firestore {
           'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic', 'level',
           'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
           'imageUrl', 'explanation', 'source', 'authorId', 'parseStatus', 'parseWarning',
-          'teacherVerified', 'section', 'sectionTitle', 'textbookSeries',
-          'copiedFromQuestionId', 'copiedFromOwnerId', 'copiedFromOwnerName',
-          'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+          'teacherVerified', 'section', 'sectionTitle', 'createdAt', 'updatedAt',
+          'serverCreatedAt', 'serverUpdatedAt'
         ])
         && isValidId(data.id)
         && isValidId(data.ownerId)
@@ -151,10 +150,6 @@ service cloud.firestore {
         && (!('teacherVerified' in data) || data.teacherVerified is bool)
         && (!('section' in data) || (data.section is string && data.section.size() <= 64))
         && (!('sectionTitle' in data) || (data.sectionTitle is string && data.sectionTitle.size() <= 300))
-        && (!('textbookSeries' in data) || (data.textbookSeries is string && data.textbookSeries.size() <= 150))
-        && (!('copiedFromQuestionId' in data) || (data.copiedFromQuestionId is string && data.copiedFromQuestionId.size() <= 128))
-        && (!('copiedFromOwnerId' in data) || (data.copiedFromOwnerId is string && data.copiedFromOwnerId.size() <= 128))
-        && (!('copiedFromOwnerName' in data) || (data.copiedFromOwnerName is string && data.copiedFromOwnerName.size() <= 150))
         && data.createdAt is string && data.createdAt.size() <= 64
         && data.updatedAt is string && data.updatedAt.size() <= 64
         && data.serverCreatedAt is timestamp
@@ -693,15 +688,15 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'code', 'content', 'type', 'subjectId', 'subjectName', 'grade', 'topic',
               'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
-              'textbookSeries', 'level', 'folderId',
-              'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
+              'level', 'folderId',
+              'options', 'correctOptionId', 'statements', 'shortAnswerConfig',
               'imageUrl', 'explanation', 'source', 'parseStatus', 'parseWarning',
               'teacherVerified', 'section', 'sectionTitle', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
             'ownerId', 'authorId', 'code', 'content', 'type', 'subjectId', 'subjectName',
             'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
-            'textbookSeries', 'level', 'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements',
+            'level', 'folderId', 'options', 'correctOptionId', 'statements',
             'shortAnswerConfig', 'imageUrl', 'explanation', 'source', 'parseStatus',
             'parseWarning', 'teacherVerified', 'section', 'sectionTitle',
             'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
@@ -1337,48 +1332,6 @@ service cloud.firestore {
       allow create: if isValidId(logId)
         && isAdmin()
         && isValidCurriculumImportLog(incoming())
-        && incoming().id == logId
-        && incoming().actorUid == request.auth.uid
-        && incoming().serverCreatedAt == request.time;
-      allow update, delete: if false;
-    }
-
-    function isValidAdminQuestionAuditLog(data) {
-      return data.keys().hasAll([
-          'id', 'action', 'questionId', 'questionCode', 'originalOwnerId',
-          'originalOwnerName', 'actorUid', 'actorName', 'reason', 'beforeSummary',
-          'createdAt', 'serverCreatedAt'
-        ])
-        && data.keys().hasOnly([
-          'id', 'action', 'questionId', 'questionCode', 'copiedQuestionId',
-          'originalOwnerId', 'originalOwnerName', 'originalOwnerEmail',
-          'actorUid', 'actorName', 'actorEmail', 'reason',
-          'beforeSummary', 'afterSummary', 'createdAt', 'serverCreatedAt'
-        ])
-        && isValidId(data.id)
-        && data.action in ['copy_to_admin', 'edit_original', 'delete_original']
-        && isValidId(data.questionId)
-        && data.questionCode is string && data.questionCode.size() >= 1 && data.questionCode.size() <= 64
-        && (!('copiedQuestionId' in data) || isValidId(data.copiedQuestionId))
-        && data.originalOwnerId is string && data.originalOwnerId.size() <= 128
-        && data.originalOwnerName is string && data.originalOwnerName.size() <= 150
-        && (!('originalOwnerEmail' in data) || (data.originalOwnerEmail is string && data.originalOwnerEmail.size() <= 200))
-        && isValidId(data.actorUid)
-        && data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 150
-        && (!('actorEmail' in data) || (data.actorEmail is string && data.actorEmail.size() <= 200))
-        && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 1000
-        && data.beforeSummary is string && data.beforeSummary.size() <= 2000
-        && (!('afterSummary' in data) || (data.afterSummary is string && data.afterSummary.size() <= 2000))
-        && data.createdAt is string && data.createdAt.size() <= 64
-        && data.serverCreatedAt is timestamp;
-    }
-
-    match /adminQuestionAuditLogs/{logId} {
-      allow get: if isValidId(logId) && isAdmin();
-      allow list: if isAdmin();
-      allow create: if isValidId(logId)
-        && isAdmin()
-        && isValidAdminQuestionAuditLog(incoming())
         && incoming().id == logId
         && incoming().actorUid == request.auth.uid
         && incoming().serverCreatedAt == request.time;

@@ -216,9 +216,6 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     ...(q.folderId ? { folderId: q.folderId.slice(0, 128) } : {}),
     ...(q.options ? { options: q.options.slice(0, 8) } : {}),
     ...(q.correctOptionId ? { correctOptionId: q.correctOptionId.slice(0, 8) } : {}),
-    ...(Array.isArray(q.correctOptionIds) && q.correctOptionIds.length > 0
-      ? { correctOptionIds: q.correctOptionIds.slice(0, 8) }
-      : {}),
     ...(q.statements ? { statements: q.statements.slice(0, 8) } : {}),
     ...(q.shortAnswerConfig ? { shortAnswerConfig: q.shortAnswerConfig } : {}),
     ...(q.imageUrl && q.imageUrl.trim() ? { imageUrl: q.imageUrl.trim().slice(0, 1000) } : {}),
@@ -230,18 +227,6 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     ...(q.teacherVerified !== undefined ? { teacherVerified: !!q.teacherVerified } : {}),
     ...(q.section ? { section: q.section.slice(0, 64) } : {}),
     ...(q.sectionTitle ? { sectionTitle: q.sectionTitle.slice(0, 300) } : {}),
-    ...(q.textbookSeries && q.textbookSeries.trim()
-      ? { textbookSeries: q.textbookSeries.trim().slice(0, 150) }
-      : {}),
-    ...(q.copiedFromQuestionId && q.copiedFromQuestionId.trim()
-      ? { copiedFromQuestionId: q.copiedFromQuestionId.trim().slice(0, 128) }
-      : {}),
-    ...(q.copiedFromOwnerId && q.copiedFromOwnerId.trim()
-      ? { copiedFromOwnerId: q.copiedFromOwnerId.trim().slice(0, 128) }
-      : {}),
-    ...(q.copiedFromOwnerName && q.copiedFromOwnerName.trim()
-      ? { copiedFromOwnerName: q.copiedFromOwnerName.trim().slice(0, 150) }
-      : {}),
     createdAt: q.createdAt || nowIso,
     updatedAt: nowIso,
     serverCreatedAt: existingCreatedAt || serverTimestamp(),
