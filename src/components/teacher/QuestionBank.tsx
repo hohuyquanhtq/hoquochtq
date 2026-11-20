@@ -1208,9 +1208,16 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           existingQuestions={questions}
           subjects={subjects}
           currentUserId={currentUserId}
-          onConfirmSave={async (questionsToSave) => {
-            const activeSubjectId = subjectFilter !== 'all' ? subjectFilter : (subjects[0]?.id || 'chemistry');
-            const activeSubject = subjects.find((s) => s.id === activeSubjectId) || subjects[0];
+onConfirmSave={async (questionsToSave) => {
+            // 1. Tự động tìm môn Hóa học nếu bộ lọc đang là 'all' hoặc chọn môn Hóa
+            const chemSub = subjects.find(
+              (s) => s.id === 'chemistry' || s.name.toLowerCase().includes('hóa') || s.id.toLowerCase().includes('chem')
+            );
+            const activeSubject = (subjectFilter !== 'all' ? subjects.find((s) => s.id === subjectFilter) : null)
+              || chemSub
+              || subjects[0];
+            const activeSubjectId = activeSubject.id;
+
             const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
             const targetLevel = levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined;
 
@@ -1228,28 +1235,33 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               }
             }
 
-            const finalizedQuestions = questionsToSave.map((q) => ({
-              ...q,
-              subjectId: activeSubjectId,
-              subjectName: activeSubject.name,
-              grade: activeGrade,
-              chapterId: chapterFilter !== 'all' ? chapterFilter : q.chapterId,
-              chapterName: selectedChapter?.chapterName || q.chapterName,
-              lessonId: selectedLessonId || q.lessonId,
-              lessonName: selectedLessonName || q.lessonName || 'Bóc tách từ Word',
-              lessonTopic: selectedLessonName || q.lessonTopic || 'Bóc tách từ Word',
-              level: targetLevel || q.level || 'nhan_biet',
-            }));
+            const finalizedQuestions = questionsToSave.map((q) => {
+              // 2. Nếu mã câu bắt đầu bằng HH hoặc môn đang chọn là Hóa thì ép cứng tuyệt đối là Hóa học
+              const isChemCode = q.code?.startsWith('HH');
+              const finalSubject = (isChemCode && chemSub) ? chemSub : activeSubject;
+
+              return {
+                ...q,
+                subjectId: finalSubject.id,
+                subjectName: finalSubject.name,
+                grade: activeGrade,
+                chapterId: chapterFilter !== 'all' ? chapterFilter : q.chapterId,
+                chapterName: selectedChapter?.chapterName || q.chapterName,
+                lessonId: selectedLessonId || q.lessonId,
+                lessonName: selectedLessonName || q.lessonName || 'Bóc tách từ Word',
+                lessonTopic: selectedLessonName || q.lessonTopic || 'Bóc tách từ Word',
+                level: targetLevel || q.level || 'nhan_biet',
+              };
+            });
 
             finalizedQuestions.forEach((q) => onAddQuestion(q));
-            showToast(`Đã thêm thành công ${finalizedQuestions.length} câu hỏi vào Ngân hàng!`);
+            showToast(`Đã thêm thành công ${finalizedQuestions.length} câu hỏi vào môn ${activeSubject.name}!`);
             setActiveWordResult(null);
             return { successCount: finalizedQuestions.length, skippedCount: 0 };
           }}
           onClose={() => setActiveWordResult(null)}
         />
       )}
-
       {/* Modal Thêm câu hỏi thủ công */}
       <QuestionFormModal
         isOpen={isAddModalOpen}
