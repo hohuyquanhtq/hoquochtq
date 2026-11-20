@@ -15,6 +15,7 @@ import {
   X,
   PanelLeftClose,
   PanelLeftOpen,
+  Shuffle,
 } from 'lucide-react';
 import { APP_CONFIG } from '../../constants/brand';
 import { UserRole } from '../../types';
@@ -73,6 +74,12 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
           label: 'Bóc tách Word/PDF',
           matchTabs: ['upload_exam'],
           icon: FileUp,
+        },
+        {
+          id: 'shuffle_exam',
+          label: 'Trộn & Xáo Đề Thi',
+          matchTabs: ['shuffle_exam'],
+          icon: Shuffle,
         },
       ],
     },

@@ -88,6 +88,7 @@ import { ExamResults } from './components/teacher/ExamResults';
 import { TeacherSubmissionReviewPage } from './components/teacher/TeacherSubmissionReviewPage';
 import { ClassManager } from './components/teacher/ClassManager';
 import { SystemSettingsView } from './components/teacher/SystemSettingsView';
+import { ShuffleExamTab } from './components/teacher/ShuffleExamTab';
 
 // Student Components
 import { StudentHome, StudentAssignedExamItem } from './components/student/StudentHome';
@@ -1485,6 +1486,13 @@ export default function App() {
               />
             )}
 
+            {activeTab === 'shuffle_exam' && (
+              <ShuffleExamTab
+                exams={exams}
+                defaultSchoolName={userProfile.school || ''}
+              />
+            )}
+
             {activeTab === 'question_bank' && (
               <QuestionBank
                 questions={questions}
@@ -1666,6 +1674,7 @@ export default function App() {
               'admin_users',
               'admin_curriculum',
               'upload_exam',
+              'shuffle_exam',
               'question_bank',
               'folder_manager',
               'create_exam',

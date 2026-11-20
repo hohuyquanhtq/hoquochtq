@@ -37,6 +37,7 @@ interface HeaderProps {
 const TAB_TITLES: Record<string, string> = {
   dashboard: 'Tổng quan Dashboard',
   upload_exam: 'Bóc tách đề thi từ Word / PDF',
+  shuffle_exam: 'Xáo đề thi & Xuất file Word',
   create_exam: 'Tạo đề thi & Ma trận điểm',
   exam_manager: 'Quản lý đề thi',
   question_bank: 'Ngân hàng câu hỏi',
