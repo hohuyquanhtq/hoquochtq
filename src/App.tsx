@@ -3,7 +3,6 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-'use client';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   User,
@@ -82,8 +81,6 @@ import { ProtectedRoute } from './components/auth/ProtectedRoute';
 import { TeacherDashboard } from './components/teacher/TeacherDashboard';
 import { ExamUploader } from './components/teacher/ExamUploader';
 import { QuestionBank } from './components/teacher/QuestionBank';
-import type { WordBatchSaveResult } from './components/teacher/WordImportReviewModal';
-import { buildQuestionDuplicateFingerprint } from './utils/questionDuplicateCheck';
 import { ExamCreator } from './components/teacher/ExamCreator';
 import { ExamManager } from './components/teacher/ExamManager';
 import { ExamResults } from './components/teacher/ExamResults';
@@ -500,87 +497,6 @@ export default function App() {
       console.warn('[HQTest] Could not sync question batch to Firestore:', err);
     });
     setActiveTab('question_bank');
-  };
-
-  const handleImportWordQuestionsToBank = async (
-    incomingQuestions: Question[]
-  ): Promise<WordBatchSaveResult> => {
-    if (!activeUid) {
-      return {
-        savedCount: 0,
-        skippedDuplicateCount: 0,
-        firestoreSynced: false,
-        error: 'Phiên đăng nhập chưa sẵn sàng. Vui lòng đăng nhập lại trước khi lưu.',
-      };
-    }
-
-    const latestExisting = StorageService.getQuestions(activeUid);
-    const existingFingerprints = new Set<string>();
-    [...latestExisting, ...questions].forEach((existingQ) => {
-      const fp = buildQuestionDuplicateFingerprint(existingQ);
-      if (fp) existingFingerprints.add(fp);
-    });
-
-    const nowIso = new Date().toISOString();
-    const uniqueScoped: Question[] = [];
-    let skippedDuplicateCount = 0;
-
-    incomingQuestions.forEach((q, idx) => {
-      const fp = buildQuestionDuplicateFingerprint(q);
-      if (fp && existingFingerprints.has(fp)) {
-        skippedDuplicateCount++;
-        return;
-      }
-      if (fp) existingFingerprints.add(fp);
-
-      uniqueScoped.push({
-        ...q,
-        id: q.id || `q_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 6)}`,
-        subjectId: q.subjectId || DEFAULT_SUBJECT_ID,
-        subjectName: q.subjectName || DEFAULT_SUBJECT_NAME,
-        ownerId: activeUid,
-        authorId: activeUid,
-        createdAt: q.createdAt || nowIso,
-        updatedAt: nowIso,
-      });
-    });
-
-    if (uniqueScoped.length === 0) {
-      return {
-        savedCount: 0,
-        skippedDuplicateCount,
-        firestoreSynced: false,
-        error: 'Tất cả các câu hỏi được chọn đều đã tồn tại trong Ngân hàng câu hỏi.',
-      };
-    }
-
-    try {
-      await saveQuestionsBatchToFirestore(uniqueScoped, activeUid);
-      uniqueScoped.forEach((q) => StorageService.addQuestion(q, activeUid));
-      setQuestions(StorageService.getQuestions(activeUid));
-      return {
-        savedCount: uniqueScoped.length,
-        skippedDuplicateCount,
-        firestoreSynced: true,
-      };
-    } catch (err) {
-      console.error('[HQTest] Failed to save imported Word questions to Firestore:', err);
-      let friendlyMsg = 'Không thể lưu câu hỏi lên Firestore. Vui lòng kiểm tra kết nối mạng hoặc quyền truy cập.';
-      if (err instanceof Error && err.message) {
-        try {
-          const parsed = JSON.parse(err.message) as { error?: string };
-          friendlyMsg = parsed.error || err.message;
-        } catch {
-          friendlyMsg = err.message;
-        }
-      }
-      return {
-        savedCount: 0,
-        skippedDuplicateCount,
-        firestoreSynced: false,
-        error: friendlyMsg,
-      };
-    }
   };
 
   const handleFileParsedRecord = (rec: {
@@ -1537,8 +1453,6 @@ export default function App() {
                 onUpdateQuestion={handleUpdateQuestion}
                 onDeleteQuestion={handleDeleteQuestion}
                 onBulkDeleteQuestions={handleBulkDeleteQuestions}
-                onImportQuestionsBatch={handleImportWordQuestionsToBank}
-                onFileParsedRecord={handleFileParsedRecord}
                 onCreateExamFromSelected={handleCreateExamFromSelected}
               />
             )}

@@ -1,3 +1,4 @@
+import mammoth from 'mammoth';
 import {
   Question,
   QuestionType,
@@ -37,8 +38,6 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
   }
 
   try {
-    const mammothModule = await import('mammoth');
-    const mammoth = mammothModule.default ?? mammothModule;
     const result = await mammoth.extractRawText({ arrayBuffer });
     return result.value;
   } catch (err) {
