@@ -441,7 +441,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setDeleteTarget(null);
   };
 
-  // --- XỬ LÝ BÓC TÁCH FILE WORD BẰNG ENGINE CHUẨN parseDocxExam ---
+  // --- XỬ LÝ BÓC TÁCH FILE WORD: GHI ĐÈ TRỰC TIẾP METADATA THEO BỘ LỌC NGOÀI ---
   const handleWordFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -455,33 +455,70 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setIsExtractingWord(true);
     try {
       const buffer = await file.arrayBuffer();
-      // Khối lớp mặc định lấy theo bộ lọc đang chọn
-      const defaultGrade =
-        gradeFilter !== 'all' && (gradeFilter === '10' || gradeFilter === '11' || gradeFilter === '12' || gradeFilter === 'chuyen_hsg')
-          ? (gradeFilter as '10' | '11' | '12' | 'chuyen_hsg')
-          : '11';
 
-      // Gọi trực tiếp engine chuẩn xử lý OMML, công thức Hóa học & nhận diện đáp án
-      const { result } = await parseDocxExam(buffer, defaultGrade);
+      // 1. Xác định chính xác Môn học & Khối lớp từ bộ lọc hiện tại
+      const activeSubjectId = subjectFilter !== 'all' ? subjectFilter : (subjects[0]?.id || 'chemistry');
+      const activeSubject = subjects.find((s) => s.id === activeSubjectId) || subjects[0];
+      const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
+
+      // 2. Xác định Chương & Bài học đang chọn
+      const selectedChapter = groupedCatalog.chapters.find((c) => c.chapterId === chapterFilter);
+      let selectedLessonId: string | undefined = undefined;
+      let selectedLessonName: string | undefined = undefined;
+
+      if (lessonTopicFilter !== 'all') {
+        if (lessonTopicFilter.startsWith('lessonId:')) {
+          selectedLessonId = lessonTopicFilter.slice(9);
+          const found = catalogLessons.find((l) => l.lessonId === selectedLessonId);
+          selectedLessonName = found?.lessonName;
+        } else {
+          selectedLessonName = lessonTopicFilter;
+        }
+      }
+
+      // 3. Gọi engine parseDocxExam gốc
+      const { result } = await parseDocxExam(buffer, activeGrade as any);
 
       if (!result.questions || result.questions.length === 0) {
         showToast('Không nhận diện được câu hỏi nào từ file Word.');
         return;
       }
 
-      // Kế thừa mức độ nếu ngoài thanh lọc đang chọn 1 mức độ cụ thể (Biết/Hiểu/VD/VDC)
-      if (levelFilter !== 'all') {
-        const selectedLevel = levelFilter as CognitiveLevel;
-        result.questions = result.questions.map((q) => ({
+      // 4. ÉP BUỘC ĐỒNG BỘ: Ghi đè toàn bộ Môn, Lớp, Chương, Bài, Mức độ cho từng câu hỏi
+      const forcedQuestions = result.questions.map((q) => {
+        const finalLevel = levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : (q.level || 'nhan_biet');
+        return {
           ...q,
-          level: selectedLevel,
-        }));
+          subjectId: activeSubjectId,
+          subjectName: activeSubject.name,
+          grade: activeGrade,
+          chapterId: chapterFilter !== 'all' ? chapterFilter : q.chapterId,
+          chapterName: selectedChapter?.chapterName || q.chapterName,
+          lessonId: selectedLessonId || q.lessonId,
+          lessonName: selectedLessonName || q.lessonName || 'Bóc tách từ Word',
+          lessonTopic: selectedLessonName || q.lessonTopic || 'Bóc tách từ Word',
+          level: finalLevel,
+          // Tái tạo lại mã câu hỏi đúng theo Môn - Lớp - Dạng chuẩn
+          code: generateQuestionCode({
+            subjectId: activeSubjectId,
+            grade: activeGrade,
+            type: q.type,
+            subjects,
+          }),
+        };
+      });
+
+      // Gán lại danh sách câu hỏi đã được chuẩn hóa tuyệt đối
+      result.questions = forcedQuestions;
+      if (result.examMetadata) {
+        result.examMetadata.subject = activeSubject.name;
+        result.examMetadata.grade = activeGrade as any;
       }
 
-      setActiveWordResult(result);
+      setActiveWordResult({ ...result });
       setActiveWordFileName(file.name);
       setActiveWordFileSize(file.size);
-      showToast(`Đã bóc tách thành công ${result.questions.length} câu hỏi kèm công thức!`);
+      showToast(`Đã bóc tách ${result.questions.length} câu theo chuẩn: ${activeSubject.name} · Lớp ${activeGrade}!`);
     } catch (err: any) {
       console.error(err);
       showToast(err.message || 'Lỗi khi đọc file Word.');
@@ -1172,10 +1209,36 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           subjects={subjects}
           currentUserId={currentUserId}
           onConfirmSave={async (questionsToSave) => {
+            const activeSubjectId = subjectFilter !== 'all' ? subjectFilter : (subjects[0]?.id || 'chemistry');
+            const activeSubject = subjects.find((s) => s.id === activeSubjectId) || subjects[0];
+            const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
             const targetLevel = levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined;
+
+            const selectedChapter = groupedCatalog.chapters.find((c) => c.chapterId === chapterFilter);
+            let selectedLessonId: string | undefined = undefined;
+            let selectedLessonName: string | undefined = undefined;
+
+            if (lessonTopicFilter !== 'all') {
+              if (lessonTopicFilter.startsWith('lessonId:')) {
+                selectedLessonId = lessonTopicFilter.slice(9);
+                const found = catalogLessons.find((l) => l.lessonId === selectedLessonId);
+                selectedLessonName = found?.lessonName;
+              } else {
+                selectedLessonName = lessonTopicFilter;
+              }
+            }
+
             const finalizedQuestions = questionsToSave.map((q) => ({
               ...q,
-              level: targetLevel || q.level || 'thong_hieu',
+              subjectId: activeSubjectId,
+              subjectName: activeSubject.name,
+              grade: activeGrade,
+              chapterId: chapterFilter !== 'all' ? chapterFilter : q.chapterId,
+              chapterName: selectedChapter?.chapterName || q.chapterName,
+              lessonId: selectedLessonId || q.lessonId,
+              lessonName: selectedLessonName || q.lessonName || 'Bóc tách từ Word',
+              lessonTopic: selectedLessonName || q.lessonTopic || 'Bóc tách từ Word',
+              level: targetLevel || q.level || 'nhan_biet',
             }));
 
             finalizedQuestions.forEach((q) => onAddQuestion(q));
