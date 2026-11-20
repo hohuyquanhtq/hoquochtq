@@ -16,6 +16,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { getUserGreeting } from '../../constants/brand';
+import { getUnifiedExamCode } from '../../utils/urlHelper';
 import { ExamShareModal } from '../common/ExamShareModal';
 
 interface TeacherDashboardProps {
@@ -364,16 +365,17 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
               recentExams.map((exam) => {
                 const examSubs = submissions.filter((s) => s.examId === exam.id);
                 const formattedCreated = formatViDateTime(exam.createdAt);
+                const unifiedCode = getUnifiedExamCode(exam);
                 return (
                   <div
                     key={exam.id}
-                    className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs hover:border-teal-300 transition-colors flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4"
+                    className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-xs hover:border-teal-300 transition-colors flex flex-col justify-between w-full gap-3.5"
                   >
-                    <div className="space-y-1.5 min-w-0 flex-1">
+                    <div className="space-y-1.5 min-w-0 w-full">
                       {/* Unboxed typographic metadata */}
-                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] font-medium text-slate-600 tabular-nums">
-                        <span className="font-mono font-bold text-teal-800">
-                          Mã {exam.code}
+                      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13px] font-medium text-slate-600 tabular-nums w-full">
+                        <span className="font-mono font-bold text-teal-800 tracking-wider">
+                          Mã phòng: {unifiedCode}
                         </span>
                         <span aria-hidden="true">·</span>
                         <span
@@ -403,7 +405,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                         </span>
                       </div>
 
-                      <h3 className="font-bold text-slate-900 text-base sm:text-lg truncate">
+                      <h3 className="font-bold text-slate-900 text-base sm:text-lg w-full break-words whitespace-normal leading-snug">
                         {exam.title}
                       </h3>
 
@@ -422,7 +424,7 @@ export const TeacherDashboard: React.FC<TeacherDashboardProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 self-end sm:self-center shrink-0">
+                    <div className="w-full mt-auto pt-3 border-t border-slate-100 flex flex-wrap items-center justify-end gap-2">
                       <button
                         type="button"
                         onClick={() => onOpenExamResults(exam.id)}

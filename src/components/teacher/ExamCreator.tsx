@@ -19,7 +19,8 @@ import {
   Eye,
   EyeOff,
   Award,
-  BookOpen
+  BookOpen,
+  RefreshCw
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { APP_CONFIG } from '../../constants/brand';
@@ -33,7 +34,12 @@ import { flattenFolderTree, getFolderPathLabel, normalizeFolderId } from '../../
 import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
 import { QuestionBankPickerModal, cloneQuestionsForExam } from './QuestionBankPickerModal';
-import { normalizeExamCode } from '../../utils/urlHelper';
+import {
+  generateExamCode6,
+  isValidNewPublicCode,
+  normalizeExamCode,
+  normalizePublicExamCode,
+} from '../../utils/urlHelper';
 import { auth, extractAnswerKeyMap, syncExamToFirestore } from '../../services/firebase';
 import {
   allocateExamPublicCodeOnServer,
@@ -69,7 +75,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 }) => {
   const [title, setTitle] = useState(initialTitle);
   const [description, setDescription] = useState('');
-  const [code, setCode] = useState(`HQ${Math.floor(10 + Math.random() * 90)}`);
+  const [code, setCode] = useState(() => generateExamCode6());
   const [subjectId, setSubjectId] = useState<string>(DEFAULT_SUBJECT_ID);
   const [grade, setGrade] = useState<ChemGrade>(initialGrade);
   const [topic, setTopic] = useState<ChemTopic>('hoa_huu_co');
@@ -285,9 +291,9 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
     let cleanCode = canReusePending
       ? pendingDraftRef.current!.code
-      : normalizeExamCode(rawInputCode || `HQ${Math.floor(10 + Math.random() * 90)}`);
+      : normalizePublicExamCode(rawInputCode) || normalizeExamCode(rawInputCode) || generateExamCode6();
     if (!cleanCode) {
-      cleanCode = `HQ${Math.floor(10 + Math.random() * 90)}`;
+      cleanCode = generateExamCode6();
     }
 
     const examId = canReusePending
@@ -296,11 +302,18 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
     if (!canReusePending) {
       const existingExams = StorageService.getExams(currentUserId || auth.currentUser?.uid);
-      const isConflict = existingExams.some(
-        (e) => e.id !== examId && normalizeExamCode(e.code) === cleanCode
-      );
-      if (isConflict) {
-        cleanCode = `${cleanCode}${Math.floor(10 + Math.random() * 89)}`;
+      const isConflict = (candidate: string) =>
+        existingExams.some(
+          (e) =>
+            e.id !== examId &&
+            (normalizeExamCode(e.code) === candidate ||
+              normalizePublicExamCode(e.publicCode) === candidate ||
+              normalizePublicExamCode(e.shortId) === candidate)
+        );
+      let attempts = 0;
+      while (isConflict(cleanCode) && attempts < 10) {
+        cleanCode = generateExamCode6();
+        attempts += 1;
       }
       pendingDraftRef.current = { examId, code: cleanCode, inputCodeSnapshot: rawInputCode };
     }
@@ -370,11 +383,16 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         return;
       }
 
+      // Prefer reserving the exact 6-character code entered/generated in UI so code === publicCode === shortId === slug
+      const preferredPublicCode =
+        pendingDraftRef.current?.publicCode ??
+        (isValidNewPublicCode(cleanCode) ? cleanCode : null);
+
       const allocRes = await allocateExamPublicCodeOnServer({
         examId,
         examCode: cleanCode,
         isPublished: true,
-        existingPublicCode: pendingDraftRef.current?.publicCode ?? null,
+        existingPublicCode: preferredPublicCode,
       });
       if (!allocRes.ok || !allocRes.publicCode) {
         setFormError(
@@ -385,13 +403,34 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       }
 
       const allocatedPublicCode = allocRes.publicCode;
+      const finalUnifiedCode = allocatedPublicCode;
+
       if (pendingDraftRef.current) {
-        pendingDraftRef.current.publicCode = allocatedPublicCode;
+        pendingDraftRef.current.publicCode = finalUnifiedCode;
+        pendingDraftRef.current.code = finalUnifiedCode;
       }
 
-      let passwordUpdatedAt: string | null = baseExam.passwordUpdatedAt ?? null;
+      // If server resolved a collision with a different 6-char code, ensure examLinks/{code}.examCode is also synchronized
+      if (normalizeExamCode(cleanCode) !== finalUnifiedCode) {
+        await allocateExamPublicCodeOnServer({
+          examId,
+          examCode: finalUnifiedCode,
+          isPublished: true,
+          existingPublicCode: finalUnifiedCode,
+        });
+      }
+
+      const unifiedExamBase: Exam = {
+        ...baseExam,
+        code: finalUnifiedCode,
+        publicCode: finalUnifiedCode,
+        shortId: finalUnifiedCode,
+        slug: `/${finalUnifiedCode}`,
+      };
+
+      let passwordUpdatedAt: string | null = unifiedExamBase.passwordUpdatedAt ?? null;
       const secRes = await configureExamSecurityOnServer({
-        examCode: cleanCode,
+        examCode: finalUnifiedCode,
         examId,
         requiresPassword,
         passwordAction: requiresPassword ? 'set' : 'clear',
@@ -403,13 +442,13 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         showSolutionsAfterSubmit,
         isPublished: true,
         maxAttempts,
-        rules: baseExam.rules,
+        rules: unifiedExamBase.rules,
         questions: questions.map((q) => ({
           id: q.id,
           type: q.type,
           ...(Array.isArray(q.statements) ? { statementIds: q.statements.map((s) => s.id) } : {}),
         })),
-        answerMap: extractAnswerKeyMap(baseExam),
+        answerMap: extractAnswerKeyMap(unifiedExamBase),
         patchMetadataDocs: false,
       });
 
@@ -427,10 +466,10 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       }
 
       const newExam: Exam = {
-        ...baseExam,
-        publicCode: allocatedPublicCode,
+        ...unifiedExamBase,
         passwordUpdatedAt: requiresPassword ? passwordUpdatedAt : null,
       };
+      setCode(finalUnifiedCode);
 
       // 1. Sync exam projections to Cloud Firestore BEFORE localStorage so failed Firestore commit never leaves duplicate local drafts
       await syncExamToFirestore(newExam, ownerId);
@@ -550,13 +589,30 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
 
             <div className="grid grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Mã đề (để học sinh vào thi)</label>
-                <input
-                  type="text"
-                  value={code}
-                  onChange={(e) => setCode(e.target.value.toUpperCase())}
-                  className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-mono font-bold uppercase bg-slate-50 text-blue-700"
-                />
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Mã phòng thi (6 ký tự)
+                </label>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={code}
+                    onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+                    placeholder="VD: NFKELZ"
+                    className="w-full p-2.5 rounded-xl border border-slate-200 text-xs font-mono font-bold uppercase tracking-wider bg-slate-50 text-blue-700"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setCode(generateExamCode6())}
+                    className="p-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-blue-700 transition-colors shrink-0"
+                    title="Tạo mã phòng thi 6 ký tự ngẫu nhiên mới"
+                  >
+                    <RefreshCw className="w-4 h-4" />
+                  </button>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Đồng bộ trực tiếp với link ngắn <span className="font-mono font-semibold text-teal-700">/{code || '••••••'}</span>
+                </p>
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Thời gian (phút)</label>

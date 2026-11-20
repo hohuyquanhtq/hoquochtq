@@ -19,7 +19,7 @@ import {
   getEffectiveAnswerReviewConfig,
 } from '../../services/examSecurityApi';
 import { StorageService } from '../../services/storage';
-import { normalizeExamCode } from '../../utils/urlHelper';
+import { getUnifiedExamCode, normalizeExamCode } from '../../utils/urlHelper';
 
 interface ExamSecurityModalProps {
   isOpen: boolean;
@@ -232,8 +232,8 @@ export const ExamSecurityModal: React.FC<ExamSecurityModalProps> = ({
                 <span className="text-[11px] font-bold uppercase tracking-wider text-blue-200">
                   Cấu hình bảo mật &amp; Đáp án
                 </span>
-                <span className="px-2 py-0.5 rounded bg-white/15 font-mono text-[10px] font-bold">
-                  Mã: {exam.code}
+                <span className="px-2 py-0.5 rounded bg-white/15 font-mono text-[10px] font-bold tracking-wider">
+                  Mã phòng: {getUnifiedExamCode(exam)}
                 </span>
               </div>
               <h2 className="text-sm sm:text-base font-extrabold text-white line-clamp-1 mt-0.5">

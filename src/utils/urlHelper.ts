@@ -120,6 +120,30 @@ export const EXAM_LINK_ALPHABET = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
 export const PUBLIC_CODE_NEW_REGEX = /^[A-HJ-NP-Z2-9]{6}$/;
 export const PUBLIC_CODE_LEGACY_NUMERIC_REGEX = /^[0-9]{6}$/;
 
+/**
+ * Generates a unified 6-character uppercase alphanumeric exam code
+ * excluding visually ambiguous characters (0, O, 1, I).
+ */
+export function generateExamCode6(length = 6): string {
+  const alphabet = EXAM_LINK_ALPHABET;
+  const alphabetLen = alphabet.length; // 32 (exact power of 2 -> unbiased with byte & 31)
+  let result = '';
+
+  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    for (let i = 0; i < length; i++) {
+      result += alphabet[bytes[i] % alphabetLen];
+    }
+    return result;
+  }
+
+  for (let i = 0; i < length; i++) {
+    result += alphabet[Math.floor(Math.random() * alphabetLen)];
+  }
+  return result;
+}
+
 export function isValidNewPublicCode(value: unknown): value is string {
   if (typeof value !== 'string') return false;
   return PUBLIC_CODE_NEW_REGEX.test(value.trim().toUpperCase());
@@ -145,10 +169,28 @@ export function isValidPublicExamCode(value: unknown): value is string {
  */
 export function normalizePublicExamCode(value: unknown): string {
   if (typeof value !== 'string') return '';
-  const trimmed = value.trim();
+  const trimmed = value.trim().replace(/^\/+/, '');
   if (PUBLIC_CODE_LEGACY_NUMERIC_REGEX.test(trimmed)) return trimmed;
   const upper = trimmed.toUpperCase();
   return PUBLIC_CODE_NEW_REGEX.test(upper) ? upper : '';
+}
+
+/**
+ * Resolves the single unified room/access code for an exam, prioritizing
+ * the 6-character short link code (shortId -> publicCode -> slug -> code)
+ * so UI badges, copy buttons, and short URLs always match identically.
+ */
+export function getUnifiedExamCode(
+  exam?: { shortId?: string; publicCode?: string; slug?: string; code?: string } | null
+): string {
+  if (!exam) return '';
+  const unifiedPublic =
+    normalizePublicExamCode(exam.shortId) ||
+    normalizePublicExamCode(exam.publicCode) ||
+    normalizePublicExamCode(exam.slug) ||
+    normalizePublicExamCode(exam.code);
+  if (unifiedPublic) return unifiedPublic;
+  return normalizeExamCode(exam.code || '');
 }
 
 /**
@@ -181,7 +223,9 @@ export function normalizeExamCodeCompact(rawCode: string): string {
  * Supports both new 6-char alphanumeric codes (/H7K9P2) and legacy 6-digit codes (/004821).
  * Falls back to legacy ?examCode= only when an exam has not yet been assigned a publicCode.
  */
-export function getExamShortUrl(examOrCode: { publicCode?: string; code?: string } | string): string {
+export function getExamShortUrl(
+  examOrCode: { shortId?: string; publicCode?: string; slug?: string; code?: string } | string
+): string {
   const domain = getPublicDomain();
   if (typeof examOrCode === 'string') {
     const pub = normalizePublicExamCode(examOrCode);
@@ -190,7 +234,11 @@ export function getExamShortUrl(examOrCode: { publicCode?: string; code?: string
     }
     return getExamDirectUrl(examOrCode);
   }
-  const pub = normalizePublicExamCode(examOrCode?.publicCode);
+  const pub =
+    normalizePublicExamCode(examOrCode?.shortId) ||
+    normalizePublicExamCode(examOrCode?.publicCode) ||
+    normalizePublicExamCode(examOrCode?.slug) ||
+    normalizePublicExamCode(examOrCode?.code);
   if (pub) {
     return domain ? `${domain}/${pub}` : `/${pub}`;
   }

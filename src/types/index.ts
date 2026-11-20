@@ -273,8 +273,10 @@ export interface Exam {
   examId?: string;
   title: string;
   description?: string;       // Mô tả ngắn của đề thi
-  code: string;                 // Mã đề tham gia online, VD: "CHEM12A", "HSG2024"
+  code: string;                 // Mã phòng thi 6 ký tự (VD: "NFKELZ"), đồng bộ với publicCode / shortId / slug
   publicCode?: string;          // Mã truy cập đường dẫn ngắn 6 ký tự (chữ hoa + số không nhầm lẫn, hoặc 6 chữ số cũ)
+  shortId?: string;             // Đồng bộ mã định danh ngắn 6 ký tự với đường dẫn rút gọn
+  slug?: string;                // Đường dẫn rút gọn đồng bộ (VD: "/NFKELZ")
   folderId?: string | null;
   subjectId?: string;
   subjectName?: string;

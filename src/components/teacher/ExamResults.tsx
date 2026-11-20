@@ -21,7 +21,7 @@ import {
 import { exportExamResultsToExcel } from '../../utils/excelExport';
 import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
 import { evaluateExamAttemptDetails } from '../../utils/gradingEngine';
-import { normalizePublicExamCode } from '../../utils/urlHelper';
+import { getUnifiedExamCode, normalizePublicExamCode } from '../../utils/urlHelper';
 
 interface ExamResultsProps {
   exam?: Exam;
@@ -209,8 +209,8 @@ export const ExamResults: React.FC<ExamResultsProps> = ({
             </button>
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded-md bg-teal-100 text-teal-800">
-                  {exam.code}
+                <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded-md bg-teal-100 text-teal-800 tracking-wider">
+                  Mã phòng: {getUnifiedExamCode(exam)}
                 </span>
                 {normalizedPublicCode && (
                   <span className="font-mono text-xs font-bold px-2.5 py-0.5 rounded-md bg-blue-100 text-blue-800">

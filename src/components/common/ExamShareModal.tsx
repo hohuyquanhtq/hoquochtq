@@ -24,6 +24,7 @@ import { APP_CONFIG } from '../../constants/brand';
 import {
   getExamShortUrl,
   getPublicDomain,
+  getUnifiedExamCode,
   isPreviewOrLocalOrigin,
   normalizeExamCode,
   normalizePublicExamCode,
@@ -68,18 +69,23 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const printableRef = useRef<HTMLDivElement>(null);
 
-  // Clean internal examCode and 6-char publicCode
-  const examCode = normalizeExamCode(exam?.code || 'HQ50');
+  // Unified 6-character room/access code synchronized with short link slug
   const resolvedPublicCode =
+    normalizePublicExamCode(exam?.shortId) ||
     normalizePublicExamCode(exam?.publicCode) ||
+    normalizePublicExamCode(exam?.slug) ||
     normalizePublicExamCode(localPublicCode) ||
+    normalizePublicExamCode(exam?.code) ||
     '';
-  const displayShareCode = resolvedPublicCode || examCode;
+  const displayShareCode =
+    resolvedPublicCode || getUnifiedExamCode(exam) || normalizeExamCode(exam?.code || '');
   const activeDomain = getPublicDomain();
   const isPreviewDomain = isPreviewOrLocalOrigin(activeDomain);
   const directLink = getExamShortUrl({
-    publicCode: resolvedPublicCode || undefined,
-    code: examCode,
+    shortId: resolvedPublicCode || exam?.shortId,
+    publicCode: resolvedPublicCode || exam?.publicCode,
+    slug: resolvedPublicCode ? `/${resolvedPublicCode}` : exam?.slug,
+    code: exam?.code || displayShareCode,
   });
   void domainTick;
 
@@ -92,7 +98,11 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
     setDomainInput(getSavedProductionDomainOverride());
     setAllocationError(null);
 
-    const existingPublicCode = normalizePublicExamCode(exam.publicCode);
+    const existingPublicCode =
+      normalizePublicExamCode(exam.shortId) ||
+      normalizePublicExamCode(exam.publicCode) ||
+      normalizePublicExamCode(exam.slug) ||
+      normalizePublicExamCode(exam.code);
     setLocalPublicCode(existingPublicCode);
 
     const ensureCloudAndPublicCode = async () => {
@@ -112,7 +122,12 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
         if (!cancelled) setIsAllocatingCode(false);
         if (alloc.ok && alloc.publicCode) {
           if (!cancelled) setLocalPublicCode(alloc.publicCode);
-          activeExam = { ...exam, publicCode: alloc.publicCode };
+          activeExam = {
+            ...exam,
+            publicCode: alloc.publicCode,
+            shortId: alloc.publicCode,
+            slug: `/${alloc.publicCode}`,
+          };
           onExamUpdated?.(activeExam);
         } else if (!cancelled) {
           setAllocationError(alloc.error || 'Chưa thể cấp mã đường dẫn 6 ký tự.');
@@ -233,7 +248,7 @@ export const ExamShareModal: React.FC<ExamShareModalProps> = ({
       if (res.synced) {
         setNotificationMsg({
           type: 'success',
-          text: `Đã đồng bộ đề "${examCode}" lên Cloud! Học sinh có thể mở link từ mọi thiết bị & ẩn danh.`,
+          text: `Đã đồng bộ phòng thi "${displayShareCode}" lên Cloud! Học sinh có thể mở link từ mọi thiết bị & ẩn danh.`,
         });
       } else {
         setNotificationMsg({
@@ -308,7 +323,7 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
       try {
         await navigator.share({
           title: `${APP_CONFIG.APP_NAME} - ${exam.title}`,
-          text: `Tham gia bài kiểm tra Hóa học: "${exam.title}" (Mã: ${examCode})`,
+          text: `Tham gia bài kiểm tra trực tuyến: "${exam.title}" (Mã phòng: ${displayShareCode})`,
           url: directLink,
         });
         setNotificationMsg({ type: 'success', text: 'Đã mở hộp thoại chia sẻ của hệ thống!' });
@@ -423,11 +438,11 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
 
       const link = document.createElement('a');
       link.href = cardCanvas.toDataURL('image/png');
-      link.download = `HQTest_PhieuThi_${examCode}.png`;
+      link.download = `HQTest_PhieuThi_${displayShareCode}.png`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
-      setNotificationMsg({ type: 'success', text: `Đã tải xuống phiếu thi: HQTest_PhieuThi_${examCode}.png` });
+      setNotificationMsg({ type: 'success', text: `Đã tải xuống phiếu thi: HQTest_PhieuThi_${displayShareCode}.png` });
       setTimeout(() => setNotificationMsg(null), 3000);
     };
     qrImage.src = qrDataUrl || canvasRef.current?.toDataURL('image/png') || '';
@@ -461,7 +476,7 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
                   Chia Sẻ Bài Thi &amp; Link Ngắn 6 Ký Tự
                 </span>
                 <span className="px-2 py-0.5 text-[10px] font-mono font-bold bg-white/20 text-white rounded-md">
-                  {resolvedPublicCode ? `/${resolvedPublicCode}` : `Mã: ${examCode}`}
+                  {resolvedPublicCode ? `/${resolvedPublicCode}` : `Mã phòng: ${displayShareCode}`}
                 </span>
               </div>
               <h2 className="text-base font-extrabold text-white line-clamp-1 mt-0.5">
@@ -537,13 +552,13 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
                       <button
                         onClick={() => copyToClipboard(displayShareCode, 'code')}
                         className="p-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-100 text-slate-600 transition-colors"
-                        title="Sao chép mã truy cập"
+                        title="Sao chép mã phòng thi"
                       >
                         {copiedCode ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
                       </button>
                     </div>
                     <span className="text-[11px] text-slate-500 mt-0.5 block">
-                      Mã nội bộ quản lý đề: <span className="font-mono font-semibold">{examCode}</span>
+                      Đồng bộ trực tiếp với đường dẫn rút gọn <span className="font-mono font-semibold text-teal-700">/{displayShareCode}</span>
                     </span>
                   </div>
 
@@ -742,7 +757,7 @@ Hướng dẫn: Học sinh nhấp trực tiếp vào đường link trên hoặc
                   ) : qrDataUrl ? (
                     <img
                       src={qrDataUrl}
-                      alt={`QR Code ${examCode}`}
+                      alt={`QR Code ${displayShareCode}`}
                       className="w-44 h-44 rounded-lg object-contain block mx-auto"
                     />
                   ) : qrSvgString ? (
