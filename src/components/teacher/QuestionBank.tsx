@@ -1,9 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ChemGrade,
   CognitiveLevel,
   CurriculumGrade,
   CurriculumLesson,
   Folder,
+  ParsedExamResult,
   Question,
   QuestionType,
   SubjectItem,
@@ -12,6 +14,8 @@ import {
   COGNITIVE_LEVEL_LABELS,
   COGNITIVE_LEVEL_SHORT_LABELS,
   DEFAULT_GDPT_2018_SUBJECTS,
+  DEFAULT_SUBJECT_ID,
+  DEFAULT_SUBJECT_NAME,
   GRADE_LABELS,
   QUESTION_TYPE_SHORT_LABELS,
   generateQuestionCode,
@@ -47,6 +51,12 @@ import {
 } from '../../services/curriculumService';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { QuestionFormModal } from './QuestionFormModal';
+import { parseDocxExam } from '../../utils/docxParser';
+import {
+  InheritedQuestionBankMetadata,
+  WordBatchSaveResult,
+  WordImportReviewModal,
+} from './WordImportReviewModal';
 
 interface QuestionBankProps {
   questions: Question[];
@@ -58,6 +68,14 @@ interface QuestionBankProps {
   onUpdateQuestion: (q: Question) => void;
   onDeleteQuestion: (id: string) => void;
   onBulkDeleteQuestions?: (ids: string[]) => void;
+  onImportQuestionsBatch?: (questions: Question[]) => Promise<WordBatchSaveResult>;
+  onFileParsedRecord?: (record: {
+    fileName: string;
+    fileType: 'docx' | 'pdf' | 'text';
+    examTitle: string;
+    totalQuestions: number;
+    grade: ChemGrade;
+  }) => void;
   onCreateExamFromSelected: (selectedQuestions: Question[]) => void;
 }
 
@@ -70,6 +88,8 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   onUpdateQuestion,
   onDeleteQuestion,
   onBulkDeleteQuestions,
+  onImportQuestionsBatch,
+  onFileParsedRecord,
   onCreateExamFromSelected,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -98,6 +118,15 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  const wordFileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isParsingWord, setIsParsingWord] = useState<boolean>(false);
+  const [wordImportSession, setWordImportSession] = useState<{
+    fileName: string;
+    fileSize: number;
+    parsedResult: ParsedExamResult;
+    inheritedMetadata: InheritedQuestionBankMetadata;
+  } | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -438,6 +467,153 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setDeleteTarget(null);
   };
 
+  const buildInheritedMetadata = (): InheritedQuestionBankMetadata => {
+    const matchedSubject =
+      subjectFilter !== 'all'
+        ? subjects.find((s) => s.id === subjectFilter)
+        : undefined;
+    const inheritedSubjectId = matchedSubject?.id || DEFAULT_SUBJECT_ID;
+    const inheritedSubjectName = matchedSubject?.name || DEFAULT_SUBJECT_NAME;
+
+    const inheritedGrade: ChemGrade =
+      gradeFilter === '10' ||
+      gradeFilter === '11' ||
+      gradeFilter === '12' ||
+      gradeFilter === 'chuyen_hsg'
+        ? gradeFilter
+        : '12';
+
+    let inheritedChapterId = '';
+    let inheritedChapterName = '';
+    let inheritedLessonId = '';
+    let inheritedLessonName = '';
+    let inheritedLessonTopic = '';
+
+    if (lessonTopicFilter !== 'all') {
+      if (lessonTopicFilter.startsWith('lessonId:')) {
+        const targetLessonId = lessonTopicFilter.slice(9);
+        const foundLesson = catalogLessons.find((l) => l.lessonId === targetLessonId);
+        if (foundLesson) {
+          inheritedChapterId = foundLesson.chapterId;
+          inheritedChapterName = foundLesson.chapterName;
+          inheritedLessonId = foundLesson.lessonId;
+          inheritedLessonName = foundLesson.lessonName;
+          inheritedLessonTopic = foundLesson.lessonName;
+        }
+      } else {
+        inheritedLessonTopic = lessonTopicFilter;
+      }
+    }
+
+    if (!inheritedChapterId && chapterFilter !== 'all') {
+      const foundChapter = groupedCatalog.chapters.find(
+        (ch) => ch.chapterId === chapterFilter
+      );
+      if (foundChapter) {
+        inheritedChapterId = foundChapter.chapterId;
+        inheritedChapterName = foundChapter.chapterName;
+      }
+    }
+
+    const inheritedDefaultType: QuestionType | '' =
+      typeFilter === 'part1_single_choice' ||
+      typeFilter === 'part1_multiple_choice' ||
+      typeFilter === 'part2_true_false' ||
+      typeFilter === 'part3_short_answer'
+        ? typeFilter
+        : '';
+
+    const inheritedLevel: CognitiveLevel =
+      levelFilter === 'nhan_biet' ||
+      levelFilter === 'thong_hieu' ||
+      levelFilter === 'van_dung' ||
+      levelFilter === 'van_dung_cao'
+        ? levelFilter
+        : 'nhan_biet';
+
+    return {
+      subjectId: inheritedSubjectId,
+      subjectName: inheritedSubjectName,
+      grade: inheritedGrade,
+      chapterId: inheritedChapterId,
+      chapterName: inheritedChapterName,
+      lessonId: inheritedLessonId,
+      lessonName: inheritedLessonName,
+      lessonTopic: inheritedLessonTopic,
+      defaultQuestionType: inheritedDefaultType,
+      level: inheritedLevel,
+    };
+  };
+
+  const handleWordImportClick = () => {
+    if (isParsingWord) return;
+    wordFileInputRef.current?.click();
+  };
+
+  const handleWordFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    // Reset input value immediately so selecting the exact same file again triggers onChange
+    event.target.value = '';
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+      showToast('Vui lòng chọn file Word đúng định dạng .docx.');
+      return;
+    }
+
+    const inheritedMetadata = buildInheritedMetadata();
+    setIsParsingWord(true);
+    try {
+      const buffer = await file.arrayBuffer();
+      const { result } = await parseDocxExam(buffer, inheritedMetadata.grade);
+      onFileParsedRecord?.({
+        fileName: file.name,
+        fileType: 'docx',
+        examTitle: result.title,
+        totalQuestions: result.totalQuestions,
+        grade: inheritedMetadata.grade,
+      });
+      setWordImportSession({
+        fileName: file.name,
+        fileSize: file.size,
+        parsedResult: result,
+        inheritedMetadata,
+      });
+    } catch (err) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : 'Không thể đọc và bóc tách file Word (.docx). Vui lòng thử lại.';
+      showToast(msg);
+    } finally {
+      setIsParsingWord(false);
+    }
+  };
+
+  const handleConfirmWordImportSave = async (
+    questionsToSave: Question[]
+  ): Promise<WordBatchSaveResult> => {
+    if (onImportQuestionsBatch) {
+      const result = await onImportQuestionsBatch(questionsToSave);
+      if (result.firestoreSynced && !result.error) {
+        showToast(
+          result.skippedDuplicateCount > 0
+            ? `Đã lưu ${result.savedCount} câu từ Word vào Ngân hàng (bỏ qua ${result.skippedDuplicateCount} câu trùng).`
+            : `Đã lưu ${result.savedCount} câu hỏi từ file Word vào Ngân hàng!`
+        );
+      }
+      return result;
+    }
+
+    questionsToSave.forEach((q) => onAddQuestion(q));
+    showToast(`Đã lưu ${questionsToSave.length} câu hỏi từ file Word vào Ngân hàng!`);
+    return {
+      savedCount: questionsToSave.length,
+      skippedDuplicateCount: 0,
+      firestoreSynced: true,
+    };
+  };
+
   return (
     <div className="space-y-5">
       {/* Toast */}
@@ -481,6 +657,43 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               <ChevronDown className="w-3.5 h-3.5" />
             )}
           </button>
+
+          <button
+            id="btn-import-word"
+            type="button"
+            disabled={isParsingWord}
+            onClick={handleWordImportClick}
+            className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+          >
+            {isParsingWord ? (
+              <Loader2 className="w-4 h-4 text-white animate-spin" />
+            ) : (
+              <svg
+                className="w-4 h-4 text-white shrink-0"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                />
+              </svg>
+            )}
+            <span>{isParsingWord ? 'Đang bóc tách Word...' : 'Bóc tách từ file Word'}</span>
+          </button>
+
+          <input
+            ref={wordFileInputRef}
+            id="word-file-input"
+            type="file"
+            accept=".docx"
+            className="hidden"
+            onChange={handleWordFileChange}
+          />
 
           <button
             type="button"
@@ -1332,6 +1545,22 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Word Import Review Modal */}
+      {wordImportSession && (
+        <WordImportReviewModal
+          isOpen={true}
+          fileName={wordImportSession.fileName}
+          fileSize={wordImportSession.fileSize}
+          parsedResult={wordImportSession.parsedResult}
+          inheritedMetadata={wordImportSession.inheritedMetadata}
+          existingQuestions={questions}
+          subjects={subjects}
+          currentUserId={currentUserId}
+          onConfirmSave={handleConfirmWordImportSave}
+          onClose={() => setWordImportSession(null)}
+        />
       )}
 
       {/* Delete Confirmation Dialog */}
