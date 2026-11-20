@@ -630,8 +630,12 @@ export function parseExamContent(
     }
   }
 
-  // 3. Pre-extract Answer Keys matrix from the full document
-  const answerKeys = extractComprehensiveAnswerKeys(rawText, extraMeta?.selectedAnswerCandidateId);
+  // 3. Pre-extract Answer Keys matrix from the full document (including native Word XML tables)
+  const answerKeys = extractComprehensiveAnswerKeys(
+    rawText,
+    extraMeta?.selectedAnswerCandidateId,
+    extraMeta?.extractedTables
+  );
 
   // 4. Split question lines into distinct question blocks while tracking section transitions & metadata
   const sectionTrackers: InternalSectionTracker[] = [];

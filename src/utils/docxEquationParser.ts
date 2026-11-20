@@ -426,6 +426,19 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
   const body = root ? getDirectChildByLocal(root, 'body') || root : null;
 
   const markdownBlocks: string[] = [];
+  let currentSectionHeader: string | undefined;
+
+  const updateSectionHeader = (text: string) => {
+    const clean = text.replace(/\*\*|\*|<u>|<\/u>|<s>|<\/s>/gi, '').trim();
+    if (!clean) return;
+    if (
+      /(?:PHẦN\s+(?:III|II|I|3|2|1)\b|MÃ\s*ĐỀ\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN|^(?:[\-–—*_\s]*)ĐÁP\s*ÁN\b|HƯỚNG\s*DẪN\s*CHẤM|TRẮC\s*NGHIỆM\s+(?:4|NHIỀU)\s+(?:LỰA\s+CHỌN|PHƯƠNG\s+ÁN)|ĐÚNG\s*[-–\/]?\s*SAI|TRẢ\s*LỜI\s*NGẮN)/i.test(
+        clean
+      )
+    ) {
+      currentSectionHeader = clean.slice(0, 160);
+    }
+  };
 
   const processBlockContainer = (container: Element) => {
     for (const el of getDirectElements(container)) {
@@ -454,6 +467,7 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
           warnings,
         });
         if (pText.trim().length > 0) {
+          updateSectionHeader(pText.trim());
           markdownBlocks.push(pText.trim());
         }
       } else if (loc === 'tbl') {
@@ -466,6 +480,7 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
         if (structuredRows.length > 0) {
           const maxCols = Math.max(...structuredRows.map(r => r.length));
           if (maxCols === 1 && plainParagraphs.length > 0) {
+            plainParagraphs.forEach(p => updateSectionHeader(p));
             markdownBlocks.push(plainParagraphs.join('\n\n'));
           } else {
             markdownBlocks.push(mdTable);
@@ -474,6 +489,7 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
             id: `tbl_docx_${tables.length + 1}`,
             sourceType: 'docx_html',
             rows: structuredRows,
+            surroundingHeader: currentSectionHeader,
           });
         }
       }

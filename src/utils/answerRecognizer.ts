@@ -1,25 +1,37 @@
 import { Question, QuestionType, AnswerRecognitionItem, RecognitionStatus, RecognitionSource, AnswerTableCandidate } from '../types';
 import { extractTablesFromText, isolateAnswerBlock } from './answerExtractionEngine/documentTableReader';
-import { extractAnswersAlgorithmically } from './answerExtractionEngine/algorithmicExtractor';
+import { extractAnswersAlgorithmically, Part1TableDiagnostics } from './answerExtractionEngine/algorithmicExtractor';
+import type { RawDocumentTable } from './answerExtractionEngine/types';
 import { detectSectionHeader } from './sectionDetector';
 
 export interface SectionAnswersMatrix {
-  part1: Map<number, { answer: string; source: RecognitionSource; notes?: string }>;
+  part1: Map<
+    number,
+    {
+      answer: string;
+      source: RecognitionSource;
+      notes?: string;
+      validationStatus?: RecognitionStatus;
+      validationIssues?: string[];
+    }
+  >;
   part2: Map<number, { statements: Record<string, boolean>; source: RecognitionSource; notes?: string }>;
   part3: Map<number, { answer: string; acceptedAnswers: string[]; source: RecognitionSource; notes?: string }>;
   explanations: Map<string, string>; // "part1_1" or "part3_2" -> explanation text
   candidates: AnswerTableCandidate[];
   hasAmbiguousCandidates: boolean;
   extractedTables: { id: string; sourceType: string; surroundingHeader?: string; rows: string[][] }[];
+  part1Diagnostics?: Part1TableDiagnostics;
 }
 
 /**
- * Normalizes text lines by removing markdown table pipes, extra spaces, and trailing symbols
+ * Normalizes text lines by removing markdown table pipes, bold markers, extra spaces, and trailing symbols
  */
 function cleanTableLine(line: string): string {
   return line
     .replace(/^\||\|$/g, '') // remove leading/trailing table pipes
     .replace(/\|/g, ' ')     // replace internal table pipes with space
+    .replace(/\*\*|__/g, '')  // strip markdown bold markers
     .replace(/[\t\r]+/g, ' ')
     .replace(/\s{2,}/g, ' ')
     .trim();
@@ -36,7 +48,8 @@ function cleanTableLine(line: string): string {
  */
 export function extractComprehensiveAnswerKeys(
   rawText: string,
-  selectedCandidateId?: string
+  selectedCandidateId?: string,
+  preExtractedTables?: { id: string; sourceType: string; surroundingHeader?: string; rows: string[][] }[]
 ): SectionAnswersMatrix {
   const matrix: SectionAnswersMatrix = {
     part1: new Map(),
@@ -50,7 +63,25 @@ export function extractComprehensiveAnswerKeys(
 
   // PASS 0: Fast High-Fidelity 2D Table & Matrix Extraction via Answer Extraction Engine
   try {
-    const tables = extractTablesFromText(rawText);
+    const normalizedPreTables: RawDocumentTable[] = (preExtractedTables || []).map(t => ({
+      id: t.id,
+      sourceType:
+        t.sourceType === 'docx_html' ||
+        t.sourceType === 'markdown' ||
+        t.sourceType === 'pdf_coords' ||
+        t.sourceType === 'text_grid'
+          ? t.sourceType
+          : 'docx_html',
+      surroundingHeader: t.surroundingHeader,
+      rows: t.rows,
+    }));
+
+    const hasNativeDocxTables = normalizedPreTables.some(t => t.sourceType === 'docx_html');
+    const textTables = extractTablesFromText(rawText).filter(
+      t => !(hasNativeDocxTables && t.sourceType === 'markdown')
+    );
+    const tables: RawDocumentTable[] = [...normalizedPreTables, ...textTables];
+
     matrix.extractedTables = tables.map(t => ({
       id: t.id,
       sourceType: t.sourceType,
@@ -67,16 +98,20 @@ export function extractComprehensiveAnswerKeys(
       detailedSolutions,
       candidates,
       hasAmbiguousCandidates,
+      part1Diagnostics,
     } = extractAnswersAlgorithmically(tables, algoScanText, selectedCandidateId);
 
     matrix.candidates = candidates;
     matrix.hasAmbiguousCandidates = hasAmbiguousCandidates;
+    matrix.part1Diagnostics = part1Diagnostics;
 
     for (const item of part1Items) {
       matrix.part1.set(item.questionNumber, {
         answer: item.correctAnswer,
         source: item.source || 'answer_table',
         notes: item.notes || item.sourceSnippet,
+        validationStatus: item.validationStatus,
+        validationIssues: item.validationIssues,
       });
     }
 
@@ -109,7 +144,10 @@ export function extractComprehensiveAnswerKeys(
     console.warn('AnswerExtractionEngine pass encountered warning, falling back to line parser:', err);
   }
 
-  const rawLines = rawText.split(/\r?\n/).map(l => cleanTableLine(l)).filter(Boolean);
+  const rawLines = rawText
+    .split(/\r?\n/)
+    .map(l => cleanTableLine(l))
+    .filter(l => Boolean(l) && !/^[\-:|\s]+$/.test(l));
 
   // Locate Answer Key section
   let answerKeyStartIndex = -1;
@@ -205,7 +243,9 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
           const letters = lettersMatch[1].trim().split(/\s+/).map(l => l.toUpperCase()).filter(l => /^[A-D]$/.test(l));
           if (numbers.length > 0 && letters.length === numbers.length) {
             numbers.forEach((num, idx) => {
-              matrix.part1.set(num, { answer: letters[idx], source: 'answer_table' });
+              if (!matrix.part1.has(num)) {
+                matrix.part1.set(num, { answer: letters[idx], source: 'answer_table' });
+              }
             });
             i++; // skip next line
             continue;
@@ -539,7 +579,21 @@ export function buildAnswerRecognitionItems(
       const qNum = p1Index++;
       const detected = matrix.part1.get(qNum) || (promptNum > 0 ? matrix.part1.get(promptNum) : undefined);
       const chosenKey = q.correctOptionId || detected?.answer || '';
-      const status: RecognitionStatus = chosenKey ? 'verified' : 'not_found';
+      const invalidCellEntry = matrix.part1Diagnostics?.invalidCells?.find(
+        c => c.questionNumber === qNum || (promptNum > 0 && c.questionNumber === promptNum)
+      );
+      const tableIssues = [...(detected?.validationIssues || [])];
+      if (!chosenKey && invalidCellEntry) {
+        tableIssues.push(
+          `Ô đáp án trong bảng ghi "${invalidCellEntry.rawValue}" không hợp lệ (chỉ nhận A, B, C, D)`
+        );
+      }
+      const hasTableIssues = tableIssues.length > 0 || detected?.validationStatus === 'needs_review';
+      const status: RecognitionStatus = !chosenKey
+        ? 'not_found'
+        : hasTableIssues
+        ? 'needs_review'
+        : 'verified';
       const source: RecognitionSource = q.correctOptionId && !detected ? 'question_content' : (detected?.source || 'manual');
 
       if (chosenKey) part1Found++;
@@ -553,8 +607,9 @@ export function buildAnswerRecognitionItems(
         correctAnswer: chosenKey,
         recognitionStatus: status,
         recognitionSource: source,
-        teacherVerified: (chosenKey ? (q.teacherVerified ?? true) : false),
+        teacherVerified: chosenKey && !hasTableIssues ? (q.teacherVerified ?? true) : false,
         notes: detected?.notes,
+        ...(tableIssues.length > 0 ? { validationIssues: tableIssues } : {}),
       });
 
       // Update question object cleanly while preserving structural error checks
@@ -572,6 +627,9 @@ export function buildAnswerRecognitionItems(
         q.parseWarning = !hasStem
           ? 'Lỗi cấu trúc: Nội dung câu hỏi bị trống'
           : 'Lỗi cấu trúc: Thiếu các phương án lựa chọn A, B, C, D';
+      } else if (hasTableIssues) {
+        q.parseStatus = 'needs_review';
+        q.parseWarning = tableIssues[0] || detected?.notes || 'Cần kiểm tra lại đáp án Phần I trong bảng';
       } else {
         q.parseStatus = chosenKey ? 'verified' : 'needs_review';
         q.parseWarning = chosenKey ? undefined : 'Chưa có đáp án chính thức';

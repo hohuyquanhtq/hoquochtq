@@ -58,7 +58,11 @@ export async function runAnswerExtractionEngine(
   }
 
   // 2. Also extract any Markdown or text grid tables found inside fullText
-  const textTables = extractTablesFromText(fullText);
+  //    Avoid duplicating Markdown shadows of tables already extracted directly from DOCX XML/HTML
+  const hasNativeDocxTables = tables.some(t => t.sourceType === 'docx_html');
+  const textTables = extractTablesFromText(fullText).filter(
+    t => !(hasNativeDocxTables && t.sourceType === 'markdown')
+  );
   if (textTables.length > 0) {
     tables = [...tables, ...textTables];
   }
@@ -113,7 +117,8 @@ export async function runAnswerExtractionEngine(
     part3Items,
     solutionChoices,
     tables,
-    options?.expectedCounts
+    options?.expectedCounts,
+    algoResult.part1Diagnostics
   );
 
   // 7. Assemble final lookup maps

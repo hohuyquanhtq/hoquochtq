@@ -7,10 +7,66 @@ import { RawDocumentTable, ExtractedAnswerItem } from './types';
 import type { AnswerTableCandidate } from '../../types';
 
 /**
+ * Strips inline HTML tags (<b>, <u>, <sub>, <sup>, etc.) and Markdown emphasis markers from a table cell
+ */
+export function stripCellFormatting(token: string): string {
+  return (token || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\*\*|__|~~|`/g, '')
+    .replace(/(^|\s)\*+|\*+($|\s)/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Checks whether a cell text represents a Question-number row header (e.g. "Câu", "Câu hỏi", "Câu số", "Bài")
+ */
+export function isQuestionRowLabel(cell: string): boolean {
+  const clean = stripCellFormatting(cell)
+    .toLowerCase()
+    .replace(/[:.\-–—\\/()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!clean) return false;
+  return /^(?:câu(?:\s+(?:hỏi|số|trắc\s+nghiệm|đáp\s+án))?|bài|mã\s*câu|stt|tt)$/.test(clean) ||
+    /^câu\s*(?:\/|\\|-)\s*đáp\s*án$/i.test(stripCellFormatting(cell));
+}
+
+/**
+ * Checks whether a cell text represents an Answer row header (e.g. "Đáp án", "Đ/A", "Chọn", "Trả lời")
+ */
+export function isAnswerRowLabel(cell: string): boolean {
+  const clean = stripCellFormatting(cell)
+    .toLowerCase()
+    .replace(/[:.\-–—\\/()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!clean) return false;
+  return /^(?:đáp\s*án(?:\s+đúng)?|dap\s*an(?:\s+dung)?|đ\s*a|da|chọn|trả\s*lời|kết\s*quả|key|ans(?:wer)?)$/.test(clean);
+}
+
+/**
+ * Strictly extracts a positive integer question number from a table cell (e.g. "1", "10", "Câu 12.", "**15**")
+ * Rejects prose text, decimals, or out-of-range numbers so content tables are never misparsed.
+ */
+export function extractQuestionNumberCell(cell: string): number | null {
+  const clean = stripCellFormatting(cell);
+  if (!clean) return null;
+  const m = clean.match(/^(?:câu\s*)?(\d{1,3})\s*[.:)]?$/i);
+  if (!m) return null;
+  const num = parseInt(m[1], 10);
+  if (isNaN(num) || num <= 0 || num > 200) return null;
+  return num;
+}
+
+/**
  * Normalizes True/False token to 'Đ' or 'S'
  */
 export function normalizeTrueFalse(token: string): 'Đ' | 'S' | null {
-  const clean = token.trim().toUpperCase().replace(/[^A-ZĐ\u00C0-\u1EF9]/gi, '');
+  const clean = stripCellFormatting(token)
+    .toUpperCase()
+    .replace(/[^A-ZĐ\u00C0-\u1EF9]/gi, '');
   if (['Đ', 'ĐÚNG', 'DUNG', 'TRUE', 'T', 'D'].includes(clean)) return 'Đ';
   if (['S', 'SAI', 'FALSE', 'F'].includes(clean)) return 'S';
   return null;
@@ -18,11 +74,15 @@ export function normalizeTrueFalse(token: string): 'Đ' | 'S' | null {
 
 /**
  * Normalizes Part I choice to 'A' | 'B' | 'C' | 'D'
+ * Strips HTML/Markdown formatting first and strictly validates standalone A/B/C/D tokens
+ * so Vietnamese words (e.g. "Câu", "Đáp án", "Chất") never produce false positives.
  */
 export function normalizeChoice(token: string): 'A' | 'B' | 'C' | 'D' | null {
-  const clean = token.trim().toUpperCase().replace(/[^A-D]/g, '');
-  if (clean.length === 1 && ['A', 'B', 'C', 'D'].includes(clean)) {
-    return clean as 'A' | 'B' | 'C' | 'D';
+  const clean = stripCellFormatting(token).toUpperCase();
+  if (!clean) return null;
+  const m = clean.match(/^[(\[]?\s*([A-D])\s*[)\].:*]?$/);
+  if (m) {
+    return m[1] as 'A' | 'B' | 'C' | 'D';
   }
   return null;
 }
@@ -100,7 +160,7 @@ export function buildAnswerTableCandidates(
     const hasAnswerMarkers =
       isLikelyPart2Matrix(tbl.rows) ||
       isLikelyPart2RowWise(tbl.rows) ||
-      detectHorizontalHeaderAnswerPairs(tbl.rows).questions.length >= 2 ||
+      detectHorizontalHeaderAnswerPairs(tbl.rows, tbl.surroundingHeader).questions.length >= 1 ||
       /(?:ĐÁP\s*ÁN|MÃ\s*ĐỀ|CÂU\s+1\b)/i.test(flatText);
 
     if (!hasAnswerMarkers) continue;
@@ -193,6 +253,13 @@ export function buildAnswerTableCandidates(
   };
 }
 
+export interface Part1TableDiagnostics {
+  tablesMatched: number;
+  duplicateQuestions: { questionNumber: number; answers: string[]; conflict: boolean }[];
+  missingFromTable: number[];
+  invalidCells: { questionNumber: number; rawValue: string }[];
+}
+
 /**
  * Parses all 3 sections from extracted 2D tables and document text
  */
@@ -208,10 +275,16 @@ export function extractAnswersAlgorithmically(
   solutionChoices: Map<number, string>;
   candidates: AnswerTableCandidate[];
   hasAmbiguousCandidates: boolean;
+  part1Diagnostics: Part1TableDiagnostics;
 } {
   const part1Map = new Map<number, ExtractedAnswerItem>();
   const part2Map = new Map<string, ExtractedAnswerItem>(); // "qNum-sub" -> item
   const part3Map = new Map<number, ExtractedAnswerItem>();
+
+  const part1SeenAnswers = new Map<number, string[]>();
+  const part1MissingSet = new Set<number>();
+  const part1InvalidCells: { questionNumber: number; rawValue: string }[] = [];
+  let part1TablesMatched = 0;
 
   const { candidates, hasAmbiguousCandidates } = buildAnswerTableCandidates(tables, text);
 
@@ -231,9 +304,15 @@ export function extractAnswersAlgorithmically(
     }
   }
 
-  // 1. First pass: Analyze active 2D structured tables
+  // 1. First pass: Analyze ALL active 2D structured tables in document order
+  //    (supports single table AND multiple consecutive separate Word tables for Part I)
   for (const table of activeTables) {
-    processTable(table, part1Map, part2Map, part3Map);
+    const matchedP1 = processTable(table, part1Map, part2Map, part3Map, {
+      part1SeenAnswers,
+      part1MissingSet,
+      part1InvalidCells,
+    });
+    if (matchedP1) part1TablesMatched++;
   }
 
   // 2. Second pass: Parse inline text lists (especially for parts missing in tables or inline blocks)
@@ -241,6 +320,33 @@ export function extractAnswersAlgorithmically(
 
   // 3. Third pass: Parse "HƯỚNG DẪN GIẢI CHI TIẾT" to find solutions and cross-check choices
   const { detailedSolutions, solutionChoices } = parseDetailedSolutions(text);
+
+  // Compile Part I duplicate & missing table diagnostics and attach warnings onto affected items
+  const duplicateQuestions: { questionNumber: number; answers: string[]; conflict: boolean }[] = [];
+  for (const [qNum, answers] of part1SeenAnswers.entries()) {
+    if (answers.length > 1) {
+      const uniqueAnswers = Array.from(new Set(answers));
+      const conflict = uniqueAnswers.length > 1;
+      duplicateQuestions.push({ questionNumber: qNum, answers, conflict });
+
+      const existing = part1Map.get(qNum);
+      if (existing) {
+        const dupMsg = conflict
+          ? `Câu ${qNum} bị trùng số trong bảng đáp án với giá trị khác nhau (${uniqueAnswers.join(' và ')}) — vui lòng kiểm tra lại.`
+          : `Câu ${qNum} xuất hiện lặp lại ${answers.length} lần trong các bảng đáp án (${uniqueAnswers[0]}) — vui lòng kiểm tra lại thứ tự câu.`;
+        existing.validationStatus = 'needs_review';
+        existing.validationIssues = [...(existing.validationIssues || []), dupMsg];
+        existing.notes = existing.notes ? `${existing.notes}; ${dupMsg}` : dupMsg;
+      }
+    }
+  }
+
+  // Filter out any missingFromTable numbers that were subsequently resolved by another valid table/list
+  const unresolvedMissingFromTable = Array.from(part1MissingSet)
+    .filter(qNum => !part1Map.has(qNum))
+    .sort((a, b) => a - b);
+
+  const unresolvedInvalidCells = part1InvalidCells.filter(c => !part1Map.has(c.questionNumber));
 
   return {
     part1Items: Array.from(part1Map.values()).sort((a, b) => a.questionNumber - b.questionNumber),
@@ -253,20 +359,34 @@ export function extractAnswersAlgorithmically(
     solutionChoices,
     candidates,
     hasAmbiguousCandidates,
+    part1Diagnostics: {
+      tablesMatched: part1TablesMatched,
+      duplicateQuestions: duplicateQuestions.sort((a, b) => a.questionNumber - b.questionNumber),
+      missingFromTable: unresolvedMissingFromTable,
+      invalidCells: unresolvedInvalidCells,
+    },
   };
+}
+
+interface TableProcessTrackers {
+  part1SeenAnswers: Map<number, string[]>;
+  part1MissingSet: Set<number>;
+  part1InvalidCells: { questionNumber: number; rawValue: string }[];
 }
 
 /**
  * Analyzes a single 2D table grid (handling transposed matrices, horizontal headers, vertical pairs)
+ * Returns true if this table contributed Part I answer items.
  */
 function processTable(
   table: RawDocumentTable,
   part1Map: Map<number, ExtractedAnswerItem>,
   part2Map: Map<string, ExtractedAnswerItem>,
-  part3Map: Map<number, ExtractedAnswerItem>
-) {
+  part3Map: Map<number, ExtractedAnswerItem>,
+  trackers?: TableProcessTrackers
+): boolean {
   const rows = table.rows;
-  if (!rows || rows.length === 0) return;
+  if (!rows || rows.length === 0) return false;
 
   const headerSnippet = (table.surroundingHeader || '').toUpperCase();
   const isPart3Hint = /\b(?:PHẦN|PHAN)\s*(?:III|3)\b|TRẢ\s*LỜI\s*NGẮN/i.test(headerSnippet);
@@ -283,7 +403,7 @@ function processTable(
   const isPart2Matrix = isLikelyPart2Matrix(rows);
   if (isPart2Matrix) {
     parsePart2TransposedMatrix(rows, part2Map);
-    return;
+    return false;
   }
 
   // --- CASE A2: PART II ROW-WISE TABLE ---
@@ -292,19 +412,29 @@ function processTable(
   // Row 2: ["2", "Đ", "Đ", "Đ", "S"]
   if (isLikelyPart2RowWise(rows)) {
     parsePart2RowWise(rows, part2Map);
-    return;
+    return false;
   }
 
-  // --- CASE B: PART I & PART III HORIZONTAL TABLES (supports multi-row blocks) ---
-  const horizontalPairs = detectHorizontalHeaderAnswerPairs(rows);
+  // --- CASE B: PART I & PART III HORIZONTAL TABLES (supports single 2-row, wrapped multi-row, and multiple consecutive Word tables) ---
+  const horizontalPairs = detectHorizontalHeaderAnswerPairs(rows, table.surroundingHeader);
   if (horizontalPairs.questions.length > 0) {
-    const { questions, answers } = horizontalPairs;
+    const { questions, answers, isPart1Table } = horizontalPairs;
+    let contributedPart1 = false;
+
     for (let i = 0; i < questions.length; i++) {
       const qNum = questions[i];
-      const ansToken = answers[i] || '';
+      const rawAnsToken = answers[i] || '';
+      const cleanAnsToken = stripCellFormatting(rawAnsToken);
 
-      const choice = normalizeChoice(ansToken);
+      const choice = normalizeChoice(rawAnsToken);
       if (choice && !isPart3Hint) {
+        contributedPart1 = true;
+        if (trackers) {
+          const prevList = trackers.part1SeenAnswers.get(qNum) || [];
+          prevList.push(choice);
+          trackers.part1SeenAnswers.set(qNum, prevList);
+        }
+
         if (!part1Map.has(qNum) || part1Map.get(qNum)!.confidence < 0.95) {
           part1Map.set(qNum, {
             id: `I.${qNum}`,
@@ -319,10 +449,19 @@ function processTable(
             teacherVerified: false,
           });
         }
+      } else if (isPart1Table && !isPart3Hint) {
+        // Confirmed Part I answer table, but this cell is blank or invalid -> record missing/invalid warning
+        contributedPart1 = true;
+        if (trackers) {
+          trackers.part1MissingSet.add(qNum);
+          if (cleanAnsToken) {
+            trackers.part1InvalidCells.push({ questionNumber: qNum, rawValue: cleanAnsToken });
+          }
+        }
       } else {
         // Might be Part III short answer
-        const parsed = normalizeShortAnswer(ansToken);
-        if (parsed.normalizedValue && (isPart3Hint || !choice)) {
+        const parsed = normalizeShortAnswer(cleanAnsToken);
+        if (parsed.normalizedValue && (isPart3Hint || (!choice && !isPart1Table))) {
           if (!part3Map.has(qNum) || part3Map.get(qNum)!.confidence < 0.95) {
             part3Map.set(qNum, {
               id: `III.${qNum}`,
@@ -343,12 +482,14 @@ function processTable(
         }
       }
     }
-    return;
+    return contributedPart1;
   }
 
   // --- CASE C: VERTICAL OR GRID KEY-VALUE CELLS ---
   // Tables where columns are: [Câu, Đáp án, Câu, Đáp án] or row per question
-  parseGenericKeyValTable(rows, part1Map, part2Map, part3Map, isPart1Hint, isPart2Hint, isPart3Hint);
+  const beforeP1Size = part1Map.size;
+  parseGenericKeyValTable(rows, part1Map, part2Map, part3Map, isPart1Hint, isPart2Hint, isPart3Hint, trackers);
+  return part1Map.size > beforeP1Size;
 }
 
 /**
@@ -361,10 +502,16 @@ function isLikelyPart2Matrix(rows: string[][]): boolean {
 
   // Check header row for question numbers
   const headerRow = rows[0];
-  const qCols = headerRow.slice(1).map(c => parseInt(c.replace(/\D/g, ''), 10));
-  const hasValidQNums = qCols.length >= 2 && qCols.every(n => !isNaN(n) && n > 0);
+  const qCols = headerRow.slice(1).map(c => extractQuestionNumberCell(c));
+  const validQCols = qCols.filter((n): n is number => n !== null);
+  const hasValidQNums = validQCols.length >= 2 && validQCols.length >= Math.ceil((headerRow.length - 1) * 0.6);
 
-  // Check next 4 rows for a, b, c, d labels and True/False values
+  // Reject if row 1 is explicitly an "Đáp án" row (that's a multi-row horizontal Part I/III table, not Part II matrix)
+  if (rows[1] && rows[1].length > 0 && isAnswerRowLabel(rows[1][0])) {
+    return false;
+  }
+
+  // Check next 4 rows for strict a, b, c, d labels and True/False values
   const labels: string[] = [];
   let tfCellsCount = 0;
   let totalDataCells = 0;
@@ -372,13 +519,16 @@ function isLikelyPart2Matrix(rows: string[][]): boolean {
   for (let r = 1; r <= 4 && r < rows.length; r++) {
     const row = rows[r];
     if (row.length === 0) continue;
-    const firstCell = row[0].toLowerCase().replace(/[^a-d]/g, '');
-    if (firstCell.length === 1) {
-      labels.push(firstCell);
+    const firstClean = stripCellFormatting(row[0]).toLowerCase();
+    const subMatch = firstClean.match(/^\(?([a-d])\)?[.:]?$/);
+    if (subMatch) {
+      labels.push(subMatch[1]);
     }
     for (let c = 1; c < row.length; c++) {
+      const cellClean = stripCellFormatting(row[c]);
+      if (!cellClean) continue;
       totalDataCells++;
-      if (normalizeTrueFalse(row[c]) !== null) {
+      if (normalizeTrueFalse(cellClean) !== null) {
         tfCellsCount++;
       }
     }
@@ -466,15 +616,29 @@ function isLikelyPart2RowWise(rows: string[][]): boolean {
   const header = rows[0];
   if (header.length < 4) return false;
 
-  const headerSubs = header.slice(1).map(c => c.toLowerCase().replace(/[^a-d]/g, ''));
+  // Reject immediately if Row 1 is an explicit "Đáp án" row (horizontal Part I/III table)
+  if (rows[1] && rows[1].length > 0 && isAnswerRowLabel(rows[1][0])) {
+    return false;
+  }
+
+  const headerSubs = header
+    .slice(1)
+    .map(c => {
+      const m = stripCellFormatting(c).toLowerCase().match(/^\(?([a-d])\)?[.:]?$/);
+      return m ? m[1] : '';
+    });
   const hasSubsInHeader = headerSubs.filter(s => ['a', 'b', 'c', 'd'].includes(s)).length >= 2;
 
   let validDataRows = 0;
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
-    const qNum = parseInt(row[0].replace(/\D/g, ''), 10);
-    if (!isNaN(qNum) && row.length >= 4) {
-      const tfCount = row.slice(1).filter(c => normalizeTrueFalse(c) !== null).length;
+    const qNum = extractQuestionNumberCell(row[0]);
+    if (qNum !== null && row.length >= 4) {
+      const dataCells = row.slice(1).map(c => stripCellFormatting(c)).filter(Boolean);
+      // If row contains standalone A, B, or C choices, it's NOT a True/False row
+      const hasChoiceABC = dataCells.some(c => /^[A-C]$/i.test(c));
+      if (hasChoiceABC) continue;
+      const tfCount = dataCells.filter(c => normalizeTrueFalse(c) !== null).length;
       if (tfCount >= 2) validDataRows++;
     }
   }
@@ -539,54 +703,155 @@ function parsePart2RowWise(rows: string[][], part2Map: Map<string, ExtractedAnsw
 }
 
 /**
- * Detects horizontal question-answer rows across ALL wrapped rows in the table
- * (e.g. Row 0 = Câu 1..9, Row 1 = Đáp án A..D, Row 2 = Câu 10..18, Row 3 = Đáp án B..C)
+ * Detects horizontal question-answer row pairs across a table:
+ * - Supports standard 2-row tables ("Câu | 1 | 2 | ... | 10" + "Đáp án | D | A | ... | C")
+ * - Supports multi-row wrapped tables (Row 0-1: 1..10, Row 2-3: 11..20)
+ * - Supports split separate Word tables of ANY column count (including a 1-question tail table)
+ * - Tolerates leading/trailing/spacer empty cells, bold/HTML formatting, and banner title rows
+ * - Rejects non-answer content tables inside the exam body (e.g. experiment/data tables)
  */
-function detectHorizontalHeaderAnswerPairs(rows: string[][]): {
+function detectHorizontalHeaderAnswerPairs(
+  rows: string[][],
+  surroundingHeader?: string
+): {
   questions: number[];
   answers: string[];
+  isPart1Table: boolean;
 } {
   const questions: number[] = [];
   const answers: string[] = [];
+  let choiceVotes = 0;
+  let nonEmptyAnswerVotes = 0;
 
-  for (let r = 0; r < rows.length - 1; r++) {
-    const r1 = rows[r];
-    const r2 = rows[r + 1];
+  // Filter out completely empty / separator-only rows
+  const nonEmptyRows = rows.filter(row =>
+    row.some(cell => {
+      const cleaned = stripCellFormatting(cell);
+      return cleaned.length > 0 && !/^[\-–—_=|:]+$/.test(cleaned);
+    })
+  );
 
-    if (r1.length < 3 || r2.length < 3) continue;
+  const headerText = (surroundingHeader || '').toUpperCase();
+  const hasAnswerContextHeader = /(?:PHẦN\s+(?:III|II|I|3|2|1)\b|ĐÁP\s*ÁN|BẢNG\s+ĐÁP\s*ÁN|HƯỚNG\s*DẪN\s*CHẤM|MÃ\s*ĐỀ)/i.test(
+    headerText
+  );
 
-    // Check if r1 starts with "Câu" or numeric header and r2 contains answer-like tokens (not another Câu header)
-    const r1First = r1[0].toLowerCase();
-    const r2First = r2[0].toLowerCase();
-    const isQRow =
-      r1First.includes('câu') ||
-      r1First.includes('tt') ||
-      r1First.includes('stt') ||
-      (/^\d+$/.test(r1[0]) && /^\d+$/.test(r1[1]));
-    const r2IsAnotherQRow = r2First.includes('câu') || r2First.includes('tt');
+  for (let r = 0; r < nonEmptyRows.length - 1; r++) {
+    const r1 = nonEmptyRows[r];
+    const r2 = nonEmptyRows[r + 1];
 
-    if (isQRow && !r2IsAnotherQRow) {
-      const startCol = /^\d+$/.test(r1[0]) ? 0 : 1;
-      const pairQs: number[] = [];
-      const pairAns: string[] = [];
+    // Find first non-empty cell index in r1 to tolerate leading empty/formatting columns
+    const r1FirstIdx = r1.findIndex(c => stripCellFormatting(c).length > 0);
+    if (r1FirstIdx === -1) continue;
 
-      for (let c = startCol; c < Math.min(r1.length, r2.length); c++) {
-        const qNum = parseInt(r1[c].replace(/\D/g, ''), 10);
-        if (!isNaN(qNum) && qNum > 0) {
-          pairQs.push(qNum);
-          pairAns.push(r2[c] ? r2[c].trim() : '');
+    const r1LabelCell = stripCellFormatting(r1[r1FirstIdx]);
+    const r2AlignedLabelCell = r2[r1FirstIdx] !== undefined ? stripCellFormatting(r2[r1FirstIdx]) : '';
+    const r2FirstIdx = r2.findIndex(c => stripCellFormatting(c).length > 0);
+    const r2FirstCell = r2FirstIdx !== -1 ? stripCellFormatting(r2[r2FirstIdx]) : '';
+
+    const r1HasExplicitQLabel = isQuestionRowLabel(r1LabelCell);
+    const r2HasExplicitAnsLabel =
+      isAnswerRowLabel(r2AlignedLabelCell) || (r2FirstIdx === r1FirstIdx && isAnswerRowLabel(r2FirstCell));
+    const r2IsAnotherQRow = isQuestionRowLabel(r2AlignedLabelCell) || isQuestionRowLabel(r2FirstCell);
+
+    if (r2IsAnotherQRow && !r2HasExplicitAnsLabel) continue;
+
+    // Determine whether r1 is a headerless pure-numeric question row (e.g. | 1 | 2 | 3 | 4 |)
+    const r1StartsWithNumber = extractQuestionNumberCell(r1LabelCell) !== null;
+
+    if (!r1HasExplicitQLabel && !r1StartsWithNumber) continue;
+
+    // Guard against exam content tables like "STT | 1 | 2 | 3" + "Hiện tượng | Kết tủa | ..."
+    const isGenericSttLabel = /^(?:stt|tt)$/i.test(r1LabelCell.replace(/[:.]/g, '').trim());
+    if (isGenericSttLabel && !r2HasExplicitAnsLabel && !hasAnswerContextHeader) {
+      continue;
+    }
+
+    const startCol = r1HasExplicitQLabel ? r1FirstIdx + 1 : r1FirstIdx;
+    const maxCol = Math.max(r1.length, r2.length);
+
+    const pairQs: number[] = [];
+    const pairAns: string[] = [];
+    let pairChoiceCount = 0;
+    let pairShortNumCount = 0;
+    let pairProseCount = 0;
+    let pairNonEmptyAnsCount = 0;
+
+    for (let c = startCol; c < maxCol; c++) {
+      const qCellRaw = c < r1.length ? r1[c] : '';
+      const aCellRaw = c < r2.length ? r2[c] : '';
+      const qCellClean = stripCellFormatting(qCellRaw);
+      const aCellClean = stripCellFormatting(aCellRaw);
+
+      // Ignore empty spacer / formatting columns
+      if (!qCellClean && !aCellClean) continue;
+
+      const qNum = extractQuestionNumberCell(qCellRaw);
+      if (qNum === null) continue;
+
+      pairQs.push(qNum);
+      pairAns.push(aCellClean);
+
+      if (aCellClean) {
+        pairNonEmptyAnsCount++;
+        if (normalizeChoice(aCellClean) !== null) {
+          pairChoiceCount++;
+        } else if (/^[-+]?\d+(?:[,.]\d+)?(?:\/\d+)?(?:\s*[a-zA-Z%°]{1,6})?$/.test(aCellClean)) {
+          pairShortNumCount++;
+        } else if (aCellClean.length > 12 || /\s+\S+\s+/.test(aCellClean)) {
+          pairProseCount++;
         }
       }
+    }
 
-      if (pairQs.length >= 2) {
-        questions.push(...pairQs);
-        answers.push(...pairAns);
-        r++; // skip the paired answer row
-      }
+    if (pairQs.length === 0) continue;
+
+    // Reject content tables whose second row is mostly prose text (e.g., experiment observations)
+    if (pairNonEmptyAnsCount > 0 && pairProseCount > pairNonEmptyAnsCount * 0.4) {
+      continue;
+    }
+
+    // Validate minimum pair count and answer-row credibility:
+    // - Explicit "Câu" + "Đáp án" allows even 1 question (e.g., last split table has Câu 21)
+    // - Explicit "Câu" without "Đáp án" label needs >=2 questions and valid answer tokens
+    // - Headerless numeric row needs >=2 questions and >=70% valid choices/numbers (and answer context or pure A-D choices)
+    const hasExplicitBothLabels = r1HasExplicitQLabel && r2HasExplicitAnsLabel;
+    const validAnswerRatio =
+      pairNonEmptyAnsCount > 0 ? (pairChoiceCount + pairShortNumCount) / pairNonEmptyAnsCount : 0;
+
+    let accepted = false;
+    if (hasExplicitBothLabels) {
+      // Both "Câu" and "Đáp án" labels present -> strong answer table signal
+      accepted = pairQs.length >= 1 && (pairNonEmptyAnsCount === 0 || validAnswerRatio >= 0.5);
+    } else if (r1HasExplicitQLabel) {
+      accepted =
+        pairQs.length >= 2 &&
+        pairNonEmptyAnsCount >= 1 &&
+        validAnswerRatio >= 0.7 &&
+        (r2AlignedLabelCell === '' || hasAnswerContextHeader || pairChoiceCount >= 2);
+    } else if (r1StartsWithNumber) {
+      accepted =
+        pairQs.length >= 2 &&
+        pairNonEmptyAnsCount >= 2 &&
+        (pairChoiceCount / pairNonEmptyAnsCount >= 0.7 ||
+          (hasAnswerContextHeader && validAnswerRatio >= 0.7));
+    }
+
+    if (accepted) {
+      questions.push(...pairQs);
+      answers.push(...pairAns);
+      choiceVotes += pairChoiceCount;
+      nonEmptyAnswerVotes += pairNonEmptyAnsCount;
+      r++; // skip the paired answer row
     }
   }
 
-  return { questions, answers };
+  const isPart1Table =
+    questions.length > 0 &&
+    nonEmptyAnswerVotes > 0 &&
+    choiceVotes / nonEmptyAnswerVotes >= 0.6;
+
+  return { questions, answers, isPart1Table };
 }
 
 /**
@@ -599,20 +864,38 @@ function parseGenericKeyValTable(
   part3Map: Map<number, ExtractedAnswerItem>,
   isPart1Hint: boolean,
   isPart2Hint: boolean,
-  isPart3Hint: boolean
+  isPart3Hint: boolean,
+  trackers?: TableProcessTrackers
 ) {
-  for (const row of rows) {
+  // Guard: require either section hint or explicit "Câu"/"Đáp án" header in row 0
+  // to avoid mistaking exam data tables (like [1, "A", 2, "B"]) for answer tables
+  const firstRowClean = rows[0] ? rows[0].map(c => stripCellFormatting(c)) : [];
+  const hasExplicitKeyValHeader =
+    firstRowClean.some(c => isQuestionRowLabel(c)) && firstRowClean.some(c => isAnswerRowLabel(c));
+  const hasAnyAnswerHint = isPart1Hint || isPart2Hint || isPart3Hint || hasExplicitKeyValHeader;
+
+  for (let rIdx = 0; rIdx < rows.length; rIdx++) {
+    const row = rows[rIdx];
     for (let c = 0; c < row.length - 1; c++) {
-      const cellText = row[c].trim();
-      const nextCell = row[c + 1] ? row[c + 1].trim() : '';
+      const cellText = stripCellFormatting(row[c]);
+      const nextCell = row[c + 1] ? stripCellFormatting(row[c + 1]) : '';
 
       // Match "Câu 1" or "1"
       const qMatch = cellText.match(/^(?:Câu\s*)?(\d+)(?:\s*[:.\-–])?$/i);
       if (qMatch) {
+        const startsWithCau = /^Câu\s*/i.test(cellText);
+        if (!startsWithCau && !hasAnyAnswerHint) continue;
+
         const qNum = parseInt(qMatch[1], 10);
+        if (qNum <= 0 || qNum > 200) continue;
         const choice = normalizeChoice(nextCell);
 
         if (choice && !isPart3Hint) {
+          if (trackers) {
+            const prevList = trackers.part1SeenAnswers.get(qNum) || [];
+            prevList.push(choice);
+            trackers.part1SeenAnswers.set(qNum, prevList);
+          }
           if (!part1Map.has(qNum)) {
             part1Map.set(qNum, {
               id: `I.${qNum}`,

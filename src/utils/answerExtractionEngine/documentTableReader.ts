@@ -57,6 +57,9 @@ export function extractTablesFromHtml(html: string): RawDocumentTable[] {
   const tables: RawDocumentTable[] = [];
   const tableMatches = [...html.matchAll(/<table[^>]*>([\s\S]*?)<\/table>/gi)];
 
+  let lastTableEnd = 0;
+  let lastSectionHeader: string | undefined;
+
   tableMatches.forEach((tMatch, tIdx) => {
     const tableHtml = tMatch[1];
     const rows: string[][] = [];
@@ -87,17 +90,28 @@ export function extractTablesFromHtml(html: string): RawDocumentTable[] {
       }
     });
 
-    if (rows.length > 0) {
-      // Find previous 200 characters of text to detect table section header (e.g. "PHẦN I", "PHẦN II")
-      const beforeIndex = Math.max(0, tMatch.index ? tMatch.index - 300 : 0);
-      const preSnippet = html.substring(beforeIndex, tMatch.index || 0).replace(/<[^>]+>/g, ' ').trim();
-      const headerMatch = preSnippet.match(/(?:PHẦN\s+(?:III|II|I|3|2|1)\b[^.\n]*|ĐÁP\s*ÁN[^.\n]*)/i);
+    const matchStart = tMatch.index || 0;
+    const betweenHtml = html.substring(lastTableEnd, matchStart);
+    const betweenText = betweenHtml.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
+    const headerMatches = [
+      ...betweenText.matchAll(
+        /(?:PHẦN\s+(?:III|II|I|3|2|1)\b[^.\n]*|MÃ\s*ĐỀ\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN[^.\n]*|ĐÁP\s*ÁN[^.\n]*|HƯỚNG\s*DẪN\s*CHẤM[^.\n]*)/gi
+      ),
+    ];
+    if (headerMatches.length > 0) {
+      lastSectionHeader = headerMatches[headerMatches.length - 1][0].trim().slice(0, 160);
+    } else if (betweenText.length > 120) {
+      // Significant prose appeared between tables without a section header; don't blindly inherit stale headers
+      lastSectionHeader = undefined;
+    }
+    lastTableEnd = matchStart + tMatch[0].length;
 
+    if (rows.length > 0) {
       tables.push({
         id: `tbl_${tIdx + 1}`,
         sourceType: 'docx_html',
         rows,
-        surroundingHeader: headerMatch ? headerMatch[0].trim() : undefined,
+        surroundingHeader: lastSectionHeader,
       });
     }
   });
@@ -199,58 +213,78 @@ function findNearbyTableHeader(lines: string[], startIndex: number): string | un
 }
 
 /**
- * Extracts Markdown tables (`| ... | ... |`) or text grids from text
+ * Extracts Markdown tables (`| ... | ... |`) or text grids from text,
+ * preserving distinct boundaries between consecutive tables (blank lines or repeated separator rows).
  */
 export function extractTablesFromText(text: string): RawDocumentTable[] {
   const tables: RawDocumentTable[] = [];
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const rawLines = text.split(/\r?\n/).map(l => l.trim());
+  const lines = rawLines.filter(Boolean);
 
   let currentMarkdownRows: string[][] = [];
-  let markdownStartIdx = -1;
-  let inMarkdownTable = false;
+  let hasSeenSeparatorInCurrentTable = false;
+  let lastMarkdownSectionHeader: string | undefined;
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  const isSectionHeaderLine = (l: string): boolean =>
+    /(?:PHẦN\s+(?:III|II|I|3|2|1)\b|MÃ\s*ĐỀ\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN|ĐÁP\s*ÁN|HƯỚNG\s*DẪN\s*CHẤM|TRẢ\s*LỜI\s*NGẮN|ĐÚNG\s*[-–\/]?\s*SAI)/i.test(
+      l
+    );
+
+  const flushMarkdownTable = () => {
+    if (currentMarkdownRows.length > 0) {
+      tables.push({
+        id: `tbl_md_${tables.length + 1}`,
+        sourceType: 'markdown',
+        rows: currentMarkdownRows,
+        surroundingHeader: lastMarkdownSectionHeader,
+      });
+    }
+    currentMarkdownRows = [];
+    hasSeenSeparatorInCurrentTable = false;
+  };
+
+  for (let i = 0; i < rawLines.length; i++) {
+    const line = rawLines[i];
+
+    // Blank line ends the current Markdown table without resetting lastMarkdownSectionHeader
+    if (!line) {
+      flushMarkdownTable();
+      continue;
+    }
 
     // Markdown table line
     if (line.startsWith('|') && line.endsWith('|')) {
-      // Skip separator |---|---|
+      // Separator line |---|---|
       if (/^\|[\s\-:]+(\|[\s\-:]+)*\|$/.test(line)) {
+        // If we already saw a separator AND already collected >=2 rows, a second separator means
+        // the immediately preceding row is actually the header of a NEW consecutive Markdown table!
+        if (hasSeenSeparatorInCurrentTable && currentMarkdownRows.length >= 2) {
+          const newHeaderRow = currentMarkdownRows.pop()!;
+          flushMarkdownTable();
+          currentMarkdownRows = [newHeaderRow];
+        }
+        hasSeenSeparatorInCurrentTable = true;
         continue;
       }
+
       const cells = line
         .slice(1, -1)
         .split('|')
         .map(c => c.trim());
 
-      if (!inMarkdownTable) {
-        markdownStartIdx = i;
-      }
       currentMarkdownRows.push(cells);
-      inMarkdownTable = true;
     } else {
-      if (inMarkdownTable && currentMarkdownRows.length > 0) {
-        tables.push({
-          id: `tbl_md_${tables.length + 1}`,
-          sourceType: 'markdown',
-          rows: currentMarkdownRows,
-          surroundingHeader: findNearbyTableHeader(lines, markdownStartIdx),
-        });
-        currentMarkdownRows = [];
-        markdownStartIdx = -1;
-        inMarkdownTable = false;
+      flushMarkdownTable();
+      if (isSectionHeaderLine(line)) {
+        lastMarkdownSectionHeader = line.replace(/\*\*|\*|<u>|<\/u>/gi, '').trim().slice(0, 160);
+      } else if (line.length > 100 && !/^[\-–—*_\s]+$/.test(line)) {
+        // Long non-header paragraph resets stale section context
+        lastMarkdownSectionHeader = undefined;
       }
     }
   }
 
-  if (currentMarkdownRows.length > 0) {
-    tables.push({
-      id: `tbl_md_${tables.length + 1}`,
-      sourceType: 'markdown',
-      rows: currentMarkdownRows,
-      surroundingHeader: findNearbyTableHeader(lines, markdownStartIdx >= 0 ? markdownStartIdx : 0),
-    });
-  }
+  flushMarkdownTable();
 
   // Also parse multi-column PDF / tab-delimited or space-aligned text grids (e.g. "1  A  7  B  13  C")
   let currentGridRows: string[][] = [];

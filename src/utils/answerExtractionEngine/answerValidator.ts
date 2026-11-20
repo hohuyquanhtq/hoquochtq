@@ -9,6 +9,7 @@ import {
   EngineVerificationReport,
   RawDocumentTable,
 } from './types';
+import type { Part1TableDiagnostics } from './algorithmicExtractor';
 
 export function validateAndCrossCheckAnswers(
   part1Items: ExtractedAnswerItem[],
@@ -16,7 +17,8 @@ export function validateAndCrossCheckAnswers(
   part3Items: ExtractedAnswerItem[],
   solutionChoices: Map<number, string>,
   _tables: RawDocumentTable[],
-  expectedCounts?: { part1?: number; part2?: number; part3?: number }
+  expectedCounts?: { part1?: number; part2?: number; part3?: number },
+  part1Diagnostics?: Part1TableDiagnostics
 ): {
   validatedPart1: ExtractedAnswerItem[];
   validatedPart2: ExtractedAnswerItem[];
@@ -28,11 +30,24 @@ export function validateAndCrossCheckAnswers(
   // --- 1. PART I VALIDATION & CROSS-CHECKING ---
   const validatedPart1 = part1Items.map(item => ({ ...item }));
   const p1Map = new Map<number, ExtractedAnswerItem>();
-  const p1QNums = validatedPart1.map(i => i.questionNumber);
+  const p1QNums = [
+    ...validatedPart1.map(i => i.questionNumber),
+    ...(part1Diagnostics?.missingFromTable || []),
+  ];
   const maxP1 = p1QNums.length > 0 ? Math.max(...p1QNums) : 0;
-  const targetP1Count = expectedCounts?.part1 || maxP1;
+  const targetP1Count = Math.max(expectedCounts?.part1 || 0, maxP1);
 
   for (const item of validatedPart1) {
+    if (p1Map.has(item.questionNumber)) {
+      issues.push({
+        type: 'duplicate_question',
+        severity: 'warning',
+        section: 'part1',
+        questionNumber: item.questionNumber,
+        message: `Câu ${item.questionNumber} (Phần I) bị trùng số trong danh sách đáp án.`,
+        suggestedFix: 'Kiểm tra lại các bảng đáp án Phần I để loại bỏ câu bị trùng.',
+      });
+    }
     p1Map.set(item.questionNumber, item);
 
     // Rule 1: Invalid domain
@@ -71,18 +86,54 @@ export function validateAndCrossCheckAnswers(
     }
   }
 
-  // Check missing Part I questions in sequence
+  // Rule 3: Duplicate question numbers detected across merged Part I tables
+  if (part1Diagnostics?.duplicateQuestions?.length) {
+    for (const dup of part1Diagnostics.duplicateQuestions) {
+      const uniqueVals = Array.from(new Set(dup.answers));
+      issues.push({
+        type: 'duplicate_question',
+        severity: dup.conflict ? 'error' : 'warning',
+        section: 'part1',
+        questionNumber: dup.questionNumber,
+        message: dup.conflict
+          ? `Câu ${dup.questionNumber} (Phần I) bị trùng số trong bảng đáp án với giá trị khác nhau (${uniqueVals.join(' và ')}).`
+          : `Câu ${dup.questionNumber} (Phần I) bị lặp số ${dup.answers.length} lần trong bảng đáp án (${uniqueVals[0]}).`,
+        suggestedFix: `Kiểm tra lại đáp án và đánh số cho Câu ${dup.questionNumber} trong các bảng đáp án.`,
+      });
+    }
+  }
+
+  // Rule 4: Invalid non-empty cells inside Part I answer tables
+  const invalidCellMap = new Map<number, string>();
+  if (part1Diagnostics?.invalidCells?.length) {
+    for (const cell of part1Diagnostics.invalidCells) {
+      invalidCellMap.set(cell.questionNumber, cell.rawValue);
+      issues.push({
+        type: 'invalid_domain_value',
+        severity: 'error',
+        section: 'part1',
+        questionNumber: cell.questionNumber,
+        message: `Câu ${cell.questionNumber} (Phần I) có ô đáp án '${cell.rawValue}' không hợp lệ (chỉ nhận A, B, C, D).`,
+        suggestedFix: `Sửa lại đáp án A, B, C hoặc D cho Câu ${cell.questionNumber}.`,
+      });
+    }
+  }
+
+  // Check missing Part I questions in sequence (1..targetP1Count)
   const missingP1: number[] = [];
   for (let q = 1; q <= targetP1Count; q++) {
     if (!p1Map.has(q)) {
       missingP1.push(q);
+      const invalidVal = invalidCellMap.get(q);
       issues.push({
         type: 'missing_answer',
         severity: 'error',
         section: 'part1',
         questionNumber: q,
-        message: `Thiếu đáp án Câu ${q} (Phần I).`,
-        suggestedFix: `Bổ sung đáp án trắc nghiệm cho Câu ${q}.`,
+        message: invalidVal
+          ? `Thiếu đáp án hợp lệ cho Câu ${q} (Phần I) — ô trong bảng ghi '${invalidVal}'.`
+          : `Thiếu đáp án Câu ${q} (Phần I).`,
+        suggestedFix: `Bổ sung đáp án trắc nghiệm (A, B, C, D) cho Câu ${q}.`,
       });
     }
   }
