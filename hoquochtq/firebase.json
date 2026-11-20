@@ -1,6 +1,0 @@
-{
-  "firestore": {
-    "database": "ai-studio-chemtest-2d596eaa-de9e-460a-8554-f85091b4622e",
-    "rules": "firestore.rules"
-  }
-}

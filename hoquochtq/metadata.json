@@ -1,6 +1,0 @@
-{
-  "name": "HQTest - Ngân hàng câu hỏi & Thi trắc nghiệm online",
-  "description": "HQTest – Ngân hàng câu hỏi & Thi trắc nghiệm online. Tác giả: Hồ Ngọc Quốc, Trường THPT chuyên Nguyễn Bỉnh Khiêm, Tp. Đà Nẵng.",
-  "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
-}
