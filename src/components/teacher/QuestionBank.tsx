@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import mammoth from 'mammoth';
 import {
   CognitiveLevel,
   CurriculumGrade,
@@ -30,6 +31,7 @@ import {
   Copy,
   Edit3,
   Eye,
+  FileText,
   FlaskConical,
   Loader2,
   Plus,
@@ -37,6 +39,7 @@ import {
   Sparkles,
   Square,
   Trash2,
+  Upload,
   X,
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
@@ -99,6 +102,12 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
+  // States hỗ trợ bóc tách Word
+  const wordInputRef = useRef<HTMLInputElement | null>(null);
+  const [isExtractingWord, setIsExtractingWord] = useState(false);
+  const [extractedPreview, setExtractedPreview] = useState<Question[]>([]);
+  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
+
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3200);
@@ -160,7 +169,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     return { byId, byLabel };
   }, [questions, subjects, subjectFilter, gradeFilter]);
 
-  // Unique lesson/topic options present in the bank (scoped by selected subject/grade/chapter when active)
+  // Unique lesson/topic options present in the bank
   const availableTopicOptions = useMemo(() => {
     const map = new Map<string, number>();
     questions.forEach((q) => {
@@ -252,7 +261,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     searchTerm,
   ]);
 
-  // Reset pagination when filters change
   useEffect(() => {
     setCurrentPage(1);
   }, [
@@ -273,7 +281,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     return filtered.slice(start, start + pageSize);
   }, [filtered, safePage, pageSize]);
 
-  // Dynamic Statistics based on current scope (or filtered bank)
   const stats = useMemo(() => {
     const bySubject = new Map<string, { id: string; name: string; count: number }>();
     const byGrade: Record<string, number> = { '10': 0, '11': 0, '12': 0, chuyen_hsg: 0 };
@@ -301,7 +308,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       }
     >();
 
-    // Summary across all questions for subjects, and filtered scope for detailed topic/level breakdown
     questions.forEach((q) => {
       const sub = resolveQuestionSubject(q, subjects);
       const curr = bySubject.get(sub.id) || { id: sub.id, name: sub.name, count: 0 };
@@ -438,11 +444,163 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setDeleteTarget(null);
   };
 
+  // --- LOGIC BÓC TÁCH FILE WORD (.DOCX) ---
+  const handleWordFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (!file.name.toLowerCase().endsWith('.docx')) {
+      showToast('Vui lòng chọn đúng định dạng file Word (.docx).');
+      if (wordInputRef.current) wordInputRef.current.value = '';
+      return;
+    }
+
+    setIsExtractingWord(true);
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+      const result = await mammoth.extractRawText({ arrayBuffer });
+      const rawText = result.value;
+
+      if (!rawText.trim()) {
+        showToast('Không tìm thấy nội dung văn bản trong file Word.');
+        return;
+      }
+
+      // Phân tách khối câu hỏi theo định dạng "Câu 1:", "Câu 1.", "Câu 1 "
+      const questionRegex = /(?:^|\n)\s*(?:Câu|CÂU)\s+(\d+)[\s.:]/gi;
+      const matches = Array.from(rawText.matchAll(questionRegex));
+
+      if (matches.length === 0) {
+        showToast('Không nhận diện được định dạng câu hỏi (Ví dụ: "Câu 1: ...").');
+        return;
+      }
+
+      const activeSubjectId = subjectFilter !== 'all' ? subjectFilter : subjects[0]?.id || 'chemistry';
+      const activeSubject = subjects.find((s) => s.id === activeSubjectId) || subjects[0];
+      const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '12') as CurriculumGrade;
+
+      const parsedQuestions: Question[] = [];
+      const nowIso = new Date().toISOString();
+
+      for (let i = 0; i < matches.length; i++) {
+        const startIdx = matches[i].index! + matches[i][0].length;
+        const endIdx = i + 1 < matches.length ? matches[i + 1].index! : rawText.length;
+        const block = rawText.substring(startIdx, endIdx).trim();
+
+        // Nhận diện dạng câu hỏi
+        const isTrueFalse = /[a-d]\)\s+/i.test(block);
+        const isSingleChoice = /[A-D][.:]\s+/i.test(block);
+
+        let qType: QuestionType = 'part3_short_answer';
+        if (isTrueFalse) {
+          qType = 'part2_true_false';
+        } else if (isSingleChoice) {
+          qType = 'part1_single_choice';
+        }
+
+        let mainContent = block;
+        let options: { id: string; text: string }[] | undefined = undefined;
+        let statements: { id: string; statement: string; correctAnswer: boolean }[] | undefined = undefined;
+        let correctOptionId: string | undefined = undefined;
+        let shortAnswerConfig: { acceptableAnswers: string[]; unit?: string } | undefined = undefined;
+
+        if (qType === 'part1_single_choice') {
+          const optRegex = /(?:^|\n|\s{2,})([A-D])[.:]\s*([\s\S]*?)(?=(?:(?:^|\n|\s{2,})[A-D][.:])|$)/g;
+          const optMatches = Array.from(block.matchAll(optRegex));
+          if (optMatches.length >= 2) {
+            const firstOptIdx = optMatches[0].index!;
+            mainContent = block.substring(0, firstOptIdx).trim();
+            options = optMatches.map((m) => ({
+              id: m[1].toUpperCase(),
+              text: m[2].trim(),
+            }));
+            // Mặc định chọn A nếu chưa có bảng đáp án
+            correctOptionId = 'A';
+          }
+        } else if (qType === 'part2_true_false') {
+          const stmtRegex = /(?:^|\n|\s{2,})([a-d])\)\s*([\s\S]*?)(?=(?:(?:^|\n|\s{2,})[a-d]\))|$)/g;
+          const stmtMatches = Array.from(block.matchAll(stmtRegex));
+          if (stmtMatches.length > 0) {
+            const firstStmtIdx = stmtMatches[0].index!;
+            mainContent = block.substring(0, firstStmtIdx).trim();
+            statements = stmtMatches.map((m) => ({
+              id: m[1].toLowerCase(),
+              statement: m[2].trim(),
+              correctAnswer: true,
+            }));
+          }
+        } else {
+          // Trả lời ngắn: tìm số hoặc chuỗi ngắn
+          const numMatch = block.match(/(?:Đáp án|Đáp số|ĐA|KQ)[:\s]*([^\n]+)/i);
+          const ans = numMatch ? numMatch[1].trim().slice(0, 4) : '';
+          shortAnswerConfig = {
+            acceptableAnswers: ans ? [ans] : ['0'],
+          };
+        }
+
+        const newQ: Question = {
+          id: `q_word_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
+          code: generateQuestionCode({
+            subjectId: activeSubjectId,
+            grade: activeGrade,
+            type: qType,
+            subjects,
+          }),
+          subjectId: activeSubjectId,
+          subjectName: activeSubject.name,
+          grade: activeGrade,
+          type: qType,
+          level: 'thong_hieu',
+          content: mainContent,
+          options,
+          correctOptionId,
+          statements,
+          shortAnswerConfig,
+          source: file.name,
+          lessonTopic: 'Bóc tách từ file Word',
+          ownerId: currentUserId || 'system',
+          authorId: currentUserId || 'system',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        };
+
+        parsedQuestions.push(newQ);
+      }
+
+      setExtractedPreview(parsedQuestions);
+      setIsPreviewModalOpen(true);
+      showToast(`Đã bóc tách thành công ${parsedQuestions.length} câu hỏi từ Word!`);
+    } catch {
+      showToast('Đã xảy ra lỗi khi đọc file Word. Vui lòng kiểm tra lại file .docx.');
+    } finally {
+      setIsExtractingWord(false);
+      if (wordInputRef.current) wordInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmSaveExtracted = () => {
+    extractedPreview.forEach((q) => {
+      onAddQuestion(q);
+    });
+    showToast(`Đã thêm ${extractedPreview.length} câu hỏi bóc tách vào Ngân hàng!`);
+    setIsPreviewModalOpen(false);
+    setExtractedPreview([]);
+  };
+
   return (
     <div className="space-y-5">
+      {/* Input file ẩn phục vụ bóc tách Word */}
+      <input
+        type="file"
+        ref={wordInputRef}
+        onChange={handleWordFileChange}
+        accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        className="hidden"
+      />
+
       {/* Toast */}
       {toastMessage && (
-        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 text-xs font-semibold">
+        <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 text-xs font-semibold animate-fade-in">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
           <span>{toastMessage}</span>
         </div>
@@ -479,6 +637,27 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               <ChevronUp className="w-3.5 h-3.5" />
             ) : (
               <ChevronDown className="w-3.5 h-3.5" />
+            )}
+          </button>
+
+          {/* NÚT BÓC TÁCH FILE WORD MỚI */}
+          <button
+            type="button"
+            disabled={isExtractingWord}
+            onClick={() => wordInputRef.current?.click()}
+            className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2 disabled:opacity-60"
+            title="Tự động bóc tách và phân loại câu hỏi từ file Word .docx"
+          >
+            {isExtractingWord ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                <span>Đang xử lý file Word...</span>
+              </>
+            ) : (
+              <>
+                <Upload className="w-4 h-4 text-blue-600" />
+                <span>Bóc tách từ file Word</span>
+              </>
             )}
           </button>
 
@@ -627,7 +806,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       )}
 
-      {/* Filter Bar (Cascading Môn học → Khối lớp → Chương → Bài học) */}
+      {/* Filter Bar */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -676,7 +855,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               <option value="10">Lớp 10</option>
               <option value="11">Lớp 11</option>
               <option value="12">Lớp 12</option>
-              <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+              <option value="chuyen_hsg">Chuyên & HSG</option>
             </select>
           </div>
 
@@ -905,7 +1084,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                     : 'border-slate-200 hover:border-slate-300'
                 }`}
               >
-                {/* Clean Metadata & Actions Header */}
                 <div className="flex items-start justify-between gap-3 mb-3">
                   <div className="flex items-start gap-2.5 min-w-0">
                     <button
@@ -1128,6 +1306,92 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               <span>Sau</span>
               <ChevronRight className="w-4 h-4" />
             </button>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL XEM TRƯỚC VÀ XÁC NHẬN CÂU HỎI BÓC TÁCH TỪ WORD */}
+      {isPreviewModalOpen && (
+        <div
+          className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white w-full max-w-4xl rounded-2xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="px-6 py-4 bg-blue-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText className="w-5 h-5 text-blue-300" />
+                <div>
+                  <h3 className="font-bold text-sm">
+                    Xem trước kết quả bóc tách ({extractedPreview.length} câu)
+                  </h3>
+                  <p className="text-xs text-blue-200 mt-0.5">
+                    Kiểm tra các câu hỏi trước khi lưu hàng loạt vào Ngân hàng.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setIsPreviewModalOpen(false)}
+                className="p-1.5 rounded-lg text-blue-200 hover:text-white hover:bg-blue-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4 max-h-[65vh]">
+              {extractedPreview.map((q, idx) => (
+                <div key={q.id} className="p-4 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-semibold text-slate-700">
+                    <span className="font-bold text-blue-700">Câu {idx + 1} ({QUESTION_TYPE_SHORT_LABELS[q.type]})</span>
+                    <span className="px-2 py-0.5 rounded bg-slate-200 text-slate-800">{COGNITIVE_LEVEL_LABELS[q.level]}</span>
+                  </div>
+                  <div className="text-sm font-medium text-slate-900">
+                    <ChemRenderer text={q.content} />
+                  </div>
+                  {q.type === 'part1_single_choice' && q.options && (
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      {q.options.map((opt) => (
+                        <div key={opt.id} className="p-2 rounded border border-slate-200 bg-white">
+                          <strong>{opt.id}.</strong> {opt.text}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {q.type === 'part2_true_false' && q.statements && (
+                    <div className="space-y-1 text-xs">
+                      {q.statements.map((st) => (
+                        <div key={st.id} className="p-1.5 rounded border border-slate-200 bg-white">
+                          <strong>{st.id})</strong> {st.statement}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+              <span className="text-xs font-semibold text-slate-600">
+                Tổng cộng: <strong className="text-slate-900">{extractedPreview.length}</strong> câu hỏi hợp lệ
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsPreviewModalOpen(false)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold"
+                >
+                  Hủy bỏ
+                </button>
+                <button
+                  type="button"
+                  onClick={handleConfirmSaveExtracted}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs"
+                >
+                  Lưu tất cả vào Ngân hàng
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
