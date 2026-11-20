@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ChemGrade,
   CognitiveLevel,
   CurriculumGrade,
   CurriculumLesson,
@@ -17,6 +18,7 @@ import {
   QUESTION_TYPE_SHORT_LABELS,
   generateQuestionCode,
   getQuestionTopicDisplay,
+  normalizeQuestionGrade,
   resolveQuestionSubject,
 } from '../../constants/subjects';
 import {
@@ -59,6 +61,9 @@ interface QuestionBankProps {
   currentUserId?: string;
   onAddSubject?: (subject: SubjectItem) => void;
   onAddQuestion: (q: Question) => void;
+  onAddQuestionsBatch?: (
+    questions: Question[]
+  ) => Promise<{ savedCount: number; firestoreSynced: boolean; error?: string }>;
   onUpdateQuestion: (q: Question) => void;
   onDeleteQuestion: (id: string) => void;
   onBulkDeleteQuestions?: (ids: string[]) => void;
@@ -71,6 +76,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   currentUserId,
   onAddSubject,
   onAddQuestion,
+  onAddQuestionsBatch,
   onUpdateQuestion,
   onDeleteQuestion,
   onBulkDeleteQuestions,
@@ -177,7 +183,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     questions.forEach((q) => {
       const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
-      if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
+      if (gradeFilter !== 'all' && normalizeQuestionGrade(q.grade) !== gradeFilter) return;
       if (q.lessonId) {
         byId.set(q.lessonId, (byId.get(q.lessonId) || 0) + 1);
       }
@@ -192,7 +198,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     questions.forEach((q) => {
       const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
-      if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
+      if (gradeFilter !== 'all' && normalizeQuestionGrade(q.grade) !== gradeFilter) return;
       if (chapterFilter !== 'all' && q.chapterId !== chapterFilter) return;
       const label = getQuestionTopicDisplay(q);
       map.set(label, (map.get(label) || 0) + 1);
@@ -208,7 +214,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     questions.forEach((q) => {
       const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return;
-      if (gradeFilter !== 'all' && q.grade !== gradeFilter) return;
+      if (gradeFilter !== 'all' && normalizeQuestionGrade(q.grade) !== gradeFilter) return;
       if (q.lessonId && catalogIds.has(q.lessonId)) return;
       const label = getQuestionTopicDisplay(q);
       if (catalogNames.has(label.trim().toLowerCase())) return;
@@ -223,7 +229,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     return questions.filter((q) => {
       const sub = getResolvedSubject(q);
       if (subjectFilter !== 'all' && sub.id !== subjectFilter) return false;
-      if (gradeFilter !== 'all' && q.grade !== gradeFilter) return false;
+      if (gradeFilter !== 'all' && normalizeQuestionGrade(q.grade) !== gradeFilter) return false;
       if (chapterFilter !== 'all' && q.chapterId !== chapterFilter) return false;
       if (lessonTopicFilter !== 'all') {
         if (lessonTopicFilter.startsWith('lessonId:')) {
@@ -334,7 +340,8 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     });
 
     filtered.forEach((q) => {
-      byGrade[q.grade] = (byGrade[q.grade] || 0) + 1;
+      const gKey = normalizeQuestionGrade(q.grade) || q.grade;
+      byGrade[gKey] = (byGrade[gKey] || 0) + 1;
       byType[q.type] = (byType[q.type] || 0) + 1;
       byLevel[q.level] = (byLevel[q.level] || 0) + 1;
 
@@ -462,7 +469,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setDeleteTarget(null);
   };
 
-  // --- XỬ LÝ BÓC TÁCH FILE WORD: GHI ĐÈ TRỰC TIẾP METADATA THEO BỘ LỌC NGOÀI ---
+  // --- XỬ LÝ BÓC TÁCH FILE WORD: CHỈ KẾ THỪA ĐÚNG METADATA ĐANG CHỌN, KHÔNG ÉP CỨNG LỚP 11 ---
   const handleWordFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -477,12 +484,13 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     try {
       const buffer = await file.arrayBuffer();
 
-      // 1. Xác định chính xác Môn học & Khối lớp từ bộ lọc hiện tại
+      // 1. Xác định chính xác Môn học & Khối lớp từ bộ lọc hiện tại (không tự gán cứng '11' khi đang chọn 'all')
       const activeSubject =
         (subjectFilter !== 'all' ? subjects.find((s) => s.id === subjectFilter) : null) ||
         defaultChemSubject;
       const activeSubjectId = activeSubject.id;
-      const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
+      const inheritedGrade: ChemGrade | '' =
+        gradeFilter !== 'all' ? normalizeQuestionGrade(gradeFilter) || '' : '';
 
       // 2. Xác định Chương & Bài học đang chọn
       const selectedChapter = groupedCatalog.chapters.find((c) => c.chapterId === chapterFilter);
@@ -499,50 +507,49 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         }
       }
 
-      // 3. Gọi engine parseDocxExam gốc
-      const { result } = await parseDocxExam(buffer, activeGrade as any);
+      // 3. Gọi engine parseDocxExam gốc (giữ nguyên toàn bộ thuật toán bóc tách Phần I/II/III)
+      const { result } = await parseDocxExam(buffer, (inheritedGrade || '10') as ChemGrade);
 
       if (!result.questions || result.questions.length === 0) {
         showToast('Không nhận diện được câu hỏi nào từ file Word.');
         return;
       }
 
-      // 4. ÉP BUỘC ĐỒNG BỘ: Ghi đè toàn bộ Môn, Lớp, Chương, Bài, Mức độ cho từng câu hỏi
-      const forcedQuestions = result.questions.map((q) => {
+      // 4. Gán metadata kế thừa đúng theo lựa chọn của giáo viên (để trống grade nếu bộ lọc ngoài đang là "Tất cả khối")
+      const preparedQuestions = result.questions.map((q) => {
         const finalLevel =
           levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : q.level || 'nhan_biet';
         return {
           ...q,
           subjectId: activeSubjectId,
           subjectName: activeSubject.name,
-          grade: activeGrade,
+          grade: inheritedGrade as ChemGrade,
           chapterId: chapterFilter !== 'all' ? chapterFilter : q.chapterId,
           chapterName: selectedChapter?.chapterName || q.chapterName,
           lessonId: selectedLessonId || q.lessonId,
-          lessonName: selectedLessonName || q.lessonName || 'Bóc tách từ Word',
-          lessonTopic: selectedLessonName || q.lessonTopic || 'Bóc tách từ Word',
+          lessonName: selectedLessonName || q.lessonName,
+          lessonTopic: selectedLessonName || q.lessonTopic,
           level: finalLevel,
-          // Tái tạo lại mã câu hỏi đúng theo Môn - Lớp - Dạng chuẩn
-          code: generateQuestionCode({
-            subjectId: activeSubjectId,
-            grade: activeGrade,
-            type: q.type,
-            subjects,
-          }),
+          code: inheritedGrade
+            ? generateQuestionCode({
+                subjectId: activeSubjectId,
+                grade: inheritedGrade,
+                type: q.type,
+                subjects,
+              })
+            : q.code,
         };
       });
 
-      result.questions = forcedQuestions;
-      if (result.examMetadata) {
-        result.examMetadata.subject = activeSubject.name;
-        result.examMetadata.grade = activeGrade as any;
-      }
+      result.questions = preparedQuestions;
 
       setActiveWordResult({ ...result });
       setActiveWordFileName(file.name);
       setActiveWordFileSize(file.size);
       showToast(
-        `Đã bóc tách ${result.questions.length} câu theo chuẩn: ${activeSubject.name} · Lớp ${activeGrade}!`
+        inheritedGrade
+          ? `Đã bóc tách ${result.questions.length} câu (${activeSubject.name} · ${GRADE_LABELS[inheritedGrade]}).`
+          : `Đã bóc tách ${result.questions.length} câu từ file Word. Vui lòng kiểm tra và chọn Khối lớp trước khi lưu!`
       );
     } catch (err: any) {
       console.error(err);
@@ -1217,70 +1224,120 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       )}
 
       {/* MODAL BÓC TÁCH WORD CHUẨN */}
-      {activeWordResult && (
-        <WordImportReviewModal
-          isOpen={!!activeWordResult}
-          fileName={activeWordFileName}
-          fileSize={activeWordFileSize}
-          parsedResult={activeWordResult}
-          parsedQuestionsCount={activeWordResult.questions.length}
-          inheritedMetadata={{
-            subjectId: subjectFilter !== 'all' ? subjectFilter : defaultChemSubject.id,
-            grade: (gradeFilter !== 'all' ? gradeFilter : '11') as any,
-            chapterId: chapterFilter !== 'all' ? chapterFilter : undefined,
-            lessonId: lessonTopicFilter.startsWith('lessonId:') ? lessonTopicFilter.slice(9) : undefined,
-            level: levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined,
-          }}
-          existingQuestions={questions}
-          subjects={subjects}
-          currentUserId={currentUserId}
-          onConfirmSave={async (questionsToSave) => {
-            const activeSubject =
-              (subjectFilter !== 'all' ? subjects.find((s) => s.id === subjectFilter) : null) ||
-              defaultChemSubject;
-            const activeGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
-            const targetLevel = levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined;
+      {activeWordResult && (() => {
+        const inheritedSubject =
+          (subjectFilter !== 'all' ? subjects.find((s) => s.id === subjectFilter) : null) ||
+          defaultChemSubject;
+        const inheritedGrade: ChemGrade | '' =
+          gradeFilter !== 'all' ? normalizeQuestionGrade(gradeFilter) || '' : '';
+        const selectedChapter = groupedCatalog.chapters.find((c) => c.chapterId === chapterFilter);
+        let selectedLessonId = '';
+        let selectedLessonName = '';
+        if (lessonTopicFilter !== 'all') {
+          if (lessonTopicFilter.startsWith('lessonId:')) {
+            selectedLessonId = lessonTopicFilter.slice(9);
+            const found = catalogLessons.find((l) => l.lessonId === selectedLessonId);
+            selectedLessonName = found?.lessonName || '';
+          } else {
+            selectedLessonName = lessonTopicFilter;
+          }
+        }
 
-            const selectedChapter = groupedCatalog.chapters.find((c) => c.chapterId === chapterFilter);
-            let selectedLessonId: string | undefined = undefined;
-            let selectedLessonName: string | undefined = undefined;
-
-            if (lessonTopicFilter !== 'all') {
-              if (lessonTopicFilter.startsWith('lessonId:')) {
-                selectedLessonId = lessonTopicFilter.slice(9);
-                const found = catalogLessons.find((l) => l.lessonId === selectedLessonId);
-                selectedLessonName = found?.lessonName;
-              } else {
-                selectedLessonName = lessonTopicFilter;
+        return (
+          <WordImportReviewModal
+            isOpen={!!activeWordResult}
+            fileName={activeWordFileName}
+            fileSize={activeWordFileSize}
+            parsedResult={activeWordResult}
+            parsedQuestionsCount={activeWordResult.questions.length}
+            inheritedMetadata={{
+              subjectId: inheritedSubject.id,
+              subjectName: inheritedSubject.name,
+              grade: inheritedGrade,
+              chapterId: chapterFilter !== 'all' ? chapterFilter : '',
+              chapterName: selectedChapter?.chapterName || '',
+              lessonId: selectedLessonId,
+              lessonName: selectedLessonName,
+              lessonTopic: selectedLessonName,
+              defaultQuestionType:
+                typeFilter !== 'all' ? (typeFilter as QuestionType) : '',
+              level:
+                levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : 'nhan_biet',
+            }}
+            existingQuestions={questions}
+            subjects={subjects}
+            currentUserId={currentUserId}
+            onConfirmSave={async (questionsToSave) => {
+              // Bảo toàn 100% metadata (đặc biệt là Khối lớp, Môn học, Chương, Bài học, Mức độ)
+              // mà giáo viên đã khai báo/chỉnh sửa trong modal kiểm tra trước khi lưu.
+              // TUYỆT ĐỐI không ghi đè lại bằng gradeFilter ngoài hay giá trị mặc định '11'.
+              const invalidGradeQuestion = questionsToSave.find(
+                (q) => !normalizeQuestionGrade(q.grade)
+              );
+              if (invalidGradeQuestion) {
+                return {
+                  savedCount: 0,
+                  skippedDuplicateCount: 0,
+                  firestoreSynced: false,
+                  error:
+                    'Vui lòng chọn Khối lớp hợp lệ (Lớp 10, 11 hoặc 12) cho tất cả câu hỏi trước khi lưu.',
+                };
               }
-            }
 
-            const finalizedQuestions = questionsToSave.map((q) => {
-              const isChemCode = q.code?.startsWith('HH');
-              const finalSubject = (isChemCode && defaultChemSubject) ? defaultChemSubject : activeSubject;
+              const finalizedQuestions = questionsToSave.map((q) => {
+                const sub = resolveQuestionSubject(q, subjects);
+                const normalizedGrade = normalizeQuestionGrade(q.grade)!;
+                const resolvedLessonName = q.lessonName?.trim() || undefined;
+                const resolvedLessonTopic =
+                  resolvedLessonName || q.lessonTopic?.trim() || getQuestionTopicDisplay(q);
 
+                return {
+                  ...q,
+                  subjectId: sub.id,
+                  subjectName: sub.name,
+                  grade: normalizedGrade,
+                  chapterId: q.chapterId?.trim() || undefined,
+                  chapterName: q.chapterName?.trim() || undefined,
+                  lessonId: q.lessonId?.trim() || undefined,
+                  lessonName: resolvedLessonName,
+                  lessonTopic: resolvedLessonTopic,
+                  level: q.level || 'nhan_biet',
+                };
+              });
+
+              if (onAddQuestionsBatch) {
+                const batchRes = await onAddQuestionsBatch(finalizedQuestions);
+                if (!batchRes.firestoreSynced || batchRes.error) {
+                  return {
+                    savedCount: 0,
+                    skippedDuplicateCount: 0,
+                    firestoreSynced: false,
+                    error:
+                      batchRes.error ||
+                      'Không thể đồng bộ câu hỏi lên Firestore. Vui lòng thử lại.',
+                  };
+                }
+              } else {
+                finalizedQuestions.forEach((q) => onAddQuestion(q));
+              }
+
+              const savedGrades = Array.from(
+                new Set(finalizedQuestions.map((q) => GRADE_LABELS[q.grade]))
+              );
+              const gradeLabelText = savedGrades.length > 0 ? ` (${savedGrades.join(', ')})` : '';
+              showToast(
+                `Đã lưu thành công ${finalizedQuestions.length} câu hỏi${gradeLabelText} vào Ngân hàng!`
+              );
               return {
-                ...q,
-                subjectId: finalSubject.id,
-                subjectName: finalSubject.name,
-                grade: activeGrade,
-                chapterId: chapterFilter !== 'all' ? chapterFilter : q.chapterId,
-                chapterName: selectedChapter?.chapterName || q.chapterName,
-                lessonId: selectedLessonId || q.lessonId,
-                lessonName: selectedLessonName || q.lessonName || 'Bóc tách từ Word',
-                lessonTopic: selectedLessonName || q.lessonTopic || 'Bóc tách từ Word',
-                level: targetLevel || q.level || 'nhan_biet',
+                savedCount: finalizedQuestions.length,
+                skippedDuplicateCount: 0,
+                firestoreSynced: true,
               };
-            });
-
-            finalizedQuestions.forEach((q) => onAddQuestion(q));
-            showToast(`Đã thêm thành công ${finalizedQuestions.length} câu hỏi vào môn ${activeSubject.name}!`);
-            setActiveWordResult(null);
-            return { successCount: finalizedQuestions.length, skippedCount: 0 };
-          }}
-          onClose={() => setActiveWordResult(null)}
-        />
-      )}
+            }}
+            onClose={() => setActiveWordResult(null)}
+          />
+        );
+      })()}
 
       {/* Modal Thêm câu hỏi thủ công */}
       <QuestionFormModal

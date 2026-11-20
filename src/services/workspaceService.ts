@@ -22,6 +22,7 @@ import {
   handleFirestoreError,
   OperationType,
 } from './firebase';
+import { normalizeQuestionGrade } from '../constants/subjects';
 import {
   User,
   UserRole,
@@ -123,7 +124,13 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     .sort((a, b) => a.name.localeCompare(b.name, 'vi'));
 
   const questions = qSnap.docs
-    .map((d) => d.data() as Question)
+    .map((d) => {
+      const raw = d.data() as Question;
+      const normalizedGrade = normalizeQuestionGrade(raw.grade);
+      return normalizedGrade && normalizedGrade !== raw.grade
+        ? ({ ...raw, grade: normalizedGrade } satisfies Question)
+        : raw;
+    })
     .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 
   const classes = cSnap.docs
@@ -194,9 +201,15 @@ export async function fetchExamsByFolderFromFirestore(
     .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 }
 
-function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt?: unknown) {
+export function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt?: unknown) {
   const safeId = safeDocId(q.id);
   const nowIso = new Date().toISOString();
+  const normalizedGrade = normalizeQuestionGrade(q.grade);
+  if (!normalizedGrade) {
+    throw new Error(
+      `Câu hỏi "${q.code || safeId}" chưa có khối lớp hợp lệ (10, 11, 12 hoặc chuyen_hsg). Không thể lưu lên Firestore.`
+    );
+  }
   return stripUndefinedDeep({
     id: safeId,
     ownerId,
@@ -205,7 +218,7 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     type: q.type || 'part1_single_choice',
     ...(q.subjectId ? { subjectId: q.subjectId.slice(0, 64) } : {}),
     ...(q.subjectName ? { subjectName: q.subjectName.slice(0, 120) } : {}),
-    grade: q.grade || '12',
+    grade: normalizedGrade,
     topic: (q.topic || 'hoa_dai_cuong').slice(0, 64),
     ...(q.chapterId && q.chapterId.trim() ? { chapterId: safeDocId(q.chapterId.trim()) } : {}),
     ...(q.chapterName && q.chapterName.trim() ? { chapterName: q.chapterName.trim().slice(0, 250) } : {}),
@@ -216,6 +229,9 @@ function buildQuestionDocPayload(q: Question, ownerId: string, existingCreatedAt
     ...(q.folderId ? { folderId: q.folderId.slice(0, 128) } : {}),
     ...(q.options ? { options: q.options.slice(0, 8) } : {}),
     ...(q.correctOptionId ? { correctOptionId: q.correctOptionId.slice(0, 8) } : {}),
+    ...(q.correctOptionIds && q.correctOptionIds.length > 0
+      ? { correctOptionIds: q.correctOptionIds.slice(0, 8) }
+      : {}),
     ...(q.statements ? { statements: q.statements.slice(0, 8) } : {}),
     ...(q.shortAnswerConfig ? { shortAnswerConfig: q.shortAnswerConfig } : {}),
     ...(q.imageUrl && q.imageUrl.trim() ? { imageUrl: q.imageUrl.trim().slice(0, 1000) } : {}),

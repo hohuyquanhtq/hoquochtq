@@ -37,6 +37,7 @@ import {
   QUESTION_TYPE_SHORT_LABELS,
   generateQuestionCode,
   getQuestionTopicDisplay,
+  normalizeQuestionGrade,
   resolveQuestionSubject,
 } from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
@@ -57,7 +58,7 @@ import {
 export interface InheritedQuestionBankMetadata {
   subjectId: string;
   subjectName: string;
-  grade: ChemGrade;
+  grade: ChemGrade | '';
   chapterId: string;
   chapterName: string;
   lessonId: string;
@@ -281,10 +282,22 @@ const PerQuestionQuickEditor: React.FC<PerQuestionEditorProps> = ({
             2. Khối lớp
           </label>
           <select
-            value={question.grade}
-            onChange={(e) => handleGradeChange(e.target.value as ChemGrade)}
-            className="w-full min-h-[36px] px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-800 font-medium"
+            value={normalizeQuestionGrade(question.grade) || ''}
+            onChange={(e) => {
+              const nextGrade = normalizeQuestionGrade(e.target.value);
+              if (nextGrade) {
+                handleGradeChange(nextGrade);
+              }
+            }}
+            className={`w-full min-h-[36px] px-2.5 py-1.5 rounded-lg border bg-white text-slate-800 font-medium ${
+              !normalizeQuestionGrade(question.grade)
+                ? 'border-amber-400 bg-amber-50/40'
+                : 'border-slate-200'
+            }`}
           >
+            {!normalizeQuestionGrade(question.grade) && (
+              <option value="">-- Chọn khối lớp --</option>
+            )}
             <option value="10">Lớp 10</option>
             <option value="11">Lớp 11</option>
             <option value="12">Lớp 12</option>
@@ -645,11 +658,15 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
     [fileName, parsedResult.title]
   );
 
+  const initialDeclaredGrade: ChemGrade | '' =
+    normalizeQuestionGrade(inheritedMetadata.grade) || '';
+
   // Batch metadata state (strictly ordered: Môn học -> Khối lớp -> Chương/Bài học -> Dạng câu hỏi -> Mức độ)
+  // Không tự động ép cứng '11' hoặc '12' nếu giáo viên chưa chọn khối lớp ở bộ lọc ngoài.
   const [curriculum, setCurriculum] = useState<CurriculumSelectionValue>({
     subjectId: inheritedMetadata.subjectId || DEFAULT_SUBJECT_ID,
     subjectName: inheritedMetadata.subjectName || DEFAULT_SUBJECT_NAME,
-    grade: inheritedMetadata.grade || '12',
+    grade: initialDeclaredGrade,
     chapterId: inheritedMetadata.chapterId || '',
     chapterName: inheritedMetadata.chapterName || '',
     lessonId: inheritedMetadata.lessonId || '',
@@ -663,12 +680,18 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
   );
   const [batchSource, setBatchSource] = useState<string>(defaultSource);
   const [showBatchPanel, setShowBatchPanel] = useState<boolean>(true);
+  // Theo dõi các câu hỏi đã được giáo viên chỉnh sửa riêng metadata để không bị ghi đè khi đổi dropdown hàng loạt
+  const [manuallyOverriddenCurriculumIds, setManuallyOverriddenCurriculumIds] = useState<Set<string>>(
+    () => new Set()
+  );
 
   // Working copy of extracted questions (deterministic draft IDs, inheriting active QuestionBank metadata)
   const [draftQuestions, setDraftQuestions] = useState<Question[]>(() => {
     return parsedResult.questions.map((rawQ, idx) => {
       let cloned = structuredClone(rawQ);
-      const effectiveGrade = inheritedMetadata.grade || cloned.grade || '12';
+      const effectiveGrade = (initialDeclaredGrade ||
+        normalizeQuestionGrade(cloned.grade) ||
+        '') as ChemGrade;
       const effectiveSubjectId = inheritedMetadata.subjectId || DEFAULT_SUBJECT_ID;
       const effectiveSubjectName = inheritedMetadata.subjectName || DEFAULT_SUBJECT_NAME;
 
@@ -866,25 +889,73 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
     });
   };
 
+  const handleCurriculumChange = (next: CurriculumSelectionValue) => {
+    setCurriculum(next);
+    const normalizedNextGrade = normalizeQuestionGrade(next.grade) || '';
+    // Đồng bộ ngay Môn học / Khối lớp / Chương / Bài học sang tất cả các câu chưa bị chỉnh tay riêng
+    // để tránh trường hợp giáo viên chọn Lớp 10 trên khung khai báo rồi bấm Lưu ngay mà vẫn giữ lớp cũ.
+    setDraftQuestions((prev) =>
+      prev.map((q) => {
+        if (manuallyOverriddenCurriculumIds.has(q.id)) return q;
+        return {
+          ...q,
+          subjectId: next.subjectId || DEFAULT_SUBJECT_ID,
+          subjectName: next.subjectName || DEFAULT_SUBJECT_NAME,
+          grade: normalizedNextGrade as ChemGrade,
+          chapterId: next.chapterId || undefined,
+          chapterName: next.chapterName || undefined,
+          lessonId: next.lessonId || undefined,
+          lessonName: next.lessonName || undefined,
+          lessonTopic: next.lessonName || (next.chapterName ? undefined : q.lessonTopic),
+          updatedAt: new Date().toISOString(),
+        };
+      })
+    );
+    setSaveOutcome(null);
+  };
+
   const handleUpdateSingleQuestion = (id: string, patch: Partial<Question>) => {
+    const touchesCurriculum =
+      patch.subjectId !== undefined ||
+      patch.subjectName !== undefined ||
+      patch.grade !== undefined ||
+      patch.chapterId !== undefined ||
+      patch.chapterName !== undefined ||
+      patch.lessonId !== undefined ||
+      patch.lessonName !== undefined ||
+      patch.lessonTopic !== undefined;
+    if (touchesCurriculum) {
+      setManuallyOverriddenCurriculumIds((prev) => {
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+    }
+
     setDraftQuestions((prev) =>
       prev.map((q) => {
         if (q.id !== id) return q;
-        if (patch.type && patch.type !== q.type) {
+        const normalizedPatchGrade =
+          patch.grade !== undefined ? normalizeQuestionGrade(patch.grade) : undefined;
+        const safePatch: Partial<Question> =
+          patch.grade !== undefined
+            ? { ...patch, grade: (normalizedPatchGrade || '') as ChemGrade }
+            : patch;
+        if (safePatch.type && safePatch.type !== q.type) {
           // Reuse existing docxParser reclassification logic while preserving all metadata, images, and explanations
-          const reclassified = safeReclassifyQuestion(q, patch.type);
+          const reclassified = safeReclassifyQuestion(q, safePatch.type);
           return {
             ...reclassified,
             id: q.id,
-            subjectId: patch.subjectId ?? q.subjectId,
-            subjectName: patch.subjectName ?? q.subjectName,
-            grade: patch.grade ?? q.grade,
-            chapterId: patch.chapterId !== undefined ? patch.chapterId : q.chapterId,
-            chapterName: patch.chapterName !== undefined ? patch.chapterName : q.chapterName,
-            lessonId: patch.lessonId !== undefined ? patch.lessonId : q.lessonId,
-            lessonName: patch.lessonName !== undefined ? patch.lessonName : q.lessonName,
-            lessonTopic: patch.lessonTopic !== undefined ? patch.lessonTopic : q.lessonTopic,
-            level: patch.level ?? q.level,
+            subjectId: safePatch.subjectId ?? q.subjectId,
+            subjectName: safePatch.subjectName ?? q.subjectName,
+            grade: safePatch.grade ?? q.grade,
+            chapterId: safePatch.chapterId !== undefined ? safePatch.chapterId : q.chapterId,
+            chapterName: safePatch.chapterName !== undefined ? safePatch.chapterName : q.chapterName,
+            lessonId: safePatch.lessonId !== undefined ? safePatch.lessonId : q.lessonId,
+            lessonName: safePatch.lessonName !== undefined ? safePatch.lessonName : q.lessonName,
+            lessonTopic: safePatch.lessonTopic !== undefined ? safePatch.lessonTopic : q.lessonTopic,
+            level: safePatch.level ?? q.level,
             imageUrl: q.imageUrl,
             explanation: q.explanation,
             source: q.source,
@@ -894,7 +965,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
         }
         return {
           ...q,
-          ...patch,
+          ...safePatch,
           updatedAt: new Date().toISOString(),
         };
       })
@@ -902,9 +973,23 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
   };
 
   const handleApplyBatchMetadata = (includeQuestionType: boolean) => {
+    const resolvedGrade = normalizeQuestionGrade(curriculum.grade);
+    if (!resolvedGrade) {
+      setSaveOutcome({
+        type: 'error',
+        message: 'Vui lòng chọn Khối lớp (Lớp 10, 11 hoặc 12) trước khi áp dụng metadata hàng loạt.',
+      });
+      return;
+    }
+
     const targetIds =
       selectedIds.size > 0 ? selectedIds : new Set(draftQuestions.map((q) => q.id));
-    const resolvedGrade: ChemGrade = (curriculum.grade || '12') as ChemGrade;
+
+    setManuallyOverriddenCurriculumIds((prev) => {
+      const next = new Set(prev);
+      targetIds.forEach((id) => next.delete(id));
+      return next;
+    });
 
     setDraftQuestions((prev) =>
       prev.map((q) => {
@@ -979,6 +1064,16 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
       return;
     }
 
+    // Kiểm tra bắt buộc khối lớp đã được khai báo rõ ràng cho mọi câu hỏi chuẩn bị lưu
+    const missingGradeCount = toSaveRaw.filter((q) => !normalizeQuestionGrade(q.grade)).length;
+    if (missingGradeCount > 0) {
+      setSaveOutcome({
+        type: 'error',
+        message: `Có ${missingGradeCount} câu hỏi chưa được chọn Khối lớp. Vui lòng chọn Khối lớp (Lớp 10, 11 hoặc 12) ở khung metadata phía trên hoặc trong phần chỉnh sửa nhanh trước khi lưu.`,
+      });
+      return;
+    }
+
     setIsSaving(true);
     setSaveOutcome(null);
 
@@ -986,17 +1081,19 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
       const nowIso = new Date().toISOString();
       const prepared = toSaveRaw.map((q, index) => {
         const sub = resolveQuestionSubject(q, subjects);
+        const normalizedGrade = normalizeQuestionGrade(q.grade)!;
         return {
           ...q,
           id: `q_${Date.now()}_${index}_${Math.random().toString(36).slice(2, 7)}`,
           code: generateQuestionCode({
             subjectId: sub.id,
-            grade: q.grade,
+            grade: normalizedGrade,
             type: q.type,
             subjects,
           }),
           subjectId: sub.id,
           subjectName: sub.name,
+          grade: normalizedGrade,
           lessonTopic: q.lessonName || q.lessonTopic || getQuestionTopicDisplay(q),
           source: q.source || batchSource.trim() || defaultSource,
           ownerId: currentUserId || q.ownerId,
@@ -1149,7 +1246,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
                   value={curriculum}
                   subjects={subjects}
                   legacyLessonTopic={inheritedMetadata.lessonTopic}
-                  onChange={(next) => setCurriculum(next)}
+                  onChange={handleCurriculumChange}
                 />
 
                 {/* 4. Dạng câu hỏi -> 5. Mức độ + Nguồn đề */}
@@ -1348,8 +1445,16 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
                           <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
                             {sub.name}
                           </span>
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">
-                            {GRADE_LABELS[q.grade]}
+                          <span
+                            className={`px-2 py-0.5 rounded-md font-semibold ${
+                              normalizeQuestionGrade(q.grade)
+                                ? 'bg-slate-100 text-slate-700'
+                                : 'bg-amber-100 text-amber-900'
+                            }`}
+                          >
+                            {normalizeQuestionGrade(q.grade)
+                              ? GRADE_LABELS[normalizeQuestionGrade(q.grade)!]
+                              : 'Chưa chọn khối lớp'}
                           </span>
                           {(q.chapterName || q.lessonName || q.lessonTopic) && (
                             <span className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 font-medium max-w-[260px] truncate">

@@ -43,6 +43,7 @@ import {
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { ExamAnswerDashboard } from './ExamAnswerDashboard';
 import { isolateAnswerBlock, deepScanWithGemini } from '../../utils/answerExtractionEngine';
+import { generateQuestionCode, normalizeQuestionGrade } from '../../constants/subjects';
 
 interface ExamUploaderProps {
   onSaveToQuestionBank: (questions: Question[]) => void;
@@ -343,6 +344,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       await yieldToNextFrame();
 
       if (type === 'docx') {
+        setSelectedGrade('12');
         const { text, result } = await parseDocxExam(buffer, '12');
         setInputText(text);
         setParsedResult(result);
@@ -351,6 +353,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage(`Hoàn tất bóc tách ${result.totalQuestions} câu hỏi từ ${name}.`);
         showToast(`Đã bóc tách file Word mẫu ${name} (${result.totalQuestions} câu)!`);
       } else {
+        setSelectedGrade('12');
         const { text, pdfMeta, result } = await parsePdfExam(buffer, '12');
         setInputText(text);
         setParsedResult(result);
@@ -553,6 +556,27 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     return null;
   };
 
+  const handleGradeDropdownChange = (nextGrade: ChemGrade) => {
+    const normalized = normalizeQuestionGrade(nextGrade) || nextGrade;
+    setSelectedGrade(normalized);
+    setParsedResult((prev) => {
+      if (!prev) return prev;
+      const syncedQuestions = prev.questions.map((q) => ({
+        ...q,
+        grade: normalized,
+        code: generateQuestionCode({
+          subjectId: q.subjectId,
+          grade: normalized,
+          type: q.type,
+        }),
+      }));
+      return {
+        ...prev,
+        questions: syncedQuestions,
+      };
+    });
+  };
+
   const handleGuardedSaveBank = () => {
     if (!parsedResult) return;
     const blockReason = getBlockingErrors();
@@ -564,7 +588,11 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       showToast(blockReason);
       return;
     }
-    onSaveToQuestionBank(parsedResult.questions);
+    const normalizedQuestions = parsedResult.questions.map((q) => ({
+      ...q,
+      grade: normalizeQuestionGrade(q.grade) || selectedGrade,
+    }));
+    onSaveToQuestionBank(normalizedQuestions);
   };
 
   const handleGuardedCreateExam = () => {
@@ -907,7 +935,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </label>
             <select
               value={selectedGrade}
-              onChange={(e) => setSelectedGrade(e.target.value as ChemGrade)}
+              onChange={(e) => handleGradeDropdownChange(e.target.value as ChemGrade)}
               className="w-full min-h-[44px] text-[15px] font-semibold px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
             >
               <option value="12">Lớp 12 THPT</option>

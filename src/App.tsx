@@ -29,6 +29,7 @@ import {
   DEFAULT_SUBJECT_ID,
   DEFAULT_SUBJECT_NAME,
   mergeSubjectsList,
+  normalizeQuestionGrade,
 } from './constants/subjects';
 import {
   extractExamEntryFromLocation,
@@ -481,14 +482,18 @@ export default function App() {
   const handleSaveQuestionsToBank = (newQuestions: Question[]) => {
     if (!activeUid) return;
     const nowIso = new Date().toISOString();
-    const scoped = newQuestions.map((q) => ({
-      ...q,
-      subjectId: q.subjectId || DEFAULT_SUBJECT_ID,
-      subjectName: q.subjectName || DEFAULT_SUBJECT_NAME,
-      ownerId: activeUid,
-      authorId: activeUid,
-      updatedAt: nowIso,
-    }));
+    const scoped = newQuestions.map((q) => {
+      const normalizedGrade = normalizeQuestionGrade(q.grade);
+      return {
+        ...q,
+        ...(normalizedGrade ? { grade: normalizedGrade } : {}),
+        subjectId: q.subjectId || DEFAULT_SUBJECT_ID,
+        subjectName: q.subjectName || DEFAULT_SUBJECT_NAME,
+        ownerId: activeUid,
+        authorId: activeUid,
+        updatedAt: nowIso,
+      };
+    });
     scoped.forEach((q) => StorageService.addQuestion(q, activeUid));
     setQuestions(StorageService.getQuestions(activeUid));
     void saveQuestionsBatchToFirestore(scoped, activeUid).catch((err) => {
@@ -652,12 +657,72 @@ export default function App() {
 
   const handleAddQuestion = (q: Question) => {
     if (!activeUid) return;
-    const scoped: Question = { ...q, ownerId: activeUid, authorId: activeUid };
+    const normalizedGrade = normalizeQuestionGrade(q.grade);
+    const scoped: Question = {
+      ...q,
+      ...(normalizedGrade ? { grade: normalizedGrade } : {}),
+      ownerId: activeUid,
+      authorId: activeUid,
+    };
     StorageService.addQuestion(scoped, activeUid);
     setQuestions(StorageService.getQuestions(activeUid));
     void saveQuestionToFirestore(scoped, activeUid).catch((err) => {
       console.warn('[HQTest] Could not save question to Firestore:', err);
     });
+  };
+
+  const handleAddQuestionsBatch = async (
+    newQuestions: Question[]
+  ): Promise<{ savedCount: number; firestoreSynced: boolean; error?: string }> => {
+    if (!activeUid) {
+      return {
+        savedCount: 0,
+        firestoreSynced: false,
+        error: 'Phiên đăng nhập giáo viên chưa sẵn sàng. Vui lòng thử lại.',
+      };
+    }
+    if (newQuestions.length === 0) {
+      return { savedCount: 0, firestoreSynced: true };
+    }
+
+    const nowIso = new Date().toISOString();
+    const scoped: Question[] = [];
+    for (const q of newQuestions) {
+      const normalizedGrade = normalizeQuestionGrade(q.grade);
+      if (!normalizedGrade) {
+        return {
+          savedCount: 0,
+          firestoreSynced: false,
+          error: `Câu hỏi "${q.code || q.id}" chưa có khối lớp hợp lệ (10, 11 hoặc 12).`,
+        };
+      }
+      scoped.push({
+        ...q,
+        grade: normalizedGrade,
+        subjectId: q.subjectId || DEFAULT_SUBJECT_ID,
+        subjectName: q.subjectName || DEFAULT_SUBJECT_NAME,
+        ownerId: activeUid,
+        authorId: activeUid,
+        updatedAt: nowIso,
+      });
+    }
+
+    try {
+      await saveQuestionsBatchToFirestore(scoped, activeUid);
+      scoped.forEach((q) => StorageService.addQuestion(q, activeUid));
+      setQuestions(StorageService.getQuestions(activeUid));
+      return { savedCount: scoped.length, firestoreSynced: true };
+    } catch (err) {
+      console.warn('[HQTest] Could not sync Word question batch to Firestore:', err);
+      return {
+        savedCount: 0,
+        firestoreSynced: false,
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Không thể lưu câu hỏi lên Firestore. Vui lòng thử lại.',
+      };
+    }
   };
 
   const handleUpdateQuestion = (q: Question) => {
@@ -1428,6 +1493,7 @@ export default function App() {
                 currentUserId={activeUid}
                 onAddSubject={handleAddSubject}
                 onAddQuestion={handleAddQuestion}
+                onAddQuestionsBatch={handleAddQuestionsBatch}
                 onUpdateQuestion={handleUpdateQuestion}
                 onDeleteQuestion={handleDeleteQuestion}
                 onBulkDeleteQuestions={handleBulkDeleteQuestions}

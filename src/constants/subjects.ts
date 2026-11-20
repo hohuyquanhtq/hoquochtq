@@ -178,6 +178,41 @@ export function getQuestionTopicDisplay(
   return CHEM_TOPIC_LABELS[q.topic] || 'Chủ đề chung';
 }
 
+export function normalizeQuestionGrade(raw: unknown): ChemGrade | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  const text = String(raw).trim();
+  if (!text) return undefined;
+
+  if (text === '10' || text === '11' || text === '12' || text === 'chuyen_hsg') {
+    return text;
+  }
+
+  const normalized = text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/đ/g, 'd')
+    .replace(/Đ/g, 'D')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (
+    normalized === 'chuyen_hsg' ||
+    normalized === 'chuyen & hsg' ||
+    normalized === 'chuyen' ||
+    normalized === 'hsg'
+  ) {
+    return 'chuyen_hsg';
+  }
+
+  const gradeMatch = normalized.match(/^(?:lop|khoi|grade)?[\s_-]*(10|11|12)(?:\s*thpt)?$/);
+  if (gradeMatch) {
+    return gradeMatch[1] as '10' | '11' | '12';
+  }
+
+  return undefined;
+}
+
 export function generateQuestionCode(params: {
   subjectId?: string;
   grade?: ChemGrade;
@@ -187,7 +222,8 @@ export function generateQuestionCode(params: {
   const subjects = params.subjects || DEFAULT_GDPT_2018_SUBJECTS;
   const subj = subjects.find((s) => s.id === (params.subjectId || DEFAULT_SUBJECT_ID));
   const prefix = (subj?.codePrefix || 'CH').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 6);
-  const gradeCode = params.grade === 'chuyen_hsg' ? 'HSG' : params.grade || '12';
+  const normalizedGrade = normalizeQuestionGrade(params.grade);
+  const gradeCode = normalizedGrade === 'chuyen_hsg' ? 'HSG' : normalizedGrade || '12';
   const typeCode =
     params.type === 'part1_single_choice'
       ? 'TN'
