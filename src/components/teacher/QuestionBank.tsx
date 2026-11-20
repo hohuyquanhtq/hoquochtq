@@ -469,6 +469,15 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         return;
       }
 
+      // Kế thừa mức độ nếu ngoài thanh lọc đang chọn 1 mức độ cụ thể (Biết/Hiểu/VD/VDC)
+      if (levelFilter !== 'all') {
+        const selectedLevel = levelFilter as CognitiveLevel;
+        result.questions = result.questions.map((q) => ({
+          ...q,
+          level: selectedLevel,
+        }));
+      }
+
       setActiveWordResult(result);
       setActiveWordFileName(file.name);
       setActiveWordFileSize(file.size);
@@ -531,13 +540,17 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             {showStatsPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
-          {/* NÚT BÓC TÁCH TỪ FILE WORD CHUẨN */}
+          {/* NÚT BÓC TÁCH TỪ FILE WORD: HIỂN THỊ TRỰC QUAN MỨC ĐỘ ĐANG CHỌN */}
           <button
             type="button"
             disabled={isExtractingWord}
             onClick={() => wordInputRef.current?.click()}
             className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2 disabled:opacity-60"
-            title="Bóc tách câu hỏi từ Word giữ trọn vẹn công thức Toán/Hóa và xem trước"
+            title={
+              levelFilter !== 'all'
+                ? `Bóc tách câu hỏi và tự động áp dụng mức độ: ${COGNITIVE_LEVEL_LABELS[levelFilter as CognitiveLevel]}`
+                : 'Bóc tách câu hỏi từ Word giữ trọn vẹn công thức Toán/Hóa và xem trước'
+            }
           >
             {isExtractingWord ? (
               <>
@@ -547,7 +560,14 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             ) : (
               <>
                 <Upload className="w-4 h-4 text-blue-600" />
-                <span>Bóc tách từ file Word</span>
+                <span>
+                  Bóc tách từ file Word
+                  {levelFilter !== 'all' && (
+                    <span className="ml-1 px-1.5 py-0.5 rounded bg-blue-200/70 text-blue-800 text-[10px] font-bold">
+                      {COGNITIVE_LEVEL_SHORT_LABELS[levelFilter as CognitiveLevel]}
+                    </span>
+                  )}
+                </span>
               </>
             )}
           </button>
@@ -1133,7 +1153,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       )}
 
-      {/* MODAL BÓC TÁCH WORD CHUẨN: GIỮ NGUYÊN CÔNG THỨC TOÁN/HÓA, CHỌN MÔN/LỚP/BÀI & SOÁT LỖI */}
+      {/* MODAL BÓC TÁCH WORD CHUẨN: KẾ THỪA MỨC ĐỘ VÀ BÀI HỌC TỪ BỘ LỌC */}
       {activeWordResult && (
         <WordImportReviewModal
           isOpen={!!activeWordResult}
@@ -1146,15 +1166,22 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             grade: (gradeFilter !== 'all' ? gradeFilter : '11') as any,
             chapterId: chapterFilter !== 'all' ? chapterFilter : undefined,
             lessonId: lessonTopicFilter.startsWith('lessonId:') ? lessonTopicFilter.slice(9) : undefined,
+            level: levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined,
           }}
           existingQuestions={questions}
           subjects={subjects}
           currentUserId={currentUserId}
           onConfirmSave={async (questionsToSave) => {
-            questionsToSave.forEach((q) => onAddQuestion(q));
-            showToast(`Đã thêm thành công ${questionsToSave.length} câu hỏi vào Ngân hàng!`);
+            const targetLevel = levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : undefined;
+            const finalizedQuestions = questionsToSave.map((q) => ({
+              ...q,
+              level: targetLevel || q.level || 'thong_hieu',
+            }));
+
+            finalizedQuestions.forEach((q) => onAddQuestion(q));
+            showToast(`Đã thêm thành công ${finalizedQuestions.length} câu hỏi vào Ngân hàng!`);
             setActiveWordResult(null);
-            return { successCount: questionsToSave.length, skippedCount: 0 };
+            return { successCount: finalizedQuestions.length, skippedCount: 0 };
           }}
           onClose={() => setActiveWordResult(null)}
         />
