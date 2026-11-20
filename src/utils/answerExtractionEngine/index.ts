@@ -118,7 +118,8 @@ export async function runAnswerExtractionEngine(
     solutionChoices,
     tables,
     options?.expectedCounts,
-    algoResult.part1Diagnostics
+    algoResult.part1Diagnostics,
+    algoResult.part3Diagnostics
   );
 
   // 7. Assemble final lookup maps

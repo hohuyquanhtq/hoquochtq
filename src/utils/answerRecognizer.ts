@@ -1,6 +1,10 @@
 import { Question, QuestionType, AnswerRecognitionItem, RecognitionStatus, RecognitionSource, AnswerTableCandidate } from '../types';
 import { extractTablesFromText, isolateAnswerBlock } from './answerExtractionEngine/documentTableReader';
-import { extractAnswersAlgorithmically, Part1TableDiagnostics } from './answerExtractionEngine/algorithmicExtractor';
+import {
+  extractAnswersAlgorithmically,
+  Part1TableDiagnostics,
+  Part3TableDiagnostics,
+} from './answerExtractionEngine/algorithmicExtractor';
 import type { RawDocumentTable } from './answerExtractionEngine/types';
 import { detectSectionHeader } from './sectionDetector';
 
@@ -16,12 +20,23 @@ export interface SectionAnswersMatrix {
     }
   >;
   part2: Map<number, { statements: Record<string, boolean>; source: RecognitionSource; notes?: string }>;
-  part3: Map<number, { answer: string; acceptedAnswers: string[]; source: RecognitionSource; notes?: string }>;
+  part3: Map<
+    number,
+    {
+      answer: string;
+      acceptedAnswers: string[];
+      source: RecognitionSource;
+      notes?: string;
+      validationStatus?: RecognitionStatus;
+      validationIssues?: string[];
+    }
+  >;
   explanations: Map<string, string>; // "part1_1" or "part3_2" -> explanation text
   candidates: AnswerTableCandidate[];
   hasAmbiguousCandidates: boolean;
   extractedTables: { id: string; sourceType: string; surroundingHeader?: string; rows: string[][] }[];
   part1Diagnostics?: Part1TableDiagnostics;
+  part3Diagnostics?: Part3TableDiagnostics;
 }
 
 /**
@@ -99,11 +114,13 @@ export function extractComprehensiveAnswerKeys(
       candidates,
       hasAmbiguousCandidates,
       part1Diagnostics,
+      part3Diagnostics,
     } = extractAnswersAlgorithmically(tables, algoScanText, selectedCandidateId);
 
     matrix.candidates = candidates;
     matrix.hasAmbiguousCandidates = hasAmbiguousCandidates;
     matrix.part1Diagnostics = part1Diagnostics;
+    matrix.part3Diagnostics = part3Diagnostics;
 
     for (const item of part1Items) {
       matrix.part1.set(item.questionNumber, {
@@ -134,6 +151,8 @@ export function extractComprehensiveAnswerKeys(
         acceptedAnswers: item.acceptedAnswers || [item.correctAnswer, item.correctAnswer.replace(',', '.'), item.correctAnswer.replace('.', ',')],
         source: item.source || 'answer_table',
         notes: item.notes || item.sourceSnippet,
+        validationStatus: item.validationStatus,
+        validationIssues: item.validationIssues,
       });
     }
 
@@ -412,11 +431,13 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
           if (numbers.length > 0 && ansTokens.length === numbers.length) {
             numbers.forEach((num, idx) => {
               const val = ansTokens[idx].trim();
-              matrix.part3.set(num, {
-                answer: val,
-                acceptedAnswers: [val, val.replace(',', '.'), val.replace('.', ',')],
-                source: 'answer_table',
-              });
+              if (!matrix.part3.has(num)) {
+                matrix.part3.set(num, {
+                  answer: val,
+                  acceptedAnswers: [val, val.replace(',', '.'), val.replace('.', ',')],
+                  source: 'answer_table',
+                });
+              }
             });
             i++; // skip next line
             continue;
@@ -706,6 +727,12 @@ export function buildAnswerRecognitionItems(
         ? `Đáp án "${finalVal}" dài ${compactLen} ký tự (vượt giới hạn 4 ký tự phiếu GDPT 2018 — vui lòng kiểm tra)`
         : undefined;
 
+      const tableIssues = [...(detectedShort?.validationIssues || [])];
+      if (lenWarning && !tableIssues.includes(lenWarning)) {
+        tableIssues.push(lenWarning);
+      }
+      const hasIssues = tableIssues.length > 0 || detectedShort?.validationStatus === 'needs_review';
+
       if (hasVal) part3Found++;
 
       items.push({
@@ -717,11 +744,11 @@ export function buildAnswerRecognitionItems(
         correctAnswer: finalVal,
         acceptedAnswers: detectedShort?.acceptedAnswers || (finalVal ? [finalVal, finalVal.replace(',', '.'), finalVal.replace('.', ',')] : []),
         tolerance: 0.05,
-        recognitionStatus: !hasVal ? 'not_found' : exceeds4Chars ? 'needs_review' : 'verified',
+        recognitionStatus: !hasVal ? 'not_found' : hasIssues ? 'needs_review' : 'verified',
         recognitionSource: detectedShort?.source || (q.shortAnswerConfig?.acceptableAnswers.length ? 'question_content' : 'manual'),
-        teacherVerified: hasVal && !exceeds4Chars,
+        teacherVerified: hasVal && !hasIssues,
         notes: detectedShort?.notes,
-        validationIssues: lenWarning ? [lenWarning] : undefined,
+        validationIssues: tableIssues.length > 0 ? tableIssues : undefined,
       });
 
       const hasStem = q.content.trim().length > 0;
@@ -735,8 +762,8 @@ export function buildAnswerRecognitionItems(
           numericValue: parseFloat(finalVal.replace(',', '.') || '0'),
           tolerance: 0.05,
         };
-        q.parseStatus = exceeds4Chars ? 'needs_review' : 'verified';
-        q.parseWarning = lenWarning;
+        q.parseStatus = hasIssues ? 'needs_review' : 'verified';
+        q.parseWarning = tableIssues[0] || (hasIssues ? detectedShort?.notes : undefined);
         q.recognitionSource = detectedShort?.source || 'question_content';
       } else {
         q.shortAnswerConfig = {

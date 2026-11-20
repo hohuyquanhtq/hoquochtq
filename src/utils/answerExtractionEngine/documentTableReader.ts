@@ -277,9 +277,15 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
       flushMarkdownTable();
       if (isSectionHeaderLine(line)) {
         lastMarkdownSectionHeader = line.replace(/\*\*|\*|<u>|<\/u>/gi, '').trim().slice(0, 160);
-      } else if (line.length > 100 && !/^[\-–—*_\s]+$/.test(line)) {
-        // Long non-header paragraph resets stale section context
-        lastMarkdownSectionHeader = undefined;
+      } else {
+        const strippedLine = line.replace(/\*\*|\*|<u>|<\/u>|<s>|<\/s>/gi, '').trim();
+        if (
+          (strippedLine.length > 100 && !/^[\-–—*_\s]+$/.test(strippedLine)) ||
+          (/^(?:Câu|Bài)\s+\d+\s*[.:–—\-]\s*\S/i.test(strippedLine) && strippedLine.length > 25)
+        ) {
+          // Long non-header paragraph or exam question stem resets stale section context
+          lastMarkdownSectionHeader = undefined;
+        }
       }
     }
   }

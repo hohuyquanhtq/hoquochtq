@@ -1021,7 +1021,6 @@ export function parseExamContent(
   }).length;
 
   const questionsMissingAnswers = questions.length - questionsWithAnswers;
-  const questionsWithWarnings = questions.filter(q => q.parseStatus !== 'verified').length;
 
   // 7. Reconcile with 3-section Answer Recognition Items
   const {
@@ -1030,6 +1029,8 @@ export function parseExamContent(
     part2StatementsFound: part2StatementsFoundCount,
     part3Found: part3FoundCount,
   } = buildAnswerRecognitionItems(questions, answerKeys);
+
+  const questionsWithWarnings = questions.filter(q => q.parseStatus !== 'verified').length;
 
   const part1TotalCount = answerItems.filter(item => item.section === 'part1').length;
   const part2StatementsTotalCount = answerItems.filter(item => item.section === 'part2').length;

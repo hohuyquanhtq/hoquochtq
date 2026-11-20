@@ -9,7 +9,7 @@ import {
   EngineVerificationReport,
   RawDocumentTable,
 } from './types';
-import type { Part1TableDiagnostics } from './algorithmicExtractor';
+import type { Part1TableDiagnostics, Part3TableDiagnostics } from './algorithmicExtractor';
 
 export function validateAndCrossCheckAnswers(
   part1Items: ExtractedAnswerItem[],
@@ -18,7 +18,8 @@ export function validateAndCrossCheckAnswers(
   solutionChoices: Map<number, string>,
   _tables: RawDocumentTable[],
   expectedCounts?: { part1?: number; part2?: number; part3?: number },
-  part1Diagnostics?: Part1TableDiagnostics
+  part1Diagnostics?: Part1TableDiagnostics,
+  part3Diagnostics?: Part3TableDiagnostics
 ): {
   validatedPart1: ExtractedAnswerItem[];
   validatedPart2: ExtractedAnswerItem[];
@@ -207,11 +208,24 @@ export function validateAndCrossCheckAnswers(
   // --- 3. PART III VALIDATION (SHORT ANSWER) ---
   const validatedPart3 = part3Items.map(item => ({ ...item }));
   const p3Map = new Map<number, ExtractedAnswerItem>();
-  const p3QNums = validatedPart3.map(i => i.questionNumber);
+  const p3QNums = [
+    ...validatedPart3.map(i => i.questionNumber),
+    ...(part3Diagnostics?.missingFromTable || []),
+  ];
   const maxP3 = p3QNums.length > 0 ? Math.max(...p3QNums) : 0;
-  const targetP3Count = expectedCounts?.part3 || maxP3;
+  const targetP3Count = Math.max(expectedCounts?.part3 || 0, maxP3);
 
   for (const item of validatedPart3) {
+    if (p3Map.has(item.questionNumber)) {
+      issues.push({
+        type: 'duplicate_question',
+        severity: 'warning',
+        section: 'part3',
+        questionNumber: item.questionNumber,
+        message: `Câu ${item.questionNumber} (Phần III) bị trùng số trong danh sách đáp án.`,
+        suggestedFix: 'Kiểm tra lại các bảng đáp án Phần III để loại bỏ câu bị trùng.',
+      });
+    }
     p3Map.set(item.questionNumber, item);
 
     if (!item.correctAnswer || item.correctAnswer.trim().length === 0) {
@@ -238,6 +252,23 @@ export function validateAndCrossCheckAnswers(
         item.validationStatus = 'needs_review';
         item.validationIssues = [...(item.validationIssues || []), lenMsg];
       }
+    }
+  }
+
+  // Rule: Duplicate question numbers detected across merged Part III tables
+  if (part3Diagnostics?.duplicateQuestions?.length) {
+    for (const dup of part3Diagnostics.duplicateQuestions) {
+      const uniqueVals = Array.from(new Set(dup.answers));
+      issues.push({
+        type: 'duplicate_question',
+        severity: dup.conflict ? 'error' : 'warning',
+        section: 'part3',
+        questionNumber: dup.questionNumber,
+        message: dup.conflict
+          ? `Câu ${dup.questionNumber} (Phần III) bị trùng số trong bảng đáp án với giá trị khác nhau (${uniqueVals.join(' và ')}).`
+          : `Câu ${dup.questionNumber} (Phần III) bị lặp số ${dup.answers.length} lần trong bảng đáp án (${uniqueVals[0]}).`,
+        suggestedFix: `Kiểm tra lại đáp án và đánh số cho Câu ${dup.questionNumber} trong các bảng đáp án Phần III.`,
+      });
     }
   }
 

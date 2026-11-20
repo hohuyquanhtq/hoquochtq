@@ -437,6 +437,9 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
       )
     ) {
       currentSectionHeader = clean.slice(0, 160);
+    } else if (/^(?:Câu|Bài)\s+\d+\s*[.:–—\-]\s*\S/i.test(clean) && clean.length > 25) {
+      // Real exam question stem — prevent data tables inside questions from inheriting PHẦN I/II/III
+      currentSectionHeader = undefined;
     }
   };
 
