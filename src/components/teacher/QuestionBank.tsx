@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import mammoth from 'mammoth';
 import {
   CognitiveLevel,
   CurriculumGrade,
   CurriculumLesson,
   Folder,
+  ParsedExamResult,
   Question,
   QuestionType,
   SubjectItem,
@@ -20,7 +20,6 @@ import {
   resolveQuestionSubject,
 } from '../../constants/subjects';
 import {
-  AlertTriangle,
   BarChart3,
   BookOpen,
   CheckCircle2,
@@ -32,7 +31,6 @@ import {
   Copy,
   Edit3,
   Eye,
-  FileText,
   FlaskConical,
   Loader2,
   Plus,
@@ -44,6 +42,8 @@ import {
   X,
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
+import { parseDocxExam } from '../../utils/docxParser';
+import { WordImportReviewModal } from './WordImportReviewModal';
 import { generateAiChemistryExplanation } from '../../services/geminiService';
 import {
   fetchCurriculumLessonsBySubjectGrade,
@@ -51,10 +51,6 @@ import {
 } from '../../services/curriculumService';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { QuestionFormModal } from './QuestionFormModal';
-
-interface ExtractedQuestionDraft extends Question {
-  validationErrors: string[];
-}
 
 interface QuestionBankProps {
   questions: Question[];
@@ -107,26 +103,19 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  // States bóc tách Word & Chọn vị trí lưu
+  // States bóc tách Word sử dụng engine chuẩn của hệ thống
   const wordInputRef = useRef<HTMLInputElement | null>(null);
-  const [isExtractingWord, setIsExtractingWord] = useState(false);
-  const [extractedDrafts, setExtractedDrafts] = useState<ExtractedQuestionDraft[]>([]);
-  const [isPreviewModalOpen, setIsPreviewModalOpen] = useState(false);
-
-  // Metadata đích đến khi lưu hàng loạt
-  const [targetSubjectId, setTargetSubjectId] = useState<string>(subjects[0]?.id || 'chemistry');
-  const [targetGrade, setTargetGrade] = useState<CurriculumGrade>('11');
-  const [targetChapterId, setTargetChapterId] = useState<string>('all');
-  const [targetLessonId, setTargetLessonId] = useState<string>('all');
-  const [targetCatalogLessons, setTargetCatalogLessons] = useState<CurriculumLesson[]>([]);
-  const [isLoadingTargetCatalog, setIsLoadingTargetCatalog] = useState<boolean>(false);
+  const [isExtractingWord, setIsExtractingWord] = useState<boolean>(false);
+  const [activeWordResult, setActiveWordResult] = useState<ParsedExamResult | null>(null);
+  const [activeWordFileName, setActiveWordFileName] = useState<string>('');
+  const [activeWordFileSize, setActiveWordFileSize] = useState<number>(0);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3200);
   };
 
-  // Fetch danh mục cho bộ lọc chính
+  // Fetch danh mục bài học SGK khi chọn môn & khối lớp chuẩn
   useEffect(() => {
     let active = true;
     const isStdGrade = gradeFilter === '10' || gradeFilter === '11' || gradeFilter === '12';
@@ -157,45 +146,9 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     };
   }, [subjectFilter, gradeFilter]);
 
-  // Fetch danh mục riêng cho Modal Lưu bóc tách Word
-  useEffect(() => {
-    let active = true;
-    const isStdGrade = targetGrade === '10' || targetGrade === '11' || targetGrade === '12';
-    if (!targetSubjectId || !isStdGrade) {
-      setTargetCatalogLessons([]);
-      setIsLoadingTargetCatalog(false);
-      return;
-    }
-
-    setIsLoadingTargetCatalog(true);
-    void fetchCurriculumLessonsBySubjectGrade(
-      targetSubjectId,
-      targetGrade,
-      { includeInactive: false }
-    )
-      .then((rows) => {
-        if (active) setTargetCatalogLessons(rows);
-      })
-      .catch(() => {
-        if (active) setTargetCatalogLessons([]);
-      })
-      .finally(() => {
-        if (active) setIsLoadingTargetCatalog(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [targetSubjectId, targetGrade]);
-
   const groupedCatalog = useMemo(
     () => filterAndGroupCurriculumLessons(catalogLessons, { includeInactive: false }),
     [catalogLessons]
-  );
-
-  const groupedTargetCatalog = useMemo(
-    () => filterAndGroupCurriculumLessons(targetCatalogLessons, { includeInactive: false }),
-    [targetCatalogLessons]
   );
 
   const questionCountByLesson = useMemo(() => {
@@ -244,6 +197,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     return Array.from(map.entries()).sort((a, b) => a[0].localeCompare(b[0], 'vi'));
   }, [catalogLessons, questions, subjects, subjectFilter, gradeFilter]);
 
+  // Bộ lọc danh sách câu hỏi
   const filtered = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return questions.filter((q) => {
@@ -487,35 +441,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setDeleteTarget(null);
   };
 
-  // --- LOGIC BÓC TÁCH FILE WORD (.DOCX) & KIỂM TRA LỖI ---
-  // Hàm chuyển đổi HTML từ Mammoth sang văn bản chứa định dạng LaTeX/Chem
-  const cleanWordHtmlToLatexText = (html: string): string => {
-    let text = html;
-    // Chuyển thẻ sub/sup sang cú pháp LaTeX cho ChemRenderer
-    text = text.replace(/<sub>(.*?)<\/sub>/gi, '_$1');
-    text = text.replace(/<sup>(.*?)<\/sup>/gi, '^{$1}');
-    
-    // Đổi thẻ ngắt dòng p, br, div thành xuống dòng thực tế
-    text = text.replace(/<\/p>/gi, '\n');
-    text = text.replace(/<br\s*\/?>/gi, '\n');
-    text = text.replace(/<\/div>/gi, '\n');
-    
-    // Loại bỏ các thẻ HTML còn lại mà vẫn giữ nguyên nội dung
-    text = text.replace(/<[^>]+>/g, '');
-    
-    // Giải mã các ký tự HTML đặc biệt thông dụng trong đề Hóa
-    text = text.replace(/ /g, ' ')
-               .replace(/</g, '<')
-               .replace(/>/g, '>')
-               .replace(/&/g, '&')
-               .replace(/→/g, '->') // Mũi tên phản ứng
-               .replace(/→/g, '->')
-               .replace(/←/g, '<-')
-               .replace(/↔/g, '<=>'); // Mũi tên hai chiều thuận nghịch
-
-    return text;
-  };
-
+  // --- XỬ LÝ BÓC TÁCH FILE WORD BẰNG ENGINE CHUẨN parseDocxExam ---
   const handleWordFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -528,219 +454,33 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
     setIsExtractingWord(true);
     try {
-      const arrayBuffer = await file.arrayBuffer();
-      
-      // SỬ DỤNG convertToHtml ĐỂ GIỮ NGUYÊN SUB, SUP VÀ CÔNG THỨC
-      const result = await mammoth.convertToHtml({ arrayBuffer });
-      const rawText = cleanWordHtmlToLatexText(result.value);
+      const buffer = await file.arrayBuffer();
+      // Khối lớp mặc định lấy theo bộ lọc đang chọn
+      const defaultGrade =
+        gradeFilter !== 'all' && (gradeFilter === '10' || gradeFilter === '11' || gradeFilter === '12' || gradeFilter === 'chuyen_hsg')
+          ? (gradeFilter as '10' | '11' | '12' | 'chuyen_hsg')
+          : '11';
 
-      if (!rawText.trim()) {
-        showToast('File Word không có nội dung văn bản.');
+      // Gọi trực tiếp engine chuẩn xử lý OMML, công thức Hóa học & nhận diện đáp án
+      const { result } = await parseDocxExam(buffer, defaultGrade);
+
+      if (!result.questions || result.questions.length === 0) {
+        showToast('Không nhận diện được câu hỏi nào từ file Word.');
         return;
       }
 
-      const questionRegex = /(?:^|\n)\s*(?:Câu|CÂU)\s+(\d+)[\s.:]/gi;
-      const matches = Array.from(rawText.matchAll(questionRegex));
-
-      if (matches.length === 0) {
-        showToast('Không tìm thấy định dạng "Câu 1:", "Câu 1." trong file.');
-        return;
-      }
-
-      const initSub = subjectFilter !== 'all' ? subjectFilter : subjects[0]?.id || 'chemistry';
-      const initGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
-      setTargetSubjectId(initSub);
-      setTargetGrade(initGrade);
-      setTargetChapterId(chapterFilter !== 'all' ? chapterFilter : 'all');
-      setTargetLessonId(lessonTopicFilter.startsWith('lessonId:') ? lessonTopicFilter.slice(9) : 'all');
-
-      const activeSubject = subjects.find((s) => s.id === initSub) || subjects[0];
-      const parsedDrafts: ExtractedQuestionDraft[] = [];
-      const nowIso = new Date().toISOString();
-
-      for (let i = 0; i < matches.length; i++) {
-        const startIdx = matches[i].index! + matches[i][0].length;
-        const endIdx = i + 1 < matches.length ? matches[i + 1].index! : rawText.length;
-        const block = rawText.substring(startIdx, endIdx).trim();
-
-        const errors: string[] = [];
-        const isTrueFalse = /[a-d]\)\s+/i.test(block);
-        const isSingleChoice = /[A-D][.:]\s+/i.test(block);
-
-        let qType: QuestionType = 'part3_short_answer';
-        if (isTrueFalse) {
-          qType = 'part2_true_false';
-        } else if (isSingleChoice) {
-          qType = 'part1_single_choice';
-        }
-
-        let mainContent = block;
-        let options: { id: string; text: string }[] | undefined = undefined;
-        let statements: { id: string; statement: string; correctAnswer: boolean }[] | undefined = undefined;
-        let correctOptionId: string | undefined = undefined;
-        let shortAnswerConfig: { acceptableAnswers: string[]; unit?: string } | undefined = undefined;
-
-        if (qType === 'part1_single_choice') {
-          const optRegex = /(?:^|\n|\s{2,})([A-D])[.:]\s*([\s\S]*?)(?=(?:(?:^|\n|\s{2,})[A-D][.:])|$)/g;
-          const optMatches = Array.from(block.matchAll(optRegex));
-          if (optMatches.length > 0) {
-            const firstOptIdx = optMatches[0].index!;
-            mainContent = block.substring(0, firstOptIdx).trim();
-            options = optMatches.map((m) => ({
-              id: m[1].toUpperCase(),
-              text: m[2].trim(),
-            }));
-
-            if (options.length < 4) {
-              errors.push(`Thiếu phương án lựa chọn (mới tìm thấy ${options.length}/4 phương án).`);
-            }
-            correctOptionId = 'A';
-          } else {
-            errors.push('Không bóc tách được các phương án A, B, C, D.');
-          }
-        } else if (qType === 'part2_true_false') {
-          const stmtRegex = /(?:^|\n|\s{2,})([a-d])\)\s*([\s\S]*?)(?=(?:(?:^|\n|\s{2,})[a-d]\))|$)/g;
-          const stmtMatches = Array.from(block.matchAll(stmtRegex));
-          if (stmtMatches.length > 0) {
-            const firstStmtIdx = stmtMatches[0].index!;
-            mainContent = block.substring(0, firstStmtIdx).trim();
-            statements = stmtMatches.map((m) => ({
-              id: m[1].toLowerCase(),
-              statement: m[2].trim(),
-              correctAnswer: true,
-            }));
-
-            if (statements.length < 4) {
-              errors.push(`Thiếu phát biểu Đúng/Sai (mới tìm thấy ${statements.length}/4 ý a, b, c, d).`);
-            }
-          } else {
-            errors.push('Không nhận diện được các ý a), b), c), d).');
-          }
-        } else {
-          const numMatch = block.match(/(?:Đáp án|Đáp số|ĐA|KQ)[:\s]*([^\n]+)/i);
-          const ans = numMatch ? numMatch[1].trim().slice(0, 4) : '';
-          if (!ans) {
-            errors.push('Chưa xác định được đáp án số.');
-          }
-          shortAnswerConfig = {
-            acceptableAnswers: ans ? [ans] : [''],
-          };
-        }
-
-        if (!mainContent.trim()) {
-          errors.push('Nội dung dẫn câu hỏi đang bị rỗng.');
-        }
-
-        const draft: ExtractedQuestionDraft = {
-          id: `q_word_${Date.now()}_${i}_${Math.random().toString(36).substring(2, 6)}`,
-          code: generateQuestionCode({
-            subjectId: initSub,
-            grade: initGrade,
-            type: qType,
-            subjects,
-          }),
-          subjectId: initSub,
-          subjectName: activeSubject.name,
-          grade: initGrade,
-          type: qType,
-          level: 'thong_hieu',
-          content: mainContent,
-          options,
-          correctOptionId,
-          statements,
-          shortAnswerConfig,
-          source: file.name,
-          lessonTopic: 'Bóc tách từ file Word',
-          ownerId: currentUserId || 'system',
-          authorId: currentUserId || 'system',
-          createdAt: nowIso,
-          updatedAt: nowIso,
-          validationErrors: errors,
-        };
-
-        parsedDrafts.push(draft);
-      }
-
-      setExtractedDrafts(parsedDrafts);
-      setIsPreviewModalOpen(true);
-      showToast(`Đã bóc tách được ${parsedDrafts.length} câu hỏi kèm công thức.`);
-    } catch {
-      showToast('Lỗi khi đọc công thức từ file Word. Vui lòng thử lại.');
+      setActiveWordResult(result);
+      setActiveWordFileName(file.name);
+      setActiveWordFileSize(file.size);
+      showToast(`Đã bóc tách thành công ${result.questions.length} câu hỏi kèm công thức!`);
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.message || 'Lỗi khi đọc file Word.');
     } finally {
       setIsExtractingWord(false);
       if (wordInputRef.current) wordInputRef.current.value = '';
     }
   };
-
-  // Cập nhật nhanh thông tin từng câu nháp trong modal
-  const updateDraftItem = (index: number, updates: Partial<ExtractedQuestionDraft>) => {
-    setExtractedDrafts((prev) => {
-      const next = [...prev];
-      const item = { ...next[index], ...updates };
-      
-      // Kiểm tra lại lỗi sau khi sửa
-      const errs: string[] = [];
-      if (!item.content.trim()) errs.push('Nội dung dẫn đang bị rỗng.');
-      if (item.type === 'part1_single_choice') {
-        if (!item.options || item.options.length < 4) errs.push('Thiếu phương án (cần đủ 4).');
-        if (!item.correctOptionId) errs.push('Chưa chọn đáp án đúng.');
-      } else if (item.type === 'part2_true_false') {
-        if (!item.statements || item.statements.length < 4) errs.push('Thiếu ý a, b, c, d.');
-      } else if (item.type === 'part3_short_answer') {
-        if (!item.shortAnswerConfig?.acceptableAnswers?.[0]) errs.push('Chưa nhập đáp án số.');
-      }
-      item.validationErrors = errs;
-      next[index] = item;
-      return next;
-    });
-  };
-
-  const removeDraftItem = (index: number) => {
-    setExtractedDrafts((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  // Lưu hàng loạt vào Ngân hàng theo đúng vị trí đã chọn
-  const handleConfirmSaveExtracted = () => {
-    const activeSub = subjects.find((s) => s.id === targetSubjectId) || subjects[0];
-    const selectedChapter = groupedTargetCatalog.chapters.find((c) => c.chapterId === targetChapterId);
-    const selectedLesson = targetCatalogLessons.find((l) => l.lessonId === targetLessonId);
-
-    const lessonName = selectedLesson
-      ? selectedLesson.lessonName
-      : targetLessonId !== 'all'
-      ? targetLessonId
-      : 'Bóc tách từ file Word';
-
-    extractedDrafts.forEach((draft) => {
-      const finalQuestion: Question = {
-        ...draft,
-        subjectId: targetSubjectId,
-        subjectName: activeSub.name,
-        grade: targetGrade,
-        chapterId: targetChapterId !== 'all' ? targetChapterId : undefined,
-        chapterName: selectedChapter?.chapterName,
-        lessonId: targetLessonId !== 'all' ? targetLessonId : undefined,
-        lessonName: lessonName,
-        lessonTopic: lessonName,
-        code: generateQuestionCode({
-          subjectId: targetSubjectId,
-          grade: targetGrade,
-          type: draft.type,
-          subjects,
-        }),
-      };
-      onAddQuestion(finalQuestion);
-    });
-
-    showToast(`Đã lưu ${extractedDrafts.length} câu vào: ${activeSub.name} · ${GRADE_LABELS[targetGrade]} · ${lessonName}`);
-    setIsPreviewModalOpen(false);
-    setExtractedDrafts([]);
-  };
-
-  const totalExtractionErrors = useMemo(
-    () => extractedDrafts.reduce((acc, d) => acc + d.validationErrors.length, 0),
-    [extractedDrafts]
-  );
 
   return (
     <div className="space-y-5">
@@ -753,7 +493,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         className="hidden"
       />
 
-      {/* Toast */}
+      {/* Toast thông báo */}
       {toastMessage && (
         <div className="fixed bottom-6 right-6 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-xl flex items-center gap-2 text-xs font-semibold animate-fade-in">
           <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
@@ -791,12 +531,13 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             {showStatsPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
           </button>
 
+          {/* NÚT BÓC TÁCH TỪ FILE WORD CHUẨN */}
           <button
             type="button"
             disabled={isExtractingWord}
             onClick={() => wordInputRef.current?.click()}
             className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2 disabled:opacity-60"
-            title="Tự động bóc tách và phân loại câu hỏi từ file Word .docx"
+            title="Bóc tách câu hỏi từ Word giữ trọn vẹn công thức Toán/Hóa và xem trước"
           >
             {isExtractingWord ? (
               <>
@@ -822,7 +563,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       </div>
 
-      {/* Expandable Statistics Panel */}
+      {/* Bảng thống kê ngân hàng */}
       {showStatsPanel && (
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-5">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
@@ -921,7 +662,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       )}
 
-      {/* Filter Bar (Bộ lọc chính của ngân hàng) */}
+      {/* Thanh bộ lọc chính */}
       <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs space-y-3">
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -970,7 +711,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               <option value="10">Lớp 10</option>
               <option value="11">Lớp 11</option>
               <option value="12">Lớp 12</option>
-              <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+              <option value="chuyen_hsg">Chuyên & HSG</option>
             </select>
           </div>
 
@@ -1089,7 +830,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           </div>
         </div>
 
-        {/* Selection & Bulk Action Bar */}
+        {/* Thanh chọn nhiều & hành động */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100 text-xs">
           <div className="flex flex-wrap items-center gap-3">
             <button
@@ -1358,7 +1099,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         )}
       </div>
 
-      {/* Pagination Bar */}
+      {/* Phân trang */}
       {filtered.length > 0 && (
         <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
           <span className="tabular-nums">
@@ -1392,376 +1133,34 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       )}
 
-      {/* MODAL BÓC TÁCH TỪ FILE WORD: CHỌN VỊ TRÍ LƯU & THÔNG BÁO LỖI CHI TIẾT */}
-      {isPreviewModalOpen && (
-        <div
-          className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5"
-          role="dialog"
-          aria-modal="true"
-        >
-          <div className="bg-white w-full max-w-5xl rounded-3xl shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[92vh]">
-            {/* Modal Header */}
-            <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div className="w-9 h-9 rounded-xl bg-blue-600/30 border border-blue-400/40 flex items-center justify-center">
-                  <FileText className="w-5 h-5 text-blue-300" />
-                </div>
-                <div>
-                  <h3 className="font-bold text-base">
-                    Bóc tách câu hỏi từ Word ({extractedDrafts.length} câu nhận diện)
-                  </h3>
-                  <p className="text-xs text-slate-300 mt-0.5">
-                    Chọn vị trí lưu trong danh mục và rà soát lỗi định dạng trước khi nạp vào ngân hàng.
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsPreviewModalOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* BẢNG CHỌN VỊ TRÍ LƯU (Môn học -> Khối lớp -> Chương -> Bài học) */}
-            <div className="p-5 bg-blue-50/60 border-b border-blue-100">
-              <div className="flex items-center justify-between mb-2.5">
-                <span className="text-xs font-bold text-blue-900 uppercase tracking-wider flex items-center gap-1.5">
-                  <BookOpen className="w-4 h-4 text-blue-600" />
-                  <span>Chọn vị trí lưu trong ngân hàng (Áp dụng cho toàn bộ câu bóc tách)</span>
-                </span>
-                {totalExtractionErrors > 0 && (
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 border border-amber-300 text-amber-900 flex items-center gap-1">
-                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
-                    <span>Có {totalExtractionErrors} cảnh báo cần giáo viên kiểm tra</span>
-                  </span>
-                )}
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Môn học lưu</label>
-                  <select
-                    value={targetSubjectId}
-                    onChange={(e) => {
-                      setTargetSubjectId(e.target.value);
-                      setTargetChapterId('all');
-                      setTargetLessonId('all');
-                    }}
-                    className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-blue-200 bg-white font-medium text-slate-800 focus:ring-2 focus:ring-blue-500"
-                  >
-                    {subjects.map((sub) => (
-                      <option key={sub.id} value={sub.id}>
-                        {sub.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Khối lớp</label>
-                  <select
-                    value={targetGrade}
-                    onChange={(e) => {
-                      setTargetGrade(e.target.value as CurriculumGrade);
-                      setTargetChapterId('all');
-                      setTargetLessonId('all');
-                    }}
-                    className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-blue-200 bg-white font-medium text-slate-800 focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="10">Lớp 10</option>
-                    <option value="11">Lớp 11</option>
-                    <option value="12">Lớp 12</option>
-                    <option value="chuyen_hsg">Chuyên &amp; HSG</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">Chương / Chủ đề</label>
-                  <select
-                    value={targetChapterId}
-                    onChange={(e) => {
-                      setTargetChapterId(e.target.value);
-                      setTargetLessonId('all');
-                    }}
-                    className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-blue-200 bg-white font-medium text-slate-800 focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="all">
-                      {groupedTargetCatalog.chapters.length > 0
-                        ? `Tất cả chương (${groupedTargetCatalog.chapters.length})`
-                        : 'Chưa gắn chương cụ thể'}
-                    </option>
-                    {groupedTargetCatalog.chapters.map((ch) => (
-                      <option key={ch.chapterId} value={ch.chapterId}>
-                        {ch.chapterName}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="flex items-center justify-between text-[11px] font-semibold text-slate-600 mb-1">
-                    <span>Bài học cụ thể</span>
-                    {isLoadingTargetCatalog && <Loader2 className="w-3 h-3 animate-spin text-blue-600" />}
-                  </label>
-                  <select
-                    value={targetLessonId}
-                    onChange={(e) => setTargetLessonId(e.target.value)}
-                    className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-blue-200 bg-white font-medium text-slate-800 focus:ring-2 focus:ring-blue-500"
-                  >
-                    <option value="all">Chưa gắn bài (Ghi nhận chung theo file)</option>
-                    {groupedTargetCatalog.chapters
-                      .filter((ch) => targetChapterId === 'all' || ch.chapterId === targetChapterId)
-                      .map((ch) => (
-                        <optgroup key={ch.chapterId} label={ch.chapterName}>
-                          {ch.lessons.map((lesson) => (
-                            <option key={lesson.id} value={lesson.lessonId}>
-                              {lesson.lessonName}
-                            </option>
-                          ))}
-                        </optgroup>
-                      ))}
-                  </select>
-                </div>
-              </div>
-            </div>
-
-            {/* DANH SÁCH CHI TIẾT CÂU HỎI NHÁP VÀ BÁO LỖI */}
-            <div className="p-6 overflow-y-auto space-y-4 max-h-[55vh]">
-              {extractedDrafts.map((draft, idx) => {
-                const hasError = draft.validationErrors.length > 0;
-                return (
-                  <div
-                    key={draft.id}
-                    className={`p-4 rounded-2xl border transition-colors ${
-                      hasError
-                        ? 'border-amber-300 bg-amber-50/30'
-                        : 'border-slate-200 bg-slate-50/50'
-                    }`}
-                  >
-                    {/* Header từng câu: Số thứ tự, dạng thức, mức độ, nút xóa */}
-                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-slate-200/80 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="font-bold text-slate-900 bg-slate-200 px-2 py-0.5 rounded-md">
-                          Câu {idx + 1}
-                        </span>
-                        <select
-                          value={draft.type}
-                          onChange={(e) => updateDraftItem(idx, { type: e.target.value as QuestionType })}
-                          className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-semibold text-slate-800"
-                        >
-                          <option value="part1_single_choice">Phần I · 4 lựa chọn</option>
-                          <option value="part2_true_false">Phần II · Đúng/Sai 4 ý</option>
-                          <option value="part3_short_answer">Phần III · Trả lời ngắn</option>
-                        </select>
-                        <select
-                          value={draft.level}
-                          onChange={(e) => updateDraftItem(idx, { level: e.target.value as CognitiveLevel })}
-                          className="px-2 py-1 rounded-lg border border-slate-200 bg-white font-semibold text-slate-800"
-                        >
-                          <option value="nhan_biet">Nhận biết</option>
-                          <option value="thong_hieu">Thông hiểu</option>
-                          <option value="van_dung">Vận dụng</option>
-                          <option value="van_dung_cao">Vận dụng cao</option>
-                        </select>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => removeDraftItem(idx)}
-                        className="text-rose-600 hover:text-rose-800 hover:bg-rose-50 p-1.5 rounded-lg inline-flex items-center gap-1 font-semibold text-[11px]"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                        <span>Bỏ câu này</span>
-                      </button>
-                    </div>
-
-                    {/* Cảnh báo lỗi bóc tách nếu có */}
-                    {hasError && (
-                      <div className="mt-2.5 p-2.5 rounded-xl bg-amber-100/80 border border-amber-300 text-amber-900 text-xs flex items-start gap-2">
-                        <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-                        <div className="space-y-0.5">
-                          <p className="font-bold">Cần giáo viên xác nhận / bổ sung:</p>
-                          <ul className="list-disc list-inside text-[11px] space-y-0.5 text-amber-950">
-                            {draft.validationErrors.map((err, eIdx) => (
-                              <li key={eIdx}>{err}</li>
-                            ))}
-                          </ul>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Ô sửa nội dung câu hỏi */}
-                    <div className="mt-3">
-                      <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                        Nội dung dẫn câu hỏi:
-                      </label>
-                      <textarea
-                        value={draft.content}
-                        onChange={(e) => updateDraftItem(idx, { content: e.target.value })}
-                        rows={2}
-                        className="w-full text-xs p-2.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-900 focus:ring-2 focus:ring-blue-500"
-                      />
-                    </div>
-
-                    {/* Chỉnh sửa đáp án theo dạng */}
-                    {draft.type === 'part1_single_choice' && (
-                      <div className="mt-2.5 pt-2 border-t border-slate-200/80">
-                        <label className="block text-[11px] font-semibold text-slate-500 mb-1.5">
-                          Phương án lựa chọn &amp; Đáp án đúng:
-                        </label>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                          {['A', 'B', 'C', 'D'].map((optKey) => {
-                            const optObj = draft.options?.find((o) => o.id === optKey);
-                            const isCorrect = draft.correctOptionId === optKey;
-                            return (
-                              <div
-                                key={optKey}
-                                className={`flex items-center gap-2 p-1.5 rounded-xl border ${
-                                  isCorrect ? 'bg-emerald-50 border-emerald-300' : 'bg-white border-slate-200'
-                                }`}
-                              >
-                                <input
-                                  type="radio"
-                                  name={`correct_${draft.id}`}
-                                  checked={isCorrect}
-                                  onChange={() => updateDraftItem(idx, { correctOptionId: optKey })}
-                                  className="w-4 h-4 text-emerald-600 focus:ring-emerald-500 ml-1"
-                                />
-                                <span className="font-bold text-slate-700">{optKey}.</span>
-                                <input
-                                  type="text"
-                                  value={optObj?.text || ''}
-                                  placeholder={`Nội dung phương án ${optKey}`}
-                                  onChange={(e) => {
-                                    const nextOpts = ['A', 'B', 'C', 'D'].map((key) => {
-                                      if (key === optKey) return { id: key, text: e.target.value };
-                                      return draft.options?.find((o) => o.id === key) || { id: key, text: '' };
-                                    });
-                                    updateDraftItem(idx, { options: nextOpts });
-                                  }}
-                                  className="flex-1 px-2 py-1 text-xs rounded-lg border border-slate-200 bg-white"
-                                />
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {draft.type === 'part2_true_false' && (
-                      <div className="mt-2.5 pt-2 border-t border-slate-200/80">
-                        <label className="block text-[11px] font-semibold text-slate-500 mb-1.5">
-                          Các phát biểu Đúng / Sai:
-                        </label>
-                        <div className="space-y-1.5 text-xs">
-                          {['a', 'b', 'c', 'd'].map((stmtKey) => {
-                            const stmtObj = draft.statements?.find((s) => s.id === stmtKey);
-                            const isCorrect = stmtObj?.correctAnswer ?? true;
-                            return (
-                              <div key={stmtKey} className="flex items-center gap-2 p-1.5 rounded-xl bg-white border border-slate-200">
-                                <span className="font-bold text-indigo-700 px-1">{stmtKey})</span>
-                                <input
-                                  type="text"
-                                  value={stmtObj?.statement || ''}
-                                  placeholder={`Nội dung phát biểu ${stmtKey}`}
-                                  onChange={(e) => {
-                                    const nextStmts = ['a', 'b', 'c', 'd'].map((key) => {
-                                      if (key === stmtKey) {
-                                        return { id: key, statement: e.target.value, correctAnswer: isCorrect };
-                                      }
-                                      return draft.statements?.find((s) => s.id === key) || { id: key, statement: '', correctAnswer: true };
-                                    });
-                                    updateDraftItem(idx, { statements: nextStmts });
-                                  }}
-                                  className="flex-1 px-2 py-1 text-xs rounded-lg border border-slate-200 bg-white"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const nextStmts = draft.statements?.map((s) => {
-                                      if (s.id === stmtKey) return { ...s, correctAnswer: !s.correctAnswer };
-                                      return s;
-                                    });
-                                    updateDraftItem(idx, { statements: nextStmts });
-                                  }}
-                                  className={`px-3 py-1 rounded-lg text-xs font-bold transition-colors ${
-                                    isCorrect ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800'
-                                  }`}
-                                >
-                                  {isCorrect ? 'Đúng' : 'Sai'}
-                                </button>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-
-                    {draft.type === 'part3_short_answer' && (
-                      <div className="mt-2.5 pt-2 border-t border-slate-200/80 flex items-center gap-2 text-xs">
-                        <span className="font-semibold text-slate-700">Đáp án số chuẩn:</span>
-                        <input
-                          type="text"
-                          maxLength={4}
-                          value={draft.shortAnswerConfig?.acceptableAnswers?.[0] || ''}
-                          placeholder="Ví dụ: 12.5 hoặc -3"
-                          onChange={(e) =>
-                            updateDraftItem(idx, {
-                              shortAnswerConfig: {
-                                acceptableAnswers: [e.target.value.trim().slice(0, 4)],
-                              },
-                            })
-                          }
-                          className="w-32 px-2.5 py-1 text-xs font-mono font-bold rounded-lg border border-slate-200 bg-white text-emerald-900"
-                        />
-                        <span className="text-[11px] text-slate-400">(Tối đa 4 ký tự theo quy định Bộ GD&amp;ĐT)</span>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-
-            {/* Modal Footer */}
-            <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="text-xs text-slate-600">
-                <span>Tổng số: <strong className="text-slate-900">{extractedDrafts.length}</strong> câu hỏi. </span>
-                {totalExtractionErrors === 0 ? (
-                  <span className="text-emerald-700 font-semibold inline-flex items-center gap-1">
-                    <CheckCircle2 className="w-3.5 h-3.5" /> Tất cả câu hỏi đã đầy đủ thông tin chuẩn!
-                  </span>
-                ) : (
-                  <span className="text-amber-700 font-semibold">
-                    Vẫn còn {totalExtractionErrors} mục có thể cần sửa thêm trước khi lưu.
-                  </span>
-                )}
-              </div>
-
-              <div className="flex items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => setIsPreviewModalOpen(false)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold"
-                >
-                  Hủy bỏ
-                </button>
-                <button
-                  type="button"
-                  onClick={handleConfirmSaveExtracted}
-                  className="px-5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-1.5"
-                >
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>Xác nhận lưu vào Ngân hàng</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
+      {/* MODAL BÓC TÁCH WORD CHUẨN: GIỮ NGUYÊN CÔNG THỨC TOÁN/HÓA, CHỌN MÔN/LỚP/BÀI & SOÁT LỖI */}
+      {activeWordResult && (
+        <WordImportReviewModal
+          isOpen={!!activeWordResult}
+          fileName={activeWordFileName}
+          fileSize={activeWordFileSize}
+          parsedResult={activeWordResult}
+          parsedQuestionsCount={activeWordResult.questions.length}
+          inheritedMetadata={{
+            subjectId: subjectFilter !== 'all' ? subjectFilter : subjects[0]?.id || 'chemistry',
+            grade: (gradeFilter !== 'all' ? gradeFilter : '11') as any,
+            chapterId: chapterFilter !== 'all' ? chapterFilter : undefined,
+            lessonId: lessonTopicFilter.startsWith('lessonId:') ? lessonTopicFilter.slice(9) : undefined,
+          }}
+          existingQuestions={questions}
+          subjects={subjects}
+          currentUserId={currentUserId}
+          onConfirmSave={async (questionsToSave) => {
+            questionsToSave.forEach((q) => onAddQuestion(q));
+            showToast(`Đã thêm thành công ${questionsToSave.length} câu hỏi vào Ngân hàng!`);
+            setActiveWordResult(null);
+            return { successCount: questionsToSave.length, skippedCount: 0 };
+          }}
+          onClose={() => setActiveWordResult(null)}
+        />
       )}
 
-      {/* Add Question Modal (Bằng tay) */}
+      {/* Modal Thêm câu hỏi thủ công */}
       <QuestionFormModal
         isOpen={isAddModalOpen}
         mode="add"
@@ -1776,7 +1175,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         onClose={() => setIsAddModalOpen(false)}
       />
 
-      {/* Edit Question Modal */}
+      {/* Modal Chỉnh sửa câu hỏi */}
       <QuestionFormModal
         isOpen={!!editingQuestion}
         mode="edit"
@@ -1792,7 +1191,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         onClose={() => setEditingQuestion(null)}
       />
 
-      {/* View Detail Modal */}
+      {/* Modal Xem chi tiết câu hỏi */}
       {viewingQuestion && (
         <div
           className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
@@ -1958,7 +1357,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         </div>
       )}
 
-      {/* Delete Confirmation Dialog */}
+      {/* Xác nhận xóa câu hỏi */}
       <ConfirmDialog
         isOpen={!!deleteTarget}
         title={
