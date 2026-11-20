@@ -79,6 +79,7 @@ interface WordImportReviewModalProps {
   fileName: string;
   fileSize: number;
   parsedResult: ParsedExamResult;
+  parsedQuestionsCount?: number;
   inheritedMetadata: InheritedQuestionBankMetadata;
   existingQuestions: Question[];
   subjects: SubjectItem[];

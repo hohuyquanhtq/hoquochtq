@@ -8,6 +8,7 @@ import {
   CurriculumLesson,
   Folder,
   ParsedExamResult,
+  ParsedQuestion,
   Question,
   QuestionType,
   SubjectItem,
@@ -53,12 +54,12 @@ import {
 } from '../../services/curriculumService';
 import { ConfirmDialog } from '../common/ConfirmDialog';
 import { QuestionFormModal } from './QuestionFormModal';
-import { parseDocxExam } from '../../utils/docxParser';
 import {
   InheritedQuestionBankMetadata,
   WordBatchSaveResult,
   WordImportReviewModal,
 } from './WordImportReviewModal';
+import { questionsToParsedQuestions } from '../../utils/parsedQuestionAdapter';
 
 interface QuestionBankProps {
   questions: Question[];
@@ -121,8 +122,9 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-  const wordFileInputRef = useRef<HTMLInputElement | null>(null);
-  const [isParsingWord, setIsParsingWord] = useState<boolean>(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [parsedQuestions, setParsedQuestions] = useState<ParsedQuestion[]>([]);
   const [wordImportSession, setWordImportSession] = useState<{
     fileName: string;
     fileSize: number;
@@ -547,27 +549,35 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     };
   };
 
-  const handleWordImportClick = () => {
-    if (isParsingWord) return;
-    wordFileInputRef.current?.click();
+  const handleButtonClick = () => {
+    if (isLoading) return;
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
   };
 
-  const handleWordFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const inputEl = event.currentTarget;
     const file = event.target.files?.[0];
-    // Reset input value immediately so selecting the exact same file again triggers onChange
-    event.target.value = '';
     if (!file) return;
 
+    // Ensure execution only happens client-side in browser
+    if (typeof window === 'undefined') return;
+
     if (!file.name.toLowerCase().endsWith('.docx')) {
+      inputEl.value = '';
       showToast('Vui lòng chọn file Word đúng định dạng .docx.');
       return;
     }
 
     const inheritedMetadata = buildInheritedMetadata();
-    setIsParsingWord(true);
+    setIsLoading(true);
     try {
+      // Dynamic import on demand to avoid eager SSR/bundle loading of mammoth/pdf parsers
+      const { parseDocxExam } = await import('../../utils/docxParser');
       const buffer = await file.arrayBuffer();
       const { result } = await parseDocxExam(buffer, inheritedMetadata.grade);
+      setParsedQuestions(questionsToParsedQuestions(result.questions));
       onFileParsedRecord?.({
         fileName: file.name,
         fileType: 'docx',
@@ -582,13 +592,16 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         inheritedMetadata,
       });
     } catch (err) {
+      console.error('[HQTest] Lỗi khi đọc file Word:', err);
       const msg =
         err instanceof Error
           ? err.message
           : 'Không thể đọc và bóc tách file Word (.docx). Vui lòng thử lại.';
       showToast(msg);
     } finally {
-      setIsParsingWord(false);
+      setIsLoading(false);
+      // Reset input value so selecting the exact same file again triggers onChange
+      inputEl.value = '';
     }
   };
 
@@ -641,7 +654,8 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           </p>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Nút 1: Thống kê ngân hàng */}
           <button
             type="button"
             onClick={() => setShowStatsPanel((v) => !v)}
@@ -660,18 +674,19 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             )}
           </button>
 
+          {/* Nút 2: Nút Bóc tách từ file Word mới */}
           <button
             id="btn-import-word"
             type="button"
-            disabled={isParsingWord}
-            onClick={handleWordImportClick}
-            className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2 focus:outline-none focus:ring-2 focus:ring-blue-500/40"
+            onClick={handleButtonClick}
+            disabled={isLoading}
+            className="min-h-[42px] inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl font-semibold text-xs transition shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40"
           >
-            {isParsingWord ? (
-              <Loader2 className="w-4 h-4 text-white animate-spin" />
+            {isLoading ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
               <svg
-                className="w-4 h-4 text-white shrink-0"
+                className="w-4 h-4 shrink-0"
                 fill="none"
                 stroke="currentColor"
                 viewBox="0 0 24 24"
@@ -680,23 +695,25 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                 <path
                   strokeLinecap="round"
                   strokeLinejoin="round"
-                  strokeWidth={2}
+                  strokeWidth="2"
                   d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
                 />
               </svg>
             )}
-            <span>{isParsingWord ? 'Đang bóc tách Word...' : 'Bóc tách từ file Word'}</span>
+            <span>{isLoading ? 'Đang bóc tách...' : 'Bóc tách từ file Word'}</span>
           </button>
 
+          {/* Thẻ input ẩn phục vụ chọn file */}
           <input
-            ref={wordFileInputRef}
-            id="word-file-input"
             type="file"
+            ref={fileInputRef}
+            id="word-file-input"
             accept=".docx"
+            onChange={handleFileChange}
             className="hidden"
-            onChange={handleWordFileChange}
           />
 
+          {/* Nút 3: + Thêm câu hỏi mới */}
           <button
             type="button"
             onClick={() => setIsAddModalOpen(true)}
@@ -1556,12 +1573,16 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           fileName={wordImportSession.fileName}
           fileSize={wordImportSession.fileSize}
           parsedResult={wordImportSession.parsedResult}
+          parsedQuestionsCount={parsedQuestions.length}
           inheritedMetadata={wordImportSession.inheritedMetadata}
           existingQuestions={questions}
           subjects={subjects}
           currentUserId={currentUserId}
           onConfirmSave={handleConfirmWordImportSave}
-          onClose={() => setWordImportSession(null)}
+          onClose={() => {
+            setWordImportSession(null);
+            setParsedQuestions([]);
+          }}
         />
       )}
 

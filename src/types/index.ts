@@ -737,6 +737,33 @@ export interface AdminQuestionAuditLog {
   createdAt: string;
 }
 
+export interface SubQuestion {
+  id: string;
+  content: string;
+  answer?: boolean | null;
+}
+
+export type ParsedQuestionType =
+  | 'multiple_choice'
+  | 'true_false'
+  | 'short_answer'
+  | 'essay';
+
+export interface ParsedQuestion {
+  id?: string;
+  order?: number;
+  type: ParsedQuestionType;
+  content: string;
+  options?: string[];
+  sub_questions?: SubQuestion[];
+  correct_answer?: string | null;
+  explanation?: string | null;
+  subject?: string;
+  grade?: string;
+  topic?: string;
+  difficulty?: string;
+}
+
 declare global {
   const __APP_URL__: string | undefined;
   const __PRODUCTION_APP_URL__: string | undefined;

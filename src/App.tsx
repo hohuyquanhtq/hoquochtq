@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
+'use client';
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   User,
