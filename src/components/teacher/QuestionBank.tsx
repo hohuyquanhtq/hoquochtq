@@ -488,6 +488,34 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   };
 
   // --- LOGIC BÓC TÁCH FILE WORD (.DOCX) & KIỂM TRA LỖI ---
+  // Hàm chuyển đổi HTML từ Mammoth sang văn bản chứa định dạng LaTeX/Chem
+  const cleanWordHtmlToLatexText = (html: string): string => {
+    let text = html;
+    // Chuyển thẻ sub/sup sang cú pháp LaTeX cho ChemRenderer
+    text = text.replace(/<sub>(.*?)<\/sub>/gi, '_$1');
+    text = text.replace(/<sup>(.*?)<\/sup>/gi, '^{$1}');
+    
+    // Đổi thẻ ngắt dòng p, br, div thành xuống dòng thực tế
+    text = text.replace(/<\/p>/gi, '\n');
+    text = text.replace(/<br\s*\/?>/gi, '\n');
+    text = text.replace(/<\/div>/gi, '\n');
+    
+    // Loại bỏ các thẻ HTML còn lại mà vẫn giữ nguyên nội dung
+    text = text.replace(/<[^>]+>/g, '');
+    
+    // Giải mã các ký tự HTML đặc biệt thông dụng trong đề Hóa
+    text = text.replace(/ /g, ' ')
+               .replace(/</g, '<')
+               .replace(/>/g, '>')
+               .replace(/&/g, '&')
+               .replace(/→/g, '->') // Mũi tên phản ứng
+               .replace(/→/g, '->')
+               .replace(/←/g, '<-')
+               .replace(/↔/g, '<=>'); // Mũi tên hai chiều thuận nghịch
+
+    return text;
+  };
+
   const handleWordFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -501,8 +529,10 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     setIsExtractingWord(true);
     try {
       const arrayBuffer = await file.arrayBuffer();
-      const result = await mammoth.extractRawText({ arrayBuffer });
-      const rawText = result.value;
+      
+      // SỬ DỤNG convertToHtml ĐỂ GIỮ NGUYÊN SUB, SUP VÀ CÔNG THỨC
+      const result = await mammoth.convertToHtml({ arrayBuffer });
+      const rawText = cleanWordHtmlToLatexText(result.value);
 
       if (!rawText.trim()) {
         showToast('File Word không có nội dung văn bản.');
@@ -517,7 +547,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         return;
       }
 
-      // Khởi tạo vị trí lưu mặc định lấy từ bộ lọc hiện tại (nếu có)
       const initSub = subjectFilter !== 'all' ? subjectFilter : subjects[0]?.id || 'chemistry';
       const initGrade = (gradeFilter !== 'all' ? gradeFilter : '11') as CurriculumGrade;
       setTargetSubjectId(initSub);
@@ -535,8 +564,6 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         const block = rawText.substring(startIdx, endIdx).trim();
 
         const errors: string[] = [];
-
-        // Nhận diện dạng
         const isTrueFalse = /[a-d]\)\s+/i.test(block);
         const isSingleChoice = /[A-D][.:]\s+/i.test(block);
 
@@ -567,7 +594,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
             if (options.length < 4) {
               errors.push(`Thiếu phương án lựa chọn (mới tìm thấy ${options.length}/4 phương án).`);
             }
-            correctOptionId = 'A'; // Mặc định A, GV kiểm tra lại
+            correctOptionId = 'A';
           } else {
             errors.push('Không bóc tách được các phương án A, B, C, D.');
           }
@@ -593,7 +620,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
           const numMatch = block.match(/(?:Đáp án|Đáp số|ĐA|KQ)[:\s]*([^\n]+)/i);
           const ans = numMatch ? numMatch[1].trim().slice(0, 4) : '';
           if (!ans) {
-            errors.push('Chưa xác định được đáp án số (tối đa 4 ký tự).');
+            errors.push('Chưa xác định được đáp án số.');
           }
           shortAnswerConfig = {
             acceptableAnswers: ans ? [ans] : [''],
@@ -636,9 +663,9 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
       setExtractedDrafts(parsedDrafts);
       setIsPreviewModalOpen(true);
-      showToast(`Đã bóc tách được ${parsedDrafts.length} câu hỏi.`);
+      showToast(`Đã bóc tách được ${parsedDrafts.length} câu hỏi kèm công thức.`);
     } catch {
-      showToast('Lỗi khi đọc file Word. Vui lòng thử lại.');
+      showToast('Lỗi khi đọc công thức từ file Word. Vui lòng thử lại.');
     } finally {
       setIsExtractingWord(false);
       if (wordInputRef.current) wordInputRef.current.value = '';
