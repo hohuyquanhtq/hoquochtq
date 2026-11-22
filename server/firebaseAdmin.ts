@@ -34,6 +34,23 @@ export type FirebaseAdminErrorCode =
   | 'API_ROUTE_ERROR'
   | 'UNKNOWN_ERROR';
 
+export interface FirebaseAdminEnvCheck {
+  hasFirebaseServiceAccountJson: boolean;
+  hasFirebaseServiceAccount: boolean;
+  hasFirebaseProjectId: boolean;
+  hasFirebaseClientEmail: boolean;
+  hasFirebasePrivateKey: boolean;
+  privateKeyHasBeginHeader: boolean;
+  privateKeyHasEndFooter: boolean;
+  privateKeyHasNewlinesAfterNormalize: boolean;
+  privateKeyHadOuterQuotes: boolean;
+  privateKeyHadEscapedNewlines: boolean;
+  activeCredentialSource: ServiceAccountEnvVarName | null;
+  configuredProjectId: string | null;
+  expectedProjectId: string;
+  expectedDatabaseId: string;
+}
+
 export interface FirebaseAdminInitResult {
   initialized: boolean;
   environmentVariablePresent: boolean;
@@ -42,12 +59,16 @@ export interface FirebaseAdminInitResult {
   databaseIdMatched: boolean;
   errorCode: FirebaseAdminErrorCode | null;
   errorDetail: string | null;
+  envCheck: FirebaseAdminEnvCheck;
   app: App | null;
   auth: Auth | null;
   db: Firestore | null;
 }
 
 export interface FirebaseAdminHealthStatus {
+  status: 'OK' | 'CONFIGURATION_ERROR';
+  message: string;
+  envCheck: FirebaseAdminEnvCheck;
   adminInitialized: boolean;
   projectIdMatched: boolean;
   firestoreConnected: boolean;
@@ -57,7 +78,6 @@ export interface FirebaseAdminHealthStatus {
   errorCode: FirebaseAdminErrorCode | null;
   errorStage: string | null;
   timestamp: string;
-  message: string;
 }
 
 interface RawServiceAccountPayload {
@@ -126,22 +146,115 @@ export function resolveServiceAccountEnvSource(
 }
 
 /**
- * Normalizes private_key PEM newlines safely:
- * - Strips accidental outer quotes when pasted into Vercel env vars.
- * - Converts literal "\\n" (and double-escaped "\\\\n") sequences into actual "\n" newlines.
- * - Normalizes CRLF ("\r\n") to LF ("\n").
+ * Normalizes FIREBASE_PRIVATE_KEY / private_key PEM strings safely:
+ * - Strips accidental trailing commas (e.g., copied directly from JSON).
+ * - Strips accidental outer double/single quotes ("..." / '...') at both ends, including nested or stray quotes.
+ * - Converts literal "\\n" (and double-escaped "\\\\n") and "\\r\\n" sequences into actual "\n" newlines.
+ * - Normalizes CRLF ("\r\n") and CR ("\r") to LF ("\n").
  */
-export function normalizeServiceAccountPrivateKey(rawKey: string): string {
-  let cleaned = (rawKey || '').trim();
-  if (
-    (cleaned.startsWith('"') && cleaned.endsWith('"')) ||
-    (cleaned.startsWith("'") && cleaned.endsWith("'"))
-  ) {
-    cleaned = cleaned.slice(1, -1).trim();
+export function normalizePrivateKey(rawKey: string): string {
+  if (typeof rawKey !== 'string') return '';
+  let cleaned = rawKey.trim();
+
+  let prev = '';
+  while (cleaned !== prev) {
+    prev = cleaned;
+    if (cleaned.endsWith(',')) {
+      cleaned = cleaned.slice(0, -1).trim();
+    }
+    if (
+      cleaned.length >= 2 &&
+      ((cleaned.startsWith('"') && cleaned.endsWith('"')) ||
+        (cleaned.startsWith("'") && cleaned.endsWith("'")))
+    ) {
+      cleaned = cleaned.slice(1, -1).trim();
+    }
   }
-  const withLf = cleaned.replace(/\r\n/g, '\n');
-  const unescaped = withLf.replace(/\\\\n/g, '\n').replace(/\\n/g, '\n');
-  return unescaped.trim();
+
+  if (cleaned.startsWith('"') || cleaned.startsWith("'")) {
+    cleaned = cleaned.slice(1).trim();
+  }
+  if (cleaned.endsWith('"') || cleaned.endsWith("'")) {
+    cleaned = cleaned.slice(0, -1).trim();
+  }
+
+  return cleaned
+    .replace(/\\r\\n/g, '\n')
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\\\\n/g, '\n')
+    .replace(/\\n/g, '\n')
+    .trim();
+}
+
+export const normalizeServiceAccountPrivateKey = normalizePrivateKey;
+
+/**
+ * Returns a strictly non-secret diagnostic summary of Firebase Admin environment variables.
+ * NEVER exposes raw private keys, client emails, tokens, or JSON payloads.
+ */
+export function getFirebaseEnvCheck(preferPrimaryClaimEnv = false): FirebaseAdminEnvCheck {
+  const rawJsonPrimary = (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim();
+  const rawJsonClaim = (process.env.FIREBASE_SERVICE_ACCOUNT || '').trim();
+  const rawProjectId = (process.env.FIREBASE_PROJECT_ID || '').trim();
+  const rawClientEmail = (process.env.FIREBASE_CLIENT_EMAIL || '').trim();
+  const rawPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || '').trim();
+
+  const source = resolveServiceAccountEnvSource(preferPrimaryClaimEnv);
+
+  let inspectedRawKey = rawPrivateKey;
+  let configuredProjectId: string | null = rawProjectId || null;
+
+  if (!source.splitCredentials && source.envVarName && source.rawValue) {
+    try {
+      let candidate = source.rawValue.trim();
+      if (!candidate.startsWith('{') && !candidate.startsWith('"')) {
+        const b64 = Buffer.from(candidate, 'base64').toString('utf8').trim();
+        if (b64.startsWith('{')) candidate = b64;
+      }
+      let decoded: unknown = JSON.parse(candidate);
+      if (typeof decoded === 'string') {
+        decoded = JSON.parse(decoded);
+      }
+      if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) {
+        const payload = decoded as RawServiceAccountPayload;
+        if (typeof payload.project_id === 'string' && payload.project_id.trim()) {
+          configuredProjectId = payload.project_id.trim();
+        }
+        if (typeof payload.private_key === 'string' && payload.private_key.trim()) {
+          inspectedRawKey = payload.private_key;
+        }
+      }
+    } catch {
+      // Ignore parse errors here; detailed error is surfaced by initAdmin()
+    }
+  }
+
+  const trimmedInspectedKey = (inspectedRawKey || '').trim();
+  const normalizedKey = trimmedInspectedKey ? normalizePrivateKey(trimmedInspectedKey) : '';
+  const privateKeyHadOuterQuotes =
+    trimmedInspectedKey.startsWith('"') ||
+    trimmedInspectedKey.endsWith('"') ||
+    trimmedInspectedKey.startsWith("'") ||
+    trimmedInspectedKey.endsWith("'");
+  const privateKeyHadEscapedNewlines = /\\n/.test(trimmedInspectedKey);
+
+  return {
+    hasFirebaseServiceAccountJson: rawJsonPrimary.length > 0,
+    hasFirebaseServiceAccount: rawJsonClaim.length > 0,
+    hasFirebaseProjectId: rawProjectId.length > 0,
+    hasFirebaseClientEmail: rawClientEmail.length > 0,
+    hasFirebasePrivateKey: rawPrivateKey.length > 0,
+    privateKeyHasBeginHeader: normalizedKey.includes('-----BEGIN'),
+    privateKeyHasEndFooter: normalizedKey.includes('PRIVATE KEY-----') && normalizedKey.includes('-----END'),
+    privateKeyHasNewlinesAfterNormalize: normalizedKey.includes('\n'),
+    privateKeyHadOuterQuotes,
+    privateKeyHadEscapedNewlines,
+    activeCredentialSource: source.envVarName,
+    configuredProjectId,
+    expectedProjectId: EXPECTED_FIREBASE_PROJECT_ID,
+    expectedDatabaseId: EXPECTED_FIRESTORE_DATABASE_ID,
+  };
 }
 
 export function formatFirebaseAdminErrorMessage(
@@ -389,65 +502,76 @@ function parseServiceAccountJson(
 }
 
 /**
- * Initializes Firebase Admin SDK once (Singleton: getApps().length === 0) in serverless/Node runtime
- * from process.env.FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT, or
- * FIREBASE_PRIVATE_KEY + FIREBASE_CLIENT_EMAIL (+ optional FIREBASE_PROJECT_ID),
- * and binds Firestore strictly to EXPECTED_FIRESTORE_DATABASE_ID.
+ * Lazy Singleton Firebase Admin SDK initializer.
+ * - NEVER called at module evaluation time (zero top-level initializeApp/getFirestore).
+ * - Initializes once when invoked inside a request handler (guarded by getApps().length === 0).
+ * - Supports FIREBASE_SERVICE_ACCOUNT_JSON, FIREBASE_SERVICE_ACCOUNT, or split
+ *   FIREBASE_PRIVATE_KEY + FIREBASE_CLIENT_EMAIL (+ optional FIREBASE_PROJECT_ID).
+ * - Binds Firestore strictly to EXPECTED_FIRESTORE_DATABASE_ID.
+ * - Never throws unhandled exceptions; returns a structured result with non-secret envCheck.
  */
-export function getFirebaseAdminState(
-  preferPrimaryClaimEnv = false
-): FirebaseAdminInitResult {
-  const { envVarName, rawValue, splitCredentials } = resolveServiceAccountEnvSource(preferPrimaryClaimEnv);
-  const environmentVariablePresent = envVarName !== null && rawValue.length > 0;
-
-  if (!environmentVariablePresent || !envVarName) {
-    cachedEnvFingerprint = '';
-    cachedInitResult = {
-      initialized: false,
-      environmentVariablePresent: false,
-      activeEnvVar: null,
-      projectIdMatched: false,
-      databaseIdMatched: false,
-      errorCode: 'CONFIG_MISSING',
-      errorDetail: formatFirebaseAdminErrorMessage('CONFIG_MISSING'),
-      app: null,
-      auth: null,
-      db: null,
-    };
-    return cachedInitResult;
-  }
-
-  const fingerprint = `${envVarName}:${rawValue}`;
-  if (cachedInitResult && cachedEnvFingerprint === fingerprint && cachedInitResult.initialized) {
-    return cachedInitResult;
-  }
-
-  const { parsed, errorCode, errorDetail } = splitCredentials
-    ? validateAndBuildCredentials({
-        projectId: splitCredentials.projectId,
-        clientEmail: splitCredentials.clientEmail,
-        rawPrivateKey: splitCredentials.privateKey,
-        sourceLabel: 'FIREBASE_PRIVATE_KEY / FIREBASE_CLIENT_EMAIL',
-      })
-    : parseServiceAccountJson(rawValue, envVarName);
-  if (!parsed || errorCode) {
-    cachedEnvFingerprint = fingerprint;
-    cachedInitResult = {
-      initialized: false,
-      environmentVariablePresent: true,
-      activeEnvVar: envVarName,
-      projectIdMatched: errorCode === 'PRIVATE_KEY_ERROR',
-      databaseIdMatched: false,
-      errorCode: errorCode || 'CONFIG_PARSE_ERROR',
-      errorDetail: errorDetail || formatFirebaseAdminErrorMessage(errorCode || 'CONFIG_PARSE_ERROR'),
-      app: null,
-      auth: null,
-      db: null,
-    };
-    return cachedInitResult;
-  }
+export function initAdmin(preferPrimaryClaimEnv = false): FirebaseAdminInitResult {
+  const envCheck = getFirebaseEnvCheck(preferPrimaryClaimEnv);
 
   try {
+    const { envVarName, rawValue, splitCredentials } =
+      resolveServiceAccountEnvSource(preferPrimaryClaimEnv);
+    const environmentVariablePresent = envVarName !== null && rawValue.length > 0;
+
+    if (!environmentVariablePresent || !envVarName) {
+      cachedEnvFingerprint = '';
+      cachedInitResult = {
+        initialized: false,
+        environmentVariablePresent: false,
+        activeEnvVar: null,
+        projectIdMatched: false,
+        databaseIdMatched: false,
+        errorCode: 'CONFIG_MISSING',
+        errorDetail: formatFirebaseAdminErrorMessage('CONFIG_MISSING'),
+        envCheck,
+        app: null,
+        auth: null,
+        db: null,
+      };
+      return cachedInitResult;
+    }
+
+    const fingerprint = `${envVarName}:${rawValue}`;
+    if (cachedInitResult && cachedEnvFingerprint === fingerprint && cachedInitResult.initialized) {
+      return {
+        ...cachedInitResult,
+        envCheck,
+      };
+    }
+
+    const { parsed, errorCode, errorDetail } = splitCredentials
+      ? validateAndBuildCredentials({
+          projectId: splitCredentials.projectId,
+          clientEmail: splitCredentials.clientEmail,
+          rawPrivateKey: splitCredentials.privateKey,
+          sourceLabel: 'FIREBASE_PRIVATE_KEY / FIREBASE_CLIENT_EMAIL',
+        })
+      : parseServiceAccountJson(rawValue, envVarName);
+
+    if (!parsed || errorCode) {
+      cachedEnvFingerprint = fingerprint;
+      cachedInitResult = {
+        initialized: false,
+        environmentVariablePresent: true,
+        activeEnvVar: envVarName,
+        projectIdMatched: errorCode === 'PRIVATE_KEY_ERROR',
+        databaseIdMatched: false,
+        errorCode: errorCode || 'CONFIG_PARSE_ERROR',
+        errorDetail:
+          errorDetail || formatFirebaseAdminErrorMessage(errorCode || 'CONFIG_PARSE_ERROR'),
+        envCheck,
+        app: null,
+        auth: null,
+        db: null,
+      };
+      return cachedInitResult;
+    }
+
     const app: App =
       getApps().length === 0
         ? initializeApp({
@@ -481,6 +605,7 @@ export function getFirebaseAdminState(
         errorDetail: !projectIdMatched
           ? `Firebase Admin App projectId không khớp ${EXPECTED_FIREBASE_PROJECT_ID}.`
           : `Firestore Database ID không khớp ${EXPECTED_FIRESTORE_DATABASE_ID}.`,
+        envCheck,
         app: null,
         auth: null,
         db: null,
@@ -497,6 +622,7 @@ export function getFirebaseAdminState(
       databaseIdMatched,
       errorCode: null,
       errorDetail: null,
+      envCheck,
       app,
       auth,
       db,
@@ -521,15 +647,15 @@ export function getFirebaseAdminState(
       message: err instanceof Error ? err.message : 'Firebase Admin initialization failed',
       firestoreStatus: 'not_attempted',
     });
-    cachedEnvFingerprint = fingerprint;
     cachedInitResult = {
       initialized: false,
-      environmentVariablePresent: true,
-      activeEnvVar: envVarName,
-      projectIdMatched: true,
+      environmentVariablePresent: envCheck.activeCredentialSource !== null,
+      activeEnvVar: envCheck.activeCredentialSource,
+      projectIdMatched: envCheck.configuredProjectId === EXPECTED_FIREBASE_PROJECT_ID,
       databaseIdMatched: false,
       errorCode: classified,
       errorDetail: formatFirebaseAdminErrorMessage(classified),
+      envCheck,
       app: null,
       auth: null,
       db: null,
@@ -538,8 +664,14 @@ export function getFirebaseAdminState(
   }
 }
 
+export function getFirebaseAdminState(
+  preferPrimaryClaimEnv = false
+): FirebaseAdminInitResult {
+  return initAdmin(preferPrimaryClaimEnv);
+}
+
 export function isFirebaseAdminReady(): boolean {
-  const state = getFirebaseAdminState();
+  const state = initAdmin();
   return state.initialized && state.projectIdMatched && state.databaseIdMatched && state.db !== null;
 }
 
@@ -553,9 +685,10 @@ export function getSafeFirebaseAdmin(): {
   db: Firestore | null;
   errorCode: FirebaseAdminErrorCode | null;
   errorDetail: string | null;
+  envCheck: FirebaseAdminEnvCheck;
 } {
   try {
-    const state = getFirebaseAdminState();
+    const state = initAdmin();
     const ready =
       state.initialized &&
       state.projectIdMatched &&
@@ -568,22 +701,24 @@ export function getSafeFirebaseAdmin(): {
       db: ready ? state.db : null,
       errorCode: ready ? null : state.errorCode || 'ADMIN_INIT_ERROR',
       errorDetail: ready ? null : state.errorDetail,
+      envCheck: state.envCheck,
     };
   } catch (err) {
-    console.error('[Firebase-Admin-Init-Error]:', err);
+    console.error('[Firebase-Admin-Init-Error]:', sanitizeSensitiveLogText(err instanceof Error ? err.message : String(err)));
     return {
       ready: false,
       app: null,
       auth: null,
       db: null,
       errorCode: 'ADMIN_INIT_ERROR',
-      errorDetail: err instanceof Error ? err.message : 'Firebase Admin initialization error',
+      errorDetail: err instanceof Error ? sanitizeSensitiveLogText(err.message) : 'Firebase Admin initialization error',
+      envCheck: getFirebaseEnvCheck(),
     };
   }
 }
 
 export function getFirebaseAdminDb(): Firestore {
-  const state = getFirebaseAdminState();
+  const state = initAdmin();
   if (!state.initialized || !state.db) {
     throw new Error(state.errorCode || 'CONFIG_MISSING');
   }
@@ -591,7 +726,7 @@ export function getFirebaseAdminDb(): Firestore {
 }
 
 export function getFirebaseAdminAuth(): Auth {
-  const state = getFirebaseAdminState();
+  const state = initAdmin();
   if (!state.initialized || !state.auth) {
     throw new Error(state.errorCode || 'CONFIG_MISSING');
   }
@@ -602,60 +737,105 @@ export function getFirebaseAdminFieldValue(): typeof FieldValue {
   return FieldValue;
 }
 
+const HEALTH_FIRESTORE_TIMEOUT_MS = 5000;
+
+async function probeFirestoreWithTimeout(db: Firestore): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      db.collection('examStatus').limit(1).get(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error('FIRESTORE_HEALTH_TIMEOUT'));
+        }, HEALTH_FIRESTORE_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function checkFirebaseAdminHealth(): Promise<FirebaseAdminHealthStatus> {
-  const state = getFirebaseAdminState();
   const timestamp = new Date().toISOString();
-  if (!state.initialized || !state.db) {
-    const errorCode = state.errorCode || 'ADMIN_INIT_ERROR';
+  try {
+    const state = initAdmin();
+    if (!state.initialized || !state.db) {
+      const errorCode = state.errorCode || 'ADMIN_INIT_ERROR';
+      return {
+        status: 'CONFIGURATION_ERROR',
+        message: formatFirebaseAdminErrorMessage(errorCode, state.errorDetail),
+        envCheck: state.envCheck,
+        adminInitialized: false,
+        projectIdMatched: state.projectIdMatched,
+        firestoreConnected: false,
+        databaseIdMatched: false,
+        environmentVariablePresent: state.environmentVariablePresent,
+        activeEnvVar: state.activeEnvVar,
+        errorCode,
+        errorStage: 'admin_sdk_init',
+        timestamp,
+      };
+    }
+
+    try {
+      await probeFirestoreWithTimeout(state.db);
+      return {
+        status: 'OK',
+        message: formatFirebaseAdminErrorMessage(null),
+        envCheck: state.envCheck,
+        adminInitialized: true,
+        projectIdMatched: state.projectIdMatched,
+        firestoreConnected: true,
+        databaseIdMatched: state.databaseIdMatched,
+        environmentVariablePresent: true,
+        activeEnvVar: state.activeEnvVar,
+        errorCode: null,
+        errorStage: null,
+        timestamp,
+      };
+    } catch (err) {
+      const errorCode = classifyFirestoreError(err);
+      const isTimeout = err instanceof Error && err.message === 'FIRESTORE_HEALTH_TIMEOUT';
+      logFirebaseAdminEvent({
+        api: 'GET /api/health/firebase-admin',
+        errorStage: 'firestore_connectivity_check',
+        errorType: err instanceof Error ? err.name || 'Error' : typeof err,
+        errorCode,
+        message: err instanceof Error ? err.message : 'Firestore health check failed',
+        firestoreStatus: errorCode === 'DATABASE_PERMISSION_ERROR' ? 'permission_denied' : 'read_failed',
+      });
+      return {
+        status: 'CONFIGURATION_ERROR',
+        message: isTimeout
+          ? `Kết nối tới Cloud Firestore (${EXPECTED_FIRESTORE_DATABASE_ID}) quá thời gian chờ (${HEALTH_FIRESTORE_TIMEOUT_MS}ms). Kiểm tra quyền Service Account hoặc Database ID.`
+          : formatFirebaseAdminErrorMessage(errorCode),
+        envCheck: state.envCheck,
+        adminInitialized: true,
+        projectIdMatched: state.projectIdMatched,
+        firestoreConnected: false,
+        databaseIdMatched: state.databaseIdMatched,
+        environmentVariablePresent: true,
+        activeEnvVar: state.activeEnvVar,
+        errorCode,
+        errorStage: 'firestore_connectivity_check',
+        timestamp,
+      };
+    }
+  } catch (err) {
+    const safeMsg = err instanceof Error ? sanitizeSensitiveLogText(err.message) : 'Unexpected error during Firebase Admin health check';
     return {
+      status: 'CONFIGURATION_ERROR',
+      message: `Lỗi không mong đợi khi kiểm tra cấu hình Firebase Admin: ${safeMsg}`,
+      envCheck: getFirebaseEnvCheck(),
       adminInitialized: false,
-      projectIdMatched: state.projectIdMatched,
+      projectIdMatched: false,
       firestoreConnected: false,
       databaseIdMatched: false,
-      environmentVariablePresent: state.environmentVariablePresent,
-      activeEnvVar: state.activeEnvVar,
-      errorCode,
-      errorStage: 'admin_sdk_init',
+      environmentVariablePresent: false,
+      activeEnvVar: null,
+      errorCode: 'ADMIN_INIT_ERROR',
+      errorStage: 'health_check_catch',
       timestamp,
-      message: formatFirebaseAdminErrorMessage(errorCode, state.errorDetail),
-    };
-  }
-
-  try {
-    await state.db.collection('examStatus').limit(1).get();
-    return {
-      adminInitialized: true,
-      projectIdMatched: state.projectIdMatched,
-      firestoreConnected: true,
-      databaseIdMatched: state.databaseIdMatched,
-      environmentVariablePresent: true,
-      activeEnvVar: state.activeEnvVar,
-      errorCode: null,
-      errorStage: null,
-      timestamp,
-      message: formatFirebaseAdminErrorMessage(null),
-    };
-  } catch (err) {
-    const errorCode = classifyFirestoreError(err);
-    logFirebaseAdminEvent({
-      api: 'GET /api/health/firebase-admin',
-      errorStage: 'firestore_connectivity_check',
-      errorType: err instanceof Error ? err.name || 'Error' : typeof err,
-      errorCode,
-      message: err instanceof Error ? err.message : 'Firestore health check failed',
-      firestoreStatus: errorCode === 'DATABASE_PERMISSION_ERROR' ? 'permission_denied' : 'read_failed',
-    });
-    return {
-      adminInitialized: true,
-      projectIdMatched: state.projectIdMatched,
-      firestoreConnected: false,
-      databaseIdMatched: state.databaseIdMatched,
-      environmentVariablePresent: true,
-      activeEnvVar: state.activeEnvVar,
-      errorCode,
-      errorStage: 'firestore_connectivity_check',
-      timestamp,
-      message: formatFirebaseAdminErrorMessage(errorCode),
     };
   }
 }

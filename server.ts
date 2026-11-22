@@ -6,7 +6,11 @@ import { createExamApiHandlers } from './server/examApiHandlers.ts';
 import { createPublicExamLinkHandlers } from './server/publicExamLinkHandler.ts';
 import { createCurriculumImportHandlers } from './server/curriculumImportHandler.ts';
 import { handleSetAdminClaims } from './server/adminClaimsHandler.ts';
-import { checkFirebaseAdminHealth } from './server/firebaseAdmin.ts';
+import {
+  checkFirebaseAdminHealth,
+  getFirebaseEnvCheck,
+  sanitizeSensitiveLogText,
+} from './lib/firebase-admin.ts';
 import { hasServiceAccountConfigured, resolveServerFirebaseConfig } from './server/firebaseServerAuth.ts';
 
 const PORT = Number(process.env.PORT || 3000);
@@ -87,28 +91,54 @@ async function startServer() {
     };
 
   app.get('/api/health', (_req, res) => {
-    const cfg = resolveServerFirebaseConfig();
-    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    res.json({
-      ok: true,
-      projectId: cfg.projectId,
-      databaseId: cfg.databaseId,
-      adminConfigured: hasServiceAccountConfigured(),
-    });
+    try {
+      const cfg = resolveServerFirebaseConfig();
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.json({
+        ok: true,
+        projectId: cfg.projectId,
+        databaseId: cfg.databaseId,
+        adminConfigured: hasServiceAccountConfigured(),
+      });
+    } catch (err) {
+      const cfg = resolveServerFirebaseConfig();
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.status(200).json({
+        ok: false,
+        projectId: cfg.projectId,
+        databaseId: cfg.databaseId,
+        adminConfigured: false,
+        message: err instanceof Error ? sanitizeSensitiveLogText(err.message) : 'Health check error',
+      });
+    }
   });
 
   app.get('/api/health/firebase-admin', async (_req, res) => {
-    const health = await checkFirebaseAdminHealth();
-    const statusCode =
-      health.adminInitialized &&
-      health.projectIdMatched &&
-      health.firestoreConnected &&
-      health.databaseIdMatched
-        ? 200
-        : 503;
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.setHeader('Pragma', 'no-cache');
-    res.status(statusCode).json(health);
+    try {
+      const health = await checkFirebaseAdminHealth();
+      res.status(200).json(health);
+    } catch (err) {
+      const safeMsg =
+        err instanceof Error
+          ? sanitizeSensitiveLogText(err.message)
+          : 'Unexpected runtime error in /api/health/firebase-admin';
+      res.status(200).json({
+        status: 'CONFIGURATION_ERROR',
+        message: `Không thể khởi tạo hoặc kiểm tra Firebase Admin SDK: ${safeMsg}`,
+        envCheck: getFirebaseEnvCheck(),
+        adminInitialized: false,
+        projectIdMatched: false,
+        firestoreConnected: false,
+        databaseIdMatched: false,
+        environmentVariablePresent: false,
+        activeEnvVar: null,
+        errorCode: 'ADMIN_INIT_ERROR',
+        errorStage: 'express_health_catch',
+        timestamp: new Date().toISOString(),
+      });
+    }
   });
 
   app.all('/api/admin/set-claims', wrapExpress(handleSetAdminClaims));

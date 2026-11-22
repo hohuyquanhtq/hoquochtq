@@ -1,4 +1,4 @@
-import { ChemGrade, ChemTopic, CognitiveLevel, Question, QuestionType, SubjectItem } from '../types';
+import type { ChemGrade, ChemTopic, CognitiveLevel, Question, QuestionType, SubjectItem } from '../types/index.ts';
 
 export const DEFAULT_SUBJECT_ID = 'hoa_hoc';
 export const DEFAULT_SUBJECT_NAME = 'Hóa học';

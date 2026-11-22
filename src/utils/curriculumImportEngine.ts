@@ -4,11 +4,11 @@ import type {
   CurriculumLesson,
   CurriculumStatus,
   SubjectItem,
-} from '../types';
+} from '../types/index.ts';
 import {
   DEFAULT_GDPT_2018_SUBJECTS,
   TEXTBOOK_SERIES_OPTIONS,
-} from '../constants/subjects';
+} from '../constants/subjects.ts';
 
 export interface CurriculumImportRawRow {
   rowNumber: number;
