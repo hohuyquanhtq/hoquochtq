@@ -245,7 +245,14 @@ export const Header: React.FC<HeaderProps> = ({
               {APP_CONFIG.APP_AUTHOR}
             </span>
             <span className="text-[13px] font-semibold text-teal-700 whitespace-nowrap">
-              THPT chuyên Nguyễn Bỉnh Khiêm · Tổ Hóa học
+              THPT chuyên Nguyễn Bỉnh Khiêm · Hỗ trợ kĩ thuật:{' '}
+              <a
+                href="tel:0814211334"
+                className="underline decoration-teal-500/60 underline-offset-2 hover:text-teal-900 transition-colors"
+                title="Gọi hỗ trợ kĩ thuật"
+              >
+                0814.211.334
+              </a>
             </span>
           </div>
 
@@ -311,9 +318,18 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Mobile Author Strip (< md) */}
-      <div className="md:hidden bg-slate-50 border-t border-slate-200 px-4 py-1.5 flex items-center justify-between gap-3">
-        <span className="text-[14px] font-bold text-slate-900 truncate">{APP_CONFIG.APP_AUTHOR}</span>
-        <span className="text-[13px] font-semibold text-teal-700 truncate">THPT chuyên NBK · Tổ Hóa học</span>
+      <div className="md:hidden bg-slate-50 border-t border-slate-200 px-4 py-1.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-0.5 sm:gap-3">
+        <span className="text-[14px] font-bold text-slate-900">{APP_CONFIG.APP_AUTHOR}</span>
+        <span className="text-[12.5px] font-semibold text-teal-700 leading-snug">
+          THPT chuyên Nguyễn Bỉnh Khiêm · Hỗ trợ kĩ thuật:{' '}
+          <a
+            href="tel:0814211334"
+            className="underline decoration-teal-500/60 underline-offset-2 hover:text-teal-900 transition-colors whitespace-nowrap"
+            title="Gọi hỗ trợ kĩ thuật"
+          >
+            0814.211.334
+          </a>
+        </span>
       </div>
 
       {/* Profile & Change Password Modal */}
