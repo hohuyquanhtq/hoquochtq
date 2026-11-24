@@ -129,7 +129,7 @@ const DOUBLE_ESCAPED_CMD_REGEX = new RegExp(
 
 // Strong LaTeX commands that indicate an unwrapped math/chemistry expression when found outside delimiters
 const UNWRAPPED_LATEX_TRIGGER_REGEX =
-  /\\(?:frac|dfrac|tfrac|cfrac|sqrt|xrightarrow|xleftarrow|xleftrightarrow|xrightleftharpoons|xrightleftarrows|xlongequal|xRightarrow|xLeftarrow|xLeftrightarrow|rightarrow|leftarrow|leftrightarrow|rightleftharpoons|rightleftarrows|cdot|times|div|pm|quad|qquad|left|right|text|mathrm|mathbf|overline|underline|sum|prod|int|lim|ce|pu|begin)\b|[A-Za-z0-9\)\]]\s*(?:_\{[^}\n]+\}|\^\{[^}\n]+\})/;
+  /\\(?:frac|dfrac|tfrac|cfrac|sqrt|xrightarrow|xleftarrow|xleftrightarrow|xrightleftharpoons|xrightleftarrows|xlongequal|xRightarrow|xLeftarrow|xLeftrightarrow|rightarrow|leftarrow|leftrightarrow|rightleftharpoons|rightleftarrows|cdot|times|div|pm|quad|qquad|left|right|text|mathrm|mathbf|operatorname|overline|underline|sum|prod|int|lim|limsup|liminf|log|ln|lg|sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|coth|exp|ce|pu|begin)\b|[A-Za-z0-9\)\]]\s*(?:_\{[^}\n]+\}|\^\{[^}\n]+\})/;
 
 const KNOWN_TEXT_MACRO_PREFIXES = /^\\(?:text|mathrm|mathbf|operatorname)\{/;
 

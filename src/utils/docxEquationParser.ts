@@ -70,6 +70,8 @@ const ARROW_TO_KATEX: Record<string, string> = {
 
 const KNOWN_MATH_FUNCTIONS = new Set([
   'lim',
+  'limsup',
+  'liminf',
   'sin',
   'cos',
   'tan',
@@ -96,8 +98,13 @@ const KNOWN_MATH_FUNCTIONS = new Set([
   'gcd',
   'arg',
   'deg',
+  'ker',
+  'hom',
   'Pr',
 ]);
+
+const CRITICAL_MATH_OPERATOR_REGEX =
+  /\b(arcsin|arccos|arctan|limsup|liminf|sinh|cosh|tanh|coth|log|ln|lg|sin|cos|tan|cot|sec|csc|lim|exp|det|max|min|sup|inf)\b/gi;
 
 // Map common Symbol/Wingdings font PUA codes used by legacy MS Word files
 const SYMBOL_FONT_MAP: Record<number, string> = {
@@ -1021,6 +1028,8 @@ function convertOmmlParaElement(el: Element, ctx: OmmlContext): string {
 
 function convertOmmlElement(el: Element, ctx: OmmlContext): string {
   const loc = getLocalName(el);
+  let result = '';
+
   if (loc === 'omath') {
     // Check if <m:brk/> splits this single <m:oMath> into multiple lines
     const children = getDirectElements(el);
@@ -1033,18 +1042,64 @@ function convertOmmlElement(el: Element, ctx: OmmlContext): string {
           if (currentLine.trim()) lines.push(currentLine.trim());
           currentLine = '';
         } else {
-          currentLine += convertOmmlNode(ch, ctx);
+          currentLine = concatMathPieces(currentLine, convertOmmlNode(ch, ctx));
         }
       }
       if (currentLine.trim()) lines.push(currentLine.trim());
       if (lines.length > 1) {
-        return `\\begin{aligned} ${lines.join(' \\\\ ')} \\end{aligned}`;
+        result = `\\begin{aligned} ${lines.join(' \\\\ ')} \\end{aligned}`;
+      } else {
+        result = lines[0] || '';
       }
-      return lines[0] || '';
+    } else {
+      result = convertOmmlSequence(el, ctx);
     }
-    return convertOmmlSequence(el, ctx);
+
+    // Fallback integrity guard: ensure <m:t> runs (especially math functions/operators) are never silently swallowed
+    return applyOmmlFallbackGuard(el, result, ctx);
   }
-  return convertOmmlNode(el, ctx);
+
+  result = convertOmmlNode(el, ctx);
+  return applyOmmlFallbackGuard(el, result, ctx);
+}
+
+/**
+ * Fallback integrity guard for <m:oMath>:
+ * 1. If structured OMML conversion produces empty text while <m:t> runs exist, extract all <m:t> text runs.
+ * 2. If a critical math operator present in raw <m:t> runs (e.g. log, ln, sin, cos, lim) completely
+ *    disappeared from the converted LaTeX, record a warning and fall back to raw <m:t> text runs.
+ */
+function applyOmmlFallbackGuard(el: Element, convertedLatex: string, ctx: OmmlContext): string {
+  const rawRunsText = extractAllDescendantMathText(el).trim();
+  if (!rawRunsText) return convertedLatex;
+
+  const trimmedLatex = convertedLatex.trim();
+  if (!trimmedLatex) {
+    ctx.warnings.push({
+      tagName: el.nodeName || 'm:oMath',
+      message: 'Không bóc tách trực tiếp được cấu trúc công thức — đã dùng chế độ Fallback trích xuất toàn bộ chuỗi ký tự m:t.',
+      rawXml: serializeXmlNode(el).slice(0, 600),
+      blockSnippet: ctx.blockContext,
+    });
+    return cleanMathText(rawRunsText);
+  }
+
+  const rawOps = rawRunsText.match(CRITICAL_MATH_OPERATOR_REGEX);
+  if (rawOps && rawOps.length > 0) {
+    const lowerLatex = trimmedLatex.toLowerCase();
+    const missingOp = rawOps.find(op => !lowerLatex.includes(op.toLowerCase()));
+    if (missingOp) {
+      ctx.warnings.push({
+        tagName: el.nodeName || 'm:oMath',
+        message: `Phát hiện toán tử "${missingOp}" bị thiếu sau khi chuyển đổi OMML — đã kích hoạt Fallback bảo toàn ký tự từ các thẻ m:t.`,
+        rawXml: serializeXmlNode(el).slice(0, 600),
+        blockSnippet: ctx.blockContext,
+      });
+      return cleanMathText(rawRunsText);
+    }
+  }
+
+  return convertedLatex;
 }
 
 function convertOmmlSequence(container: Element, ctx: OmmlContext): string {
@@ -1103,9 +1158,9 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
     case 'omathparapr':
       return '';
 
-    // 1. Math Run (<m:r>)
+    // 1. Math Run (<m:r>) & embedded Word Run (<w:r>)
     case 'r':
-      return convertMathRun(el);
+      return getNodePrefix(el) === 'w' ? convertWordRunInsideMath(el) : convertMathRun(el);
 
     // 2. Container nodes (<m:e>, <m:num>, <m:den>, <m:sub>, <m:sup>, <m:deg>, <m:lim>, <m:fname>, <m:box>)
     case 'e':
@@ -1154,29 +1209,37 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
       return `\\frac{${numRaw || '\\,'}}{${denRaw || '\\,'}}`;
     }
 
-    // 4. Subscripts (<m:sSub>)
+    // 4. Subscripts (<m:sSub>) — preserves math function operators cleanly (e.g. \log_{3}, \lim_{x \to 0})
     case 'ssub': {
       const baseEl = getDirectChildByLocal(el, 'e');
       const subEl = getDirectChildByLocal(el, 'sub');
       const base = baseEl ? convertOmmlSequence(baseEl, ctx) : '';
       const sub = subEl ? convertOmmlSequence(subEl, ctx).trim() : '';
-      if (!sub) return base;
+      const normalizedOp = normalizeMathOperatorBase(base);
+      if (!sub) return normalizedOp || base;
+      if (normalizedOp) {
+        return `${normalizedOp}_{${sub}}`;
+      }
       const wrappedBase = base.trim() ? `{${base.trimEnd()}}` : '{}';
       return `${wrappedBase}_{${sub}}`;
     }
 
-    // 5. Superscripts (<m:sSup>)
+    // 5. Superscripts (<m:sSup>) — preserves math function powers cleanly (e.g. \sin^{2}, \cos^{2})
     case 'ssup': {
       const baseEl = getDirectChildByLocal(el, 'e');
       const supEl = getDirectChildByLocal(el, 'sup');
       const base = baseEl ? convertOmmlSequence(baseEl, ctx) : '';
       const sup = supEl ? convertOmmlSequence(supEl, ctx).trim() : '';
-      if (!sup) return base;
+      const normalizedOp = normalizeMathOperatorBase(base);
+      if (!sup) return normalizedOp || base;
+      if (normalizedOp) {
+        return `${normalizedOp}^{${sup}}`;
+      }
       const wrappedBase = base.trim() ? `{${base.trimEnd()}}` : '{}';
       return `${wrappedBase}^{${sup}}`;
     }
 
-    // 6. Subscript-Superscript (<m:sSubSup>)
+    // 6. Subscript-Superscript (<m:sSubSup>) — e.g. \log_{3}^{2}
     case 'ssubsup': {
       const baseEl = getDirectChildByLocal(el, 'e');
       const subEl = getDirectChildByLocal(el, 'sub');
@@ -1184,12 +1247,13 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
       const base = baseEl ? convertOmmlSequence(baseEl, ctx) : '';
       const sub = subEl ? convertOmmlSequence(subEl, ctx).trim() : '';
       const sup = supEl ? convertOmmlSequence(supEl, ctx).trim() : '';
-      const wrappedBase = base.trim() ? `{${base.trimEnd()}}` : '{}';
+      const normalizedOp = normalizeMathOperatorBase(base);
+      const wrappedBase = normalizedOp || (base.trim() ? `{${base.trimEnd()}}` : '{}');
 
       if (sub && sup) return `${wrappedBase}_{${sub}}^{${sup}}`;
       if (sub) return `${wrappedBase}_{${sub}}`;
       if (sup) return `${wrappedBase}^{${sup}}`;
-      return base;
+      return normalizedOp || base;
     }
 
     // 7. Pre-Subscript-Superscript (<m:sPre>) e.g. isotopes ^{14}_{6}C
@@ -1278,18 +1342,23 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
       return `${opLatex}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''}${base ? `{${base}}` : ''}`;
     }
 
-    // 11. Functions (<m:func>)
+    // 11. Functions (<m:func>) — supports plain names AND nested m:sSub / m:sSup / m:sSubSup / m:limLow inside m:fName
     case 'func': {
       const fNameEl = getDirectChildByLocal(el, 'fname');
       const baseEl = getDirectChildByLocal(el, 'e');
-      const rawName = fNameEl ? extractPlainMathName(fNameEl) : '';
-      const fLatex = KNOWN_MATH_FUNCTIONS.has(rawName)
-        ? `\\${rawName}`
-        : rawName
-        ? `\\operatorname{${rawName}}`
-        : '';
-      const base = baseEl ? convertOmmlSequence(baseEl, ctx).trim() : '';
-      return `${fLatex} ${base ? `{${base}}` : ''}`.trim();
+      const fLatex = fNameEl ? convertFuncNameElement(fNameEl, ctx).trim() : '';
+      let base = baseEl ? convertOmmlSequence(baseEl, ctx).trim() : '';
+      if (!base && baseEl) {
+        const fallbackBase = extractAllDescendantMathText(baseEl).trim();
+        if (fallbackBase) base = cleanMathText(fallbackBase).trim();
+      }
+      if (!fLatex) return base;
+      if (!base) return fLatex;
+      // When argument starts with a delimiter (\left(, (, [, \{, |), attach directly so delimiter never obscures operator
+      if (/^(?:\\left|\(|\[|\\\{|\|)/.test(base)) {
+        return `${fLatex}${base}`;
+      }
+      return `${fLatex} ${base}`;
     }
 
     // 12. Upper & Lower Limits (<m:limUpp>, <m:limLow>) — handles stacked arrow conditions!
@@ -1394,17 +1463,13 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
     case 'omathpara':
       return convertOmmlParaElement(el, ctx);
 
-    // 20. Embedded Word runs inside OMML (<w:r>)
-    case 'r':
+    // 20. Direct text node inside OMML (<m:t> / <w:t>)
     case 't': {
-      if (getNodePrefix(el) === 'w') {
-        return convertWordRunInsideMath(el);
-      }
-      return convertOmmlSequence(el, ctx);
+      return cleanMathText(el.textContent || '');
     }
 
     default: {
-      // Unsupported OMML construct: preserve raw XML warning AND extract readable inner content
+      // Unsupported OMML construct: preserve raw XML warning AND extract readable inner content (with m:t fallback)
       const prefix = getNodePrefix(el);
       if (prefix === 'm') {
         ctx.warnings.push({
@@ -1414,7 +1479,10 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
           blockSnippet: ctx.blockContext,
         });
       }
-      return convertOmmlSequence(el, ctx);
+      const seq = convertOmmlSequence(el, ctx);
+      if (seq.trim()) return seq;
+      const fallbackText = extractAllDescendantMathText(el).trim();
+      return fallbackText ? cleanMathText(fallbackText) : '';
     }
   }
 }
@@ -1484,10 +1552,16 @@ function convertStackedLimitElement(el: Element, ctx: OmmlContext): string {
     }
   }
 
-  // Standard limit operator like lim, max, min
-  if (/^(?:\\)?(?:lim|max|min|sup|inf|limsup|liminf)$/i.test(baseLatex) && lowerStr && !upperStr) {
-    const fn = baseLatex.startsWith('\\') ? baseLatex : `\\${baseLatex}`;
-    return `${fn}_{${lowerStr}}`;
+  // Standard math operators with lower/upper limits (e.g., \lim_{x \to 0}, \log_{3}, \max_{x}, \min_{x})
+  const normalizedOp = normalizeMathOperatorBase(baseLatex);
+  if (normalizedOp && (lowerStr || upperStr)) {
+    if (lowerStr && upperStr) {
+      return `${normalizedOp}_{${lowerStr}}^{${upperStr}}`;
+    }
+    if (lowerStr) {
+      return `${normalizedOp}_{${lowerStr}}`;
+    }
+    return `${normalizedOp}^{${upperStr}}`;
   }
 
   // Generic stacked overset / underset
@@ -1553,6 +1627,131 @@ function convertWordRunInsideMath(el: Element): string {
     txt += tEl.textContent || '';
   }
   return cleanMathText(txt);
+}
+
+/**
+ * Normalizes a LaTeX base string representing a known math function/operator
+ * (e.g. "log", "\text{log}", "{\text{log}}", "\mathrm{sin}", "\lim") into canonical LaTeX ("\log", "\sin", "\lim").
+ * Returns null for non-operator bases (such as chemical elements "H", "Fe", variables "x") so chemistry stays untouched.
+ */
+function normalizeMathOperatorBase(rawLatex: string): string | null {
+  let candidate = (rawLatex || '').trim();
+  if (!candidate) return null;
+
+  // Unwrap redundant outer braces and \text{...} / \mathrm{...} / \operatorname{...}
+  let prev = '';
+  while (candidate !== prev) {
+    prev = candidate;
+    if (candidate.startsWith('{') && candidate.endsWith('}')) {
+      candidate = candidate.slice(1, -1).trim();
+    }
+    const wrapperMatch = candidate.match(/^\\(?:text|mathrm|operatorname|mathbf)\{([^{}]+)\}$/);
+    if (wrapperMatch) {
+      candidate = wrapperMatch[1].trim();
+    }
+  }
+
+  const stripped = candidate.startsWith('\\') ? candidate.slice(1).trim() : candidate;
+  if (!stripped) return null;
+
+  if (KNOWN_MATH_FUNCTIONS.has(stripped)) {
+    return `\\${stripped}`;
+  }
+  const lower = stripped.toLowerCase();
+  if (KNOWN_MATH_FUNCTIONS.has(lower) && lower !== 'pr') {
+    return `\\${lower}`;
+  }
+  return null;
+}
+
+/**
+ * Converts <m:fName> inside <m:func>, supporting both:
+ * - Plain function names (<m:r><m:t>log</m:t></m:r>, sin, cos, ln, lim, f)
+ * - Structured function names containing <m:sSub> (\log_{3}), <m:sSup> (\sin^{2}),
+ *   <m:sSubSup> (\log_{3}^{2}), <m:limLow> (\lim_{x \to 0}, \log_{3}), <m:box>, <m:acc>, etc.
+ * - Fallback to extracting all descendant <m:t> / <w:t> runs if structured conversion returns empty.
+ */
+function convertFuncNameElement(fNameEl: Element, ctx: OmmlContext): string {
+  const meaningfulChildren = getDirectElements(fNameEl).filter(
+    ch => !['ctrlpr', 'argpr', 'rpr', 'funcpr'].includes(getLocalName(ch))
+  );
+
+  if (meaningfulChildren.length === 0) {
+    const rawFallback = extractAllDescendantMathText(fNameEl).trim();
+    if (!rawFallback) return '';
+    return normalizeMathOperatorBase(rawFallback) || cleanMathText(rawFallback);
+  }
+
+  const hasOnlyPlainRuns = meaningfulChildren.every(ch => {
+    const loc = getLocalName(ch);
+    return loc === 'r' || loc === 't';
+  });
+
+  if (hasOnlyPlainRuns) {
+    const rawName = extractPlainMathName(fNameEl);
+    if (rawName) {
+      const canonical = normalizeMathOperatorBase(rawName);
+      if (canonical) return canonical;
+      if (/^[A-Za-z]$/.test(rawName)) return rawName;
+      if (/^[A-Za-z]+$/.test(rawName)) return `\\operatorname{${rawName}}`;
+    }
+  }
+
+  // Recursive OMML conversion for structured <m:fName> (e.g. <m:sSub>, <m:sSup>, <m:sSubSup>, <m:limLow>, <m:box>)
+  const converted = convertOmmlSequence(fNameEl, ctx).trim();
+  if (converted) {
+    const canonical = normalizeMathOperatorBase(converted);
+    return canonical || converted;
+  }
+
+  // Final safety fallback: never drop function name characters
+  const fallbackText = extractAllDescendantMathText(fNameEl).trim();
+  if (!fallbackText) return '';
+  return normalizeMathOperatorBase(fallbackText) || cleanMathText(fallbackText);
+}
+
+/**
+ * Recursively collects all text runs inside <m:t> / <w:t> (and <m:sym>/<w:sym>) within an OMML subtree,
+ * skipping property elements (*Pr). Used as a zero-loss fallback.
+ */
+function extractAllDescendantMathText(el: Element): string {
+  let out = '';
+  const visit = (node: Element) => {
+    const loc = getLocalName(node);
+    if (loc.endsWith('pr')) return;
+    if (loc === 't') {
+      out += node.textContent || '';
+      return;
+    }
+    if (loc === 'sym') {
+      const hexAttr = getAttr(node, 'char');
+      if (hexAttr) {
+        const code = parseInt(hexAttr, 16);
+        if (!isNaN(code)) {
+          out += SYMBOL_FONT_MAP[code] || String.fromCharCode(code);
+        }
+      }
+      return;
+    }
+    if (loc === 'd') {
+      const dPr = getDirectChildByLocal(node, 'dpr');
+      const begEl = dPr ? getDirectChildByLocal(dPr, 'begchr') : null;
+      const endEl = dPr ? getDirectChildByLocal(dPr, 'endchr') : null;
+      const begChr = begEl ? getAttr(begEl, 'val') ?? '(' : '(';
+      const endChr = endEl ? getAttr(endEl, 'val') ?? ')' : ')';
+      out += begChr;
+      for (const ch of getDirectElements(node)) {
+        if (getLocalName(ch) !== 'dpr') visit(ch);
+      }
+      out += endChr;
+      return;
+    }
+    for (const ch of getDirectElements(node)) {
+      visit(ch);
+    }
+  };
+  visit(el);
+  return out;
 }
 
 function extractPlainMathName(el: Element): string {
