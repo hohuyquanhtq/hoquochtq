@@ -47,8 +47,9 @@ const TAB_TITLES: Record<string, string> = {
   class_manager: 'Lớp học & Học sinh',
   user_guide: 'Hướng dẫn sử dụng',
   system_settings: 'Cài đặt hệ thống',
-  admin_dashboard: 'Tổng quan Quản trị hệ thống',
+  admin_dashboard: 'Tổng quan Quản trị Hệ thống',
   admin_users: 'Quản lý tài khoản & Học sinh',
+  admin_curriculum: 'Danh mục bài học SGK',
 };
 
 export const Header: React.FC<HeaderProps> = ({
@@ -164,17 +165,23 @@ export const Header: React.FC<HeaderProps> = ({
       : 'dashboard';
 
   const resolvedTitle = pageTitle || TAB_TITLES[activeTab] || 'QUIZ PRO';
+  const roleBadgeLabel =
+    currentUser?.role === 'admin'
+      ? 'Super Admin'
+      : currentUser?.role === 'teacher'
+      ? 'Giáo viên'
+      : 'Học sinh';
 
   return (
-    <header className="shrink-0 z-30 bg-white border-b border-slate-200">
+    <header className="shrink-0 sticky top-0 z-40 bg-white border-b border-slate-200/80">
       <div
         className={
           workspaceMode
-            ? 'min-h-[70px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 sm:gap-6'
-            : 'max-w-7xl mx-auto min-h-[70px] px-4 sm:px-6 lg:px-8 flex items-center justify-between gap-4 sm:gap-6'
+            ? 'px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between gap-4 sm:gap-6'
+            : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex items-center justify-between gap-4 sm:gap-6'
         }
       >
-        {/* Left: Workspace Page Title + Mobile Menu Trigger OR Guest/Student Brand */}
+        {/* Left: Full Page Title (no truncation) OR Guest/Student Brand */}
         {workspaceMode ? (
           <div className="flex items-center gap-3 min-w-0">
             {onOpenMobileMenu && (
@@ -182,23 +189,14 @@ export const Header: React.FC<HeaderProps> = ({
                 type="button"
                 onClick={onOpenMobileMenu}
                 aria-label="Mở menu điều hướng"
-                className="lg:hidden min-h-[44px] min-w-[44px] flex items-center justify-center rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 shrink-0 transition-colors"
+                className="lg:hidden min-h-[40px] min-w-[40px] flex items-center justify-center rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 shrink-0 transition-colors"
               >
                 <Menu className="w-5 h-5" />
               </button>
             )}
-            <div className="min-w-0">
-              <h2 className="text-lg sm:text-[22px] font-bold text-slate-900 tracking-tight truncate">
-                {resolvedTitle}
-              </h2>
-              {currentUser && (
-                <p className="text-[13px] text-slate-500 truncate hidden sm:flex items-center gap-1.5">
-                  <span>{currentUser.role === 'admin' ? 'Quản trị viên' : 'Giáo viên'}</span>
-                  <span aria-hidden="true">·</span>
-                  <span className="font-medium text-slate-700 truncate">{currentUser.name}</span>
-                </p>
-              )}
-            </div>
+            <h2 className="text-base sm:text-xl font-bold text-slate-900 tracking-tight leading-snug">
+              {resolvedTitle}
+            </h2>
           </div>
         ) : (
           <div className="flex items-center gap-4 min-w-0">
@@ -207,14 +205,14 @@ export const Header: React.FC<HeaderProps> = ({
               onClick={() => setActiveTab(homeTab)}
               className="flex items-center gap-3 text-left group focus:outline-none shrink-0"
             >
-              <div className="w-10 h-10 rounded-xl bg-teal-600 flex items-center justify-center text-white shadow-xs group-hover:bg-teal-700 transition-colors">
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 flex items-center justify-center text-white shadow-xs group-hover:bg-emerald-700 transition-colors">
                 <FlaskConical className="w-5 h-5" />
               </div>
               <div className="min-w-0">
                 <span className="font-extrabold text-xl tracking-tight text-slate-900 whitespace-nowrap block">
-                  QUIZ <span className="text-teal-700">PRO</span>
+                  QUIZ <span className="text-emerald-700">PRO</span>
                 </span>
-                <p className="text-[13px] text-slate-500 font-medium hidden sm:block truncate">
+                <p className="text-xs text-slate-500 font-medium hidden sm:block">
                   {APP_CONFIG.APP_NAME} · {APP_CONFIG.APP_DESCRIPTION}
                 </p>
               </div>
@@ -224,9 +222,9 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('student_home')}
-                className={`hidden md:inline-flex items-center gap-2 px-4 min-h-[42px] rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 ${
+                className={`hidden md:inline-flex items-center gap-2 px-4 min-h-[40px] rounded-xl text-sm font-semibold transition-colors whitespace-nowrap shrink-0 ${
                   activeTab === 'student_home'
-                    ? 'bg-teal-50 text-teal-800 border border-teal-200'
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
                     : 'text-slate-600 hover:bg-slate-100'
                 }`}
               >
@@ -237,33 +235,34 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
         )}
 
-        {/* Right: Prominent Author Identity + Account Controls */}
-        <div className="flex items-center gap-3 sm:gap-4 shrink-0">
-          {/* Author Identity & Unit (Large, crisp typography on >= md) */}
-          <div className="hidden md:flex flex-col items-end text-right leading-snug pr-3 border-r border-slate-200">
-            <span className="text-[19px] font-bold text-slate-900 tracking-tight whitespace-nowrap">
-              {APP_CONFIG.APP_AUTHOR}
-            </span>
-            <span className="text-[13px] font-semibold text-teal-700 whitespace-nowrap">
-              THPT chuyên Nguyễn Bỉnh Khiêm · Hỗ trợ kĩ thuật:{' '}
-              <a
-                href="tel:0814211334"
-                className="underline decoration-teal-500/60 underline-offset-2 hover:text-teal-900 transition-colors"
-                title="Gọi hỗ trợ kĩ thuật"
-              >
-                0814.211.334
-              </a>
-            </span>
-          </div>
+        {/* Right: Unified Profile Block + Clean Account Controls */}
+        <div className="flex items-center gap-3 shrink-0">
+          {!workspaceMode && (
+            <div className="hidden md:flex flex-col items-end text-right leading-snug pr-3 border-r border-slate-200">
+              <span className="text-sm font-semibold text-slate-800 whitespace-nowrap">
+                {APP_CONFIG.APP_AUTHOR}
+              </span>
+              <span className="text-xs text-slate-500 whitespace-nowrap">
+                THPT chuyên Nguyễn Bỉnh Khiêm · Hotline/Zalo:{' '}
+                <a
+                  href="tel:0814211334"
+                  className="font-medium text-emerald-700 hover:text-emerald-800 hover:underline underline-offset-2 transition-colors"
+                  title="Gọi hỗ trợ kỹ thuật"
+                >
+                  0814.211.334
+                </a>
+              </span>
+            </div>
+          )}
 
           {!workspaceMode && (
             <button
               type="button"
               onClick={onOpenSystemDocs}
               title="Hồ sơ kiến trúc hệ thống"
-              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 min-h-[42px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-semibold transition-colors whitespace-nowrap shrink-0"
+              className="hidden sm:inline-flex items-center gap-1.5 px-3.5 min-h-[40px] rounded-xl border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-sm font-medium transition-colors whitespace-nowrap shrink-0"
             >
-              <Code className="w-4 h-4 text-teal-600 shrink-0" />
+              <Code className="w-4 h-4 text-emerald-600 shrink-0" />
               <span className="hidden lg:inline">Kiến trúc</span>
             </button>
           )}
@@ -272,20 +271,73 @@ export const Header: React.FC<HeaderProps> = ({
             <button
               type="button"
               onClick={onRequestAuth}
-              className="px-4 min-h-[44px] rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-[15px] font-semibold shadow-xs flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+              className="px-4 min-h-[40px] rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
             >
               <LogIn className="w-4 h-4 shrink-0" />
               <span>Đăng nhập</span>
             </button>
+          ) : workspaceMode ? (
+            <div className="flex items-center gap-3">
+              {/* Single Consolidated Profile Summary (Name + Super Admin badge + School/Hotline subline) */}
+              <div className="hidden md:flex flex-col items-end text-right leading-tight">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-slate-800 whitespace-nowrap">
+                    {currentUser.name || currentUser.email}
+                  </span>
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[11px] font-semibold whitespace-nowrap">
+                    {currentUser.role === 'admin' && <ShieldCheck className="w-3 h-3 shrink-0" />}
+                    <span>{roleBadgeLabel}</span>
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-0.5 whitespace-nowrap">
+                  THPT chuyên Nguyễn Bỉnh Khiêm · Hotline/Zalo:{' '}
+                  <a
+                    href="tel:0814211334"
+                    className="font-medium text-slate-600 hover:text-emerald-700 hover:underline underline-offset-2 transition-colors"
+                    title="Gọi hỗ trợ kỹ thuật"
+                  >
+                    0814.211.334
+                  </a>
+                </p>
+              </div>
+
+              <div className="hidden md:block h-7 w-px bg-slate-200" aria-hidden="true" />
+
+              {/* Compact Account Actions: Edit Profile Icon + Subtle Logout */}
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={handleOpenProfile}
+                  title="Chỉnh sửa hồ sơ cá nhân & Đổi mật khẩu"
+                  aria-label="Chỉnh sửa hồ sơ cá nhân"
+                  className="w-9 h-9 rounded-lg border border-slate-200/90 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-600 hover:text-slate-900 flex items-center justify-center transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
+                >
+                  <Edit2 className="w-4 h-4" />
+                </button>
+
+                {onLogout && (
+                  <button
+                    type="button"
+                    onClick={() => void onLogout()}
+                    title="Đăng xuất khỏi tài khoản"
+                    aria-label="Đăng xuất"
+                    className="h-9 px-3 rounded-lg border border-slate-200/90 bg-white hover:bg-rose-50 hover:border-rose-200 text-slate-600 hover:text-rose-600 text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/30"
+                  >
+                    <LogOut className="w-4 h-4 shrink-0" />
+                    <span className="hidden sm:inline">Đăng xuất</span>
+                  </button>
+                )}
+              </div>
+            </div>
           ) : (
             <div className="flex items-center gap-2">
               <button
                 type="button"
                 onClick={handleOpenProfile}
                 title="Hồ sơ cá nhân & Đổi mật khẩu"
-                className="flex items-center gap-2 px-3 min-h-[44px] rounded-xl border border-slate-200 hover:border-teal-300 hover:bg-teal-50/40 transition-colors text-left group shrink-0"
+                className="flex items-center gap-2 px-3 h-10 rounded-xl border border-slate-200 hover:border-emerald-300 hover:bg-emerald-50/40 transition-colors text-left group shrink-0"
               >
-                <div className="w-7 h-7 rounded-lg bg-teal-100 text-teal-800 flex items-center justify-center shrink-0">
+                <div className="w-7 h-7 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
                   {currentUser.role === 'admin' ? (
                     <ShieldCheck className="w-4 h-4" />
                   ) : currentUser.role === 'student' ? (
@@ -294,10 +346,10 @@ export const Header: React.FC<HeaderProps> = ({
                     <UserCircle2 className="w-4 h-4" />
                   )}
                 </div>
-                <span className="hidden sm:inline text-sm font-semibold text-slate-800 max-w-[130px] truncate whitespace-nowrap">
+                <span className="hidden sm:inline text-sm font-semibold text-slate-800 max-w-[140px] truncate whitespace-nowrap">
                   {currentUser.name || currentUser.email}
                 </span>
-                <Edit2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-teal-700 shrink-0" />
+                <Edit2 className="w-3.5 h-3.5 text-slate-400 group-hover:text-emerald-700 shrink-0" />
               </button>
 
               {onLogout && (
@@ -306,7 +358,7 @@ export const Header: React.FC<HeaderProps> = ({
                   onClick={() => void onLogout()}
                   title="Đăng xuất khỏi tài khoản"
                   aria-label="Đăng xuất"
-                  className="px-3.5 min-h-[44px] rounded-xl border border-slate-200 hover:border-rose-200 hover:bg-rose-50 text-slate-700 hover:text-rose-700 text-sm font-semibold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
+                  className="h-10 px-3 rounded-xl border border-slate-200 hover:border-rose-200 hover:bg-rose-50 text-slate-600 hover:text-rose-600 text-sm font-medium flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0"
                 >
                   <LogOut className="w-4 h-4 shrink-0" />
                   <span className="hidden sm:inline">Đăng xuất</span>
@@ -317,15 +369,23 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Mobile Author Strip (< md) */}
-      <div className="md:hidden bg-slate-50 border-t border-slate-200 px-4 py-1.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-0.5 sm:gap-3">
-        <span className="text-[14px] font-bold text-slate-900">{APP_CONFIG.APP_AUTHOR}</span>
-        <span className="text-[12.5px] font-semibold text-teal-700 leading-snug">
-          THPT chuyên Nguyễn Bỉnh Khiêm · Hỗ trợ kĩ thuật:{' '}
+      {/* Mobile Compact Profile & Hotline Strip (< md) */}
+      <div className="md:hidden bg-slate-50/90 border-t border-slate-200/80 px-4 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-semibold text-slate-800 truncate">
+            {currentUser?.name || APP_CONFIG.APP_AUTHOR}
+          </span>
+          {currentUser && (
+            <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200/80 text-[11px] font-semibold whitespace-nowrap">
+              {roleBadgeLabel}
+            </span>
+          )}
+        </div>
+        <span className="text-xs text-slate-500">
+          THPT chuyên Nguyễn Bỉnh Khiêm ·{' '}
           <a
             href="tel:0814211334"
-            className="underline decoration-teal-500/60 underline-offset-2 hover:text-teal-900 transition-colors whitespace-nowrap"
-            title="Gọi hỗ trợ kĩ thuật"
+            className="font-medium text-emerald-700 hover:underline underline-offset-2 whitespace-nowrap"
           >
             0814.211.334
           </a>
