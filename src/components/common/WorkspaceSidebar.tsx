@@ -16,6 +16,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Shuffle,
+  Library,
 } from 'lucide-react';
 import { APP_CONFIG } from '../../constants/brand';
 import { UserRole } from '../../types';
@@ -97,6 +98,12 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
           label: 'Ngân hàng câu hỏi',
           matchTabs: ['question_bank'],
           icon: Database,
+        },
+        {
+          id: 'city_exam_bank',
+          label: 'Kho đề Thành phố',
+          matchTabs: ['city_exam_bank'],
+          icon: Library,
         },
         ...(userRole === 'admin'
           ? [

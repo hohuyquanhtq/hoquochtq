@@ -21,8 +21,20 @@ import {
   Phone,
   Hash,
   Play,
+  Download,
+  BookOpen,
+  Building2,
+  X,
 } from 'lucide-react';
 import { APP_CONFIG } from '../../constants/brand';
+import {
+  DANANG_HIGH_SCHOOLS,
+  DEFAULT_TEACHER_DEPARTMENTS,
+  PILOT_GROUP_META,
+  resolvePilotGroup,
+} from '../../constants/danangSchools';
+import { downloadStandardChemistryWordTemplate } from '../../services/sampleWordTemplateService';
+import { ChemRenderer } from '../../utils/chemRenderer';
 import { useAuth } from '../../contexts/AuthContext';
 import { auth } from '../../services/firebase';
 import {
@@ -79,7 +91,12 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   const [tConfirmPassword, setTConfirmPassword] = useState('');
   const [tPhone, setTPhone] = useState('');
   const [tSchool, setTSchool] = useState('');
+  const [tDepartment, setTDepartment] = useState('Tổ Hóa học');
   const [showTPass, setShowTPass] = useState(false);
+
+  // Pending teacher preview & Word sample download states
+  const [showPendingExamPreview, setShowPendingExamPreview] = useState(false);
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState(false);
 
   // Student register fields
   const [sName, setSName] = useState('');
@@ -306,32 +323,217 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   }
 
   if (authState === 'pending_approval') {
+    const pilotKey = resolvePilotGroup(userProfile);
+    const pilotMeta = PILOT_GROUP_META[pilotKey];
+
+    const handleDownloadWordSample = async () => {
+      setIsDownloadingTemplate(true);
+      try {
+        await downloadStandardChemistryWordTemplate();
+        setSuccessMsg('Đã tải file Word mẫu chuẩn GDPT 2018 (.docx) thành công.');
+      } catch (err) {
+        setErrorMsg(
+          err instanceof Error ? err.message : 'Không thể tạo file Word mẫu. Vui lòng thử lại.'
+        );
+      } finally {
+        setIsDownloadingTemplate(false);
+      }
+    };
+
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="bg-white border border-amber-200 rounded-3xl shadow-xl p-8 max-w-lg w-full space-y-5">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
-              <Clock className="w-6 h-6" />
-            </div>
-            <div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700">
-                TÀI KHOẢN GIÁO VIÊN CHỜ PHÊ DUYỆT
-              </span>
-              <h2 className="text-lg font-extrabold text-slate-900">
-                {userProfile?.name || firebaseUser?.email}
-              </h2>
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 py-8">
+        <div className="bg-white border border-amber-200 rounded-3xl shadow-xl p-6 sm:p-8 max-w-2xl w-full space-y-5">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                <Clock className="w-6 h-6" />
+              </div>
+              <div>
+                <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-amber-700">
+                  TRẠNG THÁI: CHỜ PHÊ DUYỆT (PENDING)
+                </span>
+                <h2 className="text-lg sm:text-xl font-extrabold text-slate-900 mt-0.5">
+                  Tài khoản đang chờ Super Admin phê duyệt tham gia thử nghiệm
+                </h2>
+              </div>
             </div>
           </div>
 
-          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5 leading-relaxed">
+          <div className="p-4 rounded-2xl bg-amber-50/90 border border-amber-200 text-xs text-amber-950 space-y-2 leading-relaxed">
             <p className="font-bold">
-              Đăng ký tài khoản Giáo viên đã được ghi nhận thành công trên {APP_CONFIG.APP_NAME}.
+              Xin chào Thầy/Cô {userProfile?.name || firebaseUser?.email} — hồ sơ đăng ký đã được ghi nhận trên hệ thống {APP_CONFIG.APP_NAME}.
             </p>
-            <p>
-              Hiện tại tài khoản (<strong>{userProfile?.email || firebaseUser?.email}</strong>) đang ở trạng thái{' '}
-              <span className="px-1.5 py-0.5 rounded bg-amber-200/80 font-bold">Chờ duyệt</span>. Vui lòng chờ Quản trị viên xác nhận kích hoạt trước khi truy cập không gian Giáo viên.
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 text-[11px]">
+              <div className="bg-white/80 rounded-xl px-3 py-2 border border-amber-200/70">
+                <span className="text-amber-700 block font-semibold">Trường THPT công tác</span>
+                <span className="font-bold text-slate-900">
+                  {userProfile?.school || 'Chưa cập nhật'}
+                </span>
+              </div>
+              <div className="bg-white/80 rounded-xl px-3 py-2 border border-amber-200/70">
+                <span className="text-amber-700 block font-semibold">Tổ chuyên môn</span>
+                <span className="font-bold text-slate-900">
+                  {userProfile?.department || 'Tổ Hóa học'}
+                </span>
+              </div>
+              <div className="bg-white/80 rounded-xl px-3 py-2 border border-amber-200/70">
+                <span className="text-amber-700 block font-semibold">Nhóm triển khai</span>
+                <span className="font-bold text-slate-900">{pilotMeta.label}</span>
+              </div>
+            </div>
+            <p className="text-[11px] text-amber-900 pt-1">
+              Trong thời gian chờ Super Admin phê duyệt, các chức năng <strong>Giao bài cho lớp, Xuất bản đề thi trực tuyến và Truy cập Kho đề Thành phố</strong> đang tạm khóa. Thầy/Cô vẫn có thể <strong>tải file Word mẫu chuẩn GDPT 2018</strong> và <strong>xem trước giao diện đề thi 3 dạng thức</strong> ngay bên dưới.
             </p>
           </div>
+
+          {/* Allowed Preview & Template Actions for Pending Teachers */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={handleDownloadWordSample}
+              disabled={isDownloadingTemplate}
+              className="p-4 rounded-2xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100/70 transition-colors text-left flex items-start gap-3 disabled:opacity-60"
+            >
+              <div className="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shrink-0">
+                <Download className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs font-extrabold text-indigo-950">
+                  {isDownloadingTemplate ? 'Đang tạo tệp Word...' : 'Tải file Word mẫu chuẩn (.docx)'}
+                </p>
+                <p className="text-[11px] text-indigo-800/90 mt-0.5 leading-snug">
+                  Cấu trúc 3 phần GDPT 2018 kèm công thức Hóa học &amp; bảng đáp án chuẩn để bóc tách tự động.
+                </p>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setShowPendingExamPreview((prev) => !prev)}
+              className="p-4 rounded-2xl border border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100/70 transition-colors text-left flex items-start gap-3"
+            >
+              <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0">
+                <BookOpen className="w-5 h-5" />
+              </div>
+              <div>
+                <p className="text-xs font-extrabold text-emerald-950">
+                  {showPendingExamPreview
+                    ? 'Thu gọn bản xem trước đề thi'
+                    : 'Xem trước giao diện đề thi 3 phần'}
+                </p>
+                <p className="text-[11px] text-emerald-800/90 mt-0.5 leading-snug">
+                  Trải nghiệm hiển thị công thức Hóa học, câu Đúng/Sai 4 ý và Trả lời ngắn chuẩn Bộ GD&amp;ĐT.
+                </p>
+              </div>
+            </button>
+          </div>
+
+          {/* Interactive Read-Only Preview of GDPT 2018 3-Part Chemistry Exam */}
+          {showPendingExamPreview && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50/80 p-4 sm:p-5 space-y-4">
+              <div className="flex items-center justify-between gap-2 pb-2.5 border-b border-slate-200">
+                <div>
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-700">
+                    BẢN XEM TRƯỚC GIAO DIỆN ĐỀ THI HÓA HỌC · GDPT 2018
+                  </span>
+                  <h3 className="text-sm font-extrabold text-slate-900">
+                    Đề minh họa 3 dạng thức (Phần I · Phần II · Phần III)
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPendingExamPreview(false)}
+                  className="p-1.5 rounded-lg text-slate-500 hover:bg-slate-200/70"
+                  title="Đóng xem trước"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Part I Sample */}
+              <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2">
+                <span className="inline-block text-[11px] font-bold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-md">
+                  Phần I. Câu trắc nghiệm nhiều phương án lựa chọn (0,25 điểm/câu)
+                </span>
+                <div className="text-xs text-slate-800 font-semibold">
+                  Câu 1. <ChemRenderer text="Thủy phân hoàn toàn ester CH_3COOC_2H_5 trong dung dịch NaOH đun nóng thu được muối có công thức là" />
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-slate-700">
+                  <div className="px-3 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 font-semibold">
+                    A. <ChemRenderer text="CH_3COONa" />
+                  </div>
+                  <div className="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50">
+                    B. <ChemRenderer text="C_2H_5COONa" />
+                  </div>
+                  <div className="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50">
+                    C. <ChemRenderer text="HCOONa" />
+                  </div>
+                  <div className="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50">
+                    D. <ChemRenderer text="C_2H_5OH" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Part II Sample */}
+              <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2">
+                <span className="inline-block text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md">
+                  Phần II. Câu trắc nghiệm Đúng/Sai (Thang điểm lũy tiến 0,1 → 0,25 → 0,5 → 1,0)
+                </span>
+                <div className="text-xs text-slate-800 font-semibold">
+                  Câu 2. <ChemRenderer text="Xét cân bằng tổng hợp ammonia: N_2(g) + 3H_2(g) ⇌ 2NH_3(g) (Δ_rH°_{298} = -91,8 kJ). Mỗi phát biểu sau đây đúng hay sai?" />
+                </div>
+                <div className="space-y-1.5 text-xs">
+                  {[
+                    { id: 'a', text: 'Phản ứng thuận là phản ứng tỏa nhiệt.', val: 'Đúng' },
+                    { id: 'b', text: 'Khi tăng áp suất chung của hệ, cân bằng chuyển dịch theo chiều thuận.', val: 'Đúng' },
+                    { id: 'c', text: 'Khi tăng nhiệt độ, cân bằng chuyển dịch theo chiều thuận.', val: 'Sai' },
+                    { id: 'd', text: 'Chất xúc tác Fe làm tăng tốc độ cả phản ứng thuận và phản ứng nghịch.', val: 'Đúng' },
+                  ].map((st) => (
+                    <div
+                      key={st.id}
+                      className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-lg bg-slate-50 border border-slate-200"
+                    >
+                      <span className="text-slate-700">
+                        <strong>{st.id})</strong> {st.text}
+                      </span>
+                      <span
+                        className={`text-[11px] font-bold px-2 py-0.5 rounded ${
+                          st.val === 'Đúng'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}
+                      >
+                        {st.val}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Part III Sample */}
+              <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-2">
+                <span className="inline-block text-[11px] font-bold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md">
+                  Phần III. Câu trắc nghiệm yêu cầu trả lời ngắn (0,25 điểm/câu)
+                </span>
+                <div className="text-xs text-slate-800 font-semibold">
+                  Câu 3. <ChemRenderer text="Lên men hoàn toàn 180 gam glucose (C_6H_{12}O_6) thành ethanol với hiệu suất 80%. Tính khối lượng ethanol (gam) thu được." />
+                </div>
+                <div className="flex items-center gap-2 text-xs">
+                  <span className="text-slate-500 font-semibold">Ô đáp án số học sinh nhập:</span>
+                  <span className="px-3 py-1 rounded-lg border border-indigo-300 bg-indigo-50 font-mono font-bold text-indigo-900">
+                    73,6
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {errorMsg && (
+            <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold flex items-center gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
 
           {successMsg && (
             <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
@@ -340,20 +542,21 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
             </div>
           )}
 
-          <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100">
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
             <button
               type="button"
               onClick={async () => {
+                clearBanners();
                 setIsSubmitting(true);
                 await refreshProfile();
-                setSuccessMsg('Đã kiểm tra lại trạng thái tài khoản từ máy chủ.');
+                setSuccessMsg('Đã kiểm tra lại trạng thái phê duyệt từ máy chủ.');
                 setIsSubmitting(false);
               }}
               disabled={isSubmitting}
               className="px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white text-xs font-bold flex items-center gap-1.5"
             >
               <RefreshCw className={`w-4 h-4 ${isSubmitting ? 'animate-spin' : ''}`} />
-              <span>Kiểm tra lại trạng thái</span>
+              <span>Kiểm tra lại trạng thái phê duyệt</span>
             </button>
 
             <button
@@ -818,6 +1021,14 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
     e.preventDefault();
     if (isSubmitting) return;
     clearBanners();
+    if (!tSchool.trim()) {
+      setErrorMsg('Vui lòng chọn hoặc nhập tên Trường THPT công tác.');
+      return;
+    }
+    if (!tDepartment.trim()) {
+      setErrorMsg('Vui lòng nhập Tổ chuyên môn.');
+      return;
+    }
     setIsSubmitting(true);
     try {
       const res = await registerTeacherAccount({
@@ -826,7 +1037,8 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
         password: tPassword,
         confirmPassword: tConfirmPassword,
         phone: tPhone,
-        school: tSchool,
+        school: tSchool.trim(),
+        department: tDepartment.trim(),
       });
       if (!res.success) {
         setErrorMsg(res.errorMessage || 'Không thể đăng ký tài khoản Giáo viên.');
@@ -1246,30 +1458,64 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Số điện thoại (tùy chọn)</label>
-                    <div className="relative">
-                      <Phone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="tel"
-                        value={tPhone}
-                        onChange={(e) => setTPhone(e.target.value)}
-                        placeholder="09xx xxx xxx"
-                        className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-slate-200 text-xs"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">Trường / Đơn vị (tùy chọn)</label>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Trường THPT công tác <span className="text-rose-500">*</span>
+                    </label>
                     <div className="relative">
                       <School className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                       <input
                         type="text"
+                        required
+                        list="danang-high-schools-list"
                         value={tSchool}
                         onChange={(e) => setTSchool(e.target.value)}
-                        placeholder="THPT Chuyên..."
-                        className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-slate-200 text-xs"
+                        placeholder="Chọn trường TP. Đà Nẵng hoặc nhập thêm..."
+                        className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
                       />
+                      <datalist id="danang-high-schools-list">
+                        {DANANG_HIGH_SCHOOLS.map((schoolName) => (
+                          <option key={schoolName} value={schoolName} />
+                        ))}
+                      </datalist>
                     </div>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Tổ chuyên môn <span className="text-rose-500">*</span>
+                    </label>
+                    <div className="relative">
+                      <Building2 className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        required
+                        list="teacher-departments-list"
+                        value={tDepartment}
+                        onChange={(e) => setTDepartment(e.target.value)}
+                        placeholder="Tổ Hóa học"
+                        className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      />
+                      <datalist id="teacher-departments-list">
+                        {DEFAULT_TEACHER_DEPARTMENTS.map((dept) => (
+                          <option key={dept} value={dept} />
+                        ))}
+                      </datalist>
+                    </div>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Số điện thoại liên hệ (tùy chọn)
+                  </label>
+                  <div className="relative">
+                    <Phone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    <input
+                      type="tel"
+                      value={tPhone}
+                      onChange={(e) => setTPhone(e.target.value)}
+                      placeholder="09xx xxx xxx"
+                      className="w-full pl-8 pr-3 py-2.5 rounded-xl border border-slate-200 text-xs"
+                    />
                   </div>
                 </div>
 

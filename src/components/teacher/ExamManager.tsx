@@ -1,5 +1,5 @@
 import React from 'react';
-import { Exam, Folder, StudentSubmission } from '../../types';
+import { Exam, Folder, StudentSubmission, User } from '../../types';
 import { ExamFolderExplorer } from './ExamFolderExplorer';
 
 interface ExamManagerProps {
@@ -7,6 +7,7 @@ interface ExamManagerProps {
   folders?: Folder[];
   submissions: StudentSubmission[];
   currentUserId?: string;
+  currentUser?: User | null;
   userRole?: 'admin' | 'teacher';
   mode?: 'all' | 'online';
   activeFolderId?: string | null;
@@ -37,6 +38,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
   folders = [],
   submissions,
   currentUserId,
+  currentUser,
   userRole,
   mode = 'all',
   activeFolderId,
@@ -63,6 +65,7 @@ export const ExamManager: React.FC<ExamManagerProps> = ({
       folders={folders}
       submissions={submissions}
       currentUserId={currentUserId}
+      currentUser={currentUser}
       userRole={userRole}
       mode={mode}
       activeFolderId={activeFolderId}

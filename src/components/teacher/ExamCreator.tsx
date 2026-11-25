@@ -57,6 +57,8 @@ interface ExamCreatorProps {
   subjects?: SubjectItem[];
   currentUserId?: string;
   currentUserName?: string;
+  currentUserSchool?: string;
+  currentUserDepartment?: string;
   onSaveExam: (exam: Exam) => void;
   onCancel: () => void;
 }
@@ -71,6 +73,8 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   subjects = DEFAULT_GDPT_2018_SUBJECTS,
   currentUserId,
   currentUserName,
+  currentUserSchool,
+  currentUserDepartment,
   onSaveExam,
   onCancel,
 }) => {
@@ -83,6 +87,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   const [durationMinutes, setDurationMinutes] = useState(45);
   const [selectedFolderId, setSelectedFolderId] = useState<string>(initialFolderId || '');
   const [isPickerOpen, setIsPickerOpen] = useState(false);
+  const [pickerInitialTab, setPickerInitialTab] = useState<'manual' | 'matrix'>('manual');
 
   const [questions, setQuestions] = useState<Question[]>(() =>
     cloneQuestionsForExam(initialQuestions)
@@ -371,6 +376,9 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       createdBy: actorUid,
       updatedBy: actorUid,
       authorName: resolvedAuthorName,
+      ...(currentUserSchool ? { authorSchool: currentUserSchool } : {}),
+      ...(currentUserDepartment ? { authorDepartment: currentUserDepartment } : {}),
+      share_status: 'private',
       createdAt: nowIso,
       updatedAt: nowIso,
     };
@@ -1067,11 +1075,26 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => setIsPickerOpen(true)}
+                onClick={() => {
+                  setPickerInitialTab('matrix');
+                  setIsPickerOpen(true);
+                }}
+                className="min-h-[38px] px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-xs"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Tạo đề tự động theo Ma trận</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPickerInitialTab('manual');
+                  setIsPickerOpen(true);
+                }}
                 className="min-h-[38px] px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-xs"
               >
                 <BookOpen className="w-3.5 h-3.5" />
-                <span>Chọn từ Ngân hàng / Ma trận</span>
+                <span>Chọn từ Ngân hàng</span>
               </button>
 
               <button
@@ -1096,16 +1119,32 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                   Chưa có câu hỏi nào trong đề thi này.
                 </p>
                 <p className="text-slate-500 text-xs">
-                  Nhấn &quot;Chọn từ Ngân hàng / Ma trận&quot; ở trên để thêm câu hỏi thủ công hoặc bốc tự động theo ma trận.
+                  Bốc câu hỏi ngẫu nhiên theo Ma trận GDPT 2018 (Chuyên đề × Mức độ) hoặc chọn thủ công từ Ngân hàng.
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setIsPickerOpen(true)}
-                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold"
-                >
-                  <Plus className="w-4 h-4" />
-                  <span>Mở Ngân hàng câu hỏi ({bankQuestions.length} câu)</span>
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickerInitialTab('matrix');
+                      setIsPickerOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold"
+                  >
+                    <Sparkles className="w-4 h-4" />
+                    <span>Tạo đề tự động theo Ma trận</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPickerInitialTab('manual');
+                      setIsPickerOpen(true);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Chọn thủ công ({bankQuestions.length} câu)</span>
+                  </button>
+                </div>
               </div>
             ) : (
               questions.map((q, idx) => (
@@ -1203,6 +1242,7 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
         subjects={subjects}
         defaultSubjectId={subjectId}
         defaultGrade={grade}
+        initialTab={pickerInitialTab}
         onAddQuestions={(picked) => {
           setQuestions((prev) => [...prev, ...picked]);
         }}

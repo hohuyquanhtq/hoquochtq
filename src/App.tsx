@@ -89,6 +89,7 @@ import { TeacherSubmissionReviewPage } from './components/teacher/TeacherSubmiss
 import { ClassManager } from './components/teacher/ClassManager';
 import { SystemSettingsView } from './components/teacher/SystemSettingsView';
 import { ShuffleExamTab } from './components/teacher/ShuffleExamTab';
+import { CityExamRepository } from './components/teacher/CityExamRepository';
 
 // Student Components
 import { StudentHome, StudentAssignedExamItem } from './components/student/StudentHome';
@@ -1509,6 +1510,19 @@ export default function App() {
               />
             )}
 
+            {activeTab === 'city_exam_bank' && (
+              <CityExamRepository
+                currentUser={userProfile}
+                onExamCloned={(clonedExam) => {
+                  if (activeUid) {
+                    StorageService.addExam(clonedExam, activeUid);
+                  }
+                  setExams((prev) => [clonedExam, ...prev.filter((e) => e.id !== clonedExam.id)]);
+                }}
+                onOpenPersonalExams={() => setActiveTab('exam_manager')}
+              />
+            )}
+
             {activeTab === 'create_exam' && (
               <ExamCreator
                 key={`${creatorInitialFolderId || 'root'}_${creatorInitialQuestions.length}_${creatorInitialTitle}`}
@@ -1521,6 +1535,8 @@ export default function App() {
                 subjects={mergedSubjects}
                 currentUserId={activeUid}
                 currentUserName={userProfile.name}
+                currentUserSchool={userProfile.school}
+                currentUserDepartment={userProfile.department}
                 onSaveExam={handleSaveExam}
                 onCancel={() => setActiveTab('exam_manager')}
               />
@@ -1532,6 +1548,7 @@ export default function App() {
                 folders={folders}
                 submissions={submissions}
                 currentUserId={activeUid}
+                currentUser={userProfile}
                 userRole={userProfile.role === 'admin' ? 'admin' : 'teacher'}
                 mode={activeTab === 'online_exams' ? 'online' : 'all'}
                 activeFolderId={currentFolderId}
@@ -1676,6 +1693,7 @@ export default function App() {
               'upload_exam',
               'shuffle_exam',
               'question_bank',
+              'city_exam_bank',
               'folder_manager',
               'create_exam',
               'exam_manager',
@@ -1774,7 +1792,7 @@ export default function App() {
 
   if (isWorkspaceShell && userProfile) {
     return (
-      <div className="h-screen flex overflow-hidden bg-slate-50 font-sans">
+      <div className="h-screen flex overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans transition-colors">
         <WorkspaceSidebar
           activeTab={activeTab}
           userRole={userProfile.role}
@@ -1826,7 +1844,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col font-sans transition-colors">
       {/* Global Header (Hide during ongoing exam for full concentration) */}
       {activeTab !== 'take_exam' && (
         <Header

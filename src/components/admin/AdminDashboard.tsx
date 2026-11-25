@@ -1,5 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, UserRole, AccountStatus, Question, Exam, StudentSubmission, Folder } from '../../types';
+import {
+  User,
+  UserRole,
+  AccountStatus,
+  PilotGroup,
+  Question,
+  Exam,
+  StudentSubmission,
+  Folder,
+} from '../../types';
 import {
   ShieldCheck,
   Users,
@@ -20,15 +29,31 @@ import {
   AlertCircle,
   UserCheck,
   Clock,
+  Globe,
+  BarChart3,
+  Eye,
+  X,
+  School,
+  Building2,
 } from 'lucide-react';
 import { StorageService } from '../../services/storage';
 import { APP_CONFIG } from '../../constants/brand';
+import {
+  DANANG_HIGH_SCHOOLS,
+  DEFAULT_TEACHER_DEPARTMENTS,
+  PILOT_GROUP_META,
+  resolvePilotGroup,
+} from '../../constants/danangSchools';
+import { GRADE_LABELS, QUESTION_TYPE_SHORT_LABELS } from '../../constants/subjects';
+import { ChemRenderer } from '../../utils/chemRenderer';
 import {
   fetchAllUsersForAdmin,
   updateUserAccountByAdmin,
   fetchCloudAuditDataForAdmin,
   assignLegacyRecordToTeacher,
+  reviewExamCityShareByAdmin,
 } from '../../services/workspaceService';
+import { SystemEvidenceDashboard } from './SystemEvidenceDashboard';
 
 interface AdminDashboardProps {
   currentUser: User;
@@ -42,6 +67,7 @@ interface AdminDashboardProps {
 }
 
 type UserFilterTab = 'all' | 'pending' | 'active' | 'locked' | 'rejected' | 'teacher' | 'student';
+type AdminSectionTab = 'teachers_schools' | 'exam_moderation' | 'evidence_stats';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   currentUser,
@@ -55,16 +81,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 }) => {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
+  const [adminSection, setAdminSection] = useState<AdminSectionTab>('teachers_schools');
   const [filterTab, setFilterTab] = useState<UserFilterTab>(
     sectionFocus === 'users' ? 'student' : 'all'
   );
   useEffect(() => {
     setFilterTab(sectionFocus === 'users' ? 'student' : 'all');
+    if (sectionFocus === 'users') {
+      setAdminSection('teachers_schools');
+    }
   }, [sectionFocus]);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [busyUid, setBusyUid] = useState<string | null>(null);
+
+  // Moderation state for City Shared Exam Repository
+  const [previewModerationExam, setPreviewModerationExam] = useState<Exam | null>(null);
+  const [reviewNoteInput, setReviewNoteInput] = useState('');
+  const [moderatingExamId, setModeratingExamId] = useState<string | null>(null);
 
   // Cloud + Local Legacy Audit state
   const [cloudAudit, setCloudAudit] = useState<{
@@ -155,12 +190,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       return;
     }
 
+    const nextApprovalStatus =
+      nextStatus === 'active'
+        ? 'approved'
+        : nextStatus === 'pending'
+        ? 'pending'
+        : 'rejected';
+
     setBusyUid(targetUid);
     try {
-      await updateUserAccountByAdmin(targetUid, adminUid, { status: nextStatus });
+      await updateUserAccountByAdmin(targetUid, adminUid, {
+        status: nextStatus,
+        approval_status: nextApprovalStatus,
+      });
       setUsersList((prev) =>
         prev.map((item) =>
-          (item.uid || item.id) === targetUid ? { ...item, status: nextStatus } : item
+          (item.uid || item.id) === targetUid
+            ? { ...item, status: nextStatus, approval_status: nextApprovalStatus }
+            : item
         )
       );
       const label =
@@ -177,22 +224,98 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     }
   };
 
+  const handlePilotGroupChange = async (user: User, nextPilotGroup: PilotGroup) => {
+    const targetUid = user.uid || user.id;
+    setBusyUid(targetUid);
+    try {
+      await updateUserAccountByAdmin(targetUid, adminUid, { pilot_group: nextPilotGroup });
+      setUsersList((prev) =>
+        prev.map((item) =>
+          (item.uid || item.id) === targetUid ? { ...item, pilot_group: nextPilotGroup } : item
+        )
+      );
+      showStatus(
+        `Đã gắn nhóm "${PILOT_GROUP_META[nextPilotGroup].label}" cho ${user.name}`
+      );
+    } catch (err) {
+      showStatus(
+        err instanceof Error ? err.message : 'Không thể cập nhật nhóm thử nghiệm.',
+        'error'
+      );
+    } finally {
+      setBusyUid(null);
+    }
+  };
+
+  const handleModerateCityExam = async (
+    exam: Exam,
+    decision: 'approve' | 'reject',
+    note?: string
+  ) => {
+    setModeratingExamId(exam.id);
+    try {
+      await reviewExamCityShareByAdmin(exam.id, adminUid, decision, note);
+      const nextStatus = decision === 'approve' ? 'city_public' : 'private';
+      setCloudAudit((prev) => ({
+        ...prev,
+        allExams: prev.allExams.map((ex) =>
+          ex.id === exam.id
+            ? {
+                ...ex,
+                share_status: nextStatus,
+                cityApprovedBy: decision === 'approve' ? adminUid : undefined,
+                cityApprovedAt: decision === 'approve' ? new Date().toISOString() : undefined,
+                cityReviewNote: note?.trim() || undefined,
+              }
+            : ex
+        ),
+      }));
+      setPreviewModerationExam(null);
+      setReviewNoteInput('');
+      showStatus(
+        decision === 'approve'
+          ? `Đã phê duyệt công khai đề "${exam.title}" lên Kho đề Thành phố!`
+          : `Đã từ chối / gỡ đề "${exam.title}" khỏi Kho đề Thành phố.`
+      );
+    } catch (err) {
+      showStatus(
+        err instanceof Error ? err.message : 'Không thể cập nhật trạng thái duyệt đề thi.',
+        'error'
+      );
+    } finally {
+      setModeratingExamId(null);
+    }
+  };
+
   const handleSaveEditedUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingUser) return;
     const targetUid = editingUser.uid || editingUser.id;
     setBusyUid(targetUid);
     try {
+      const nextApprovalStatus =
+        editingUser.status === 'active'
+          ? 'approved'
+          : editingUser.status === 'pending'
+          ? 'pending'
+          : 'rejected';
       await updateUserAccountByAdmin(targetUid, adminUid, {
         name: editingUser.name,
         role: editingUser.role,
         status: editingUser.status,
+        approval_status: nextApprovalStatus,
+        pilot_group: editingUser.pilot_group,
         school: editingUser.school,
+        department: editingUser.department,
         className: editingUser.className,
         phone: editingUser.phone,
       });
       setUsersList((prev) =>
-        prev.map((u) => ((u.uid || u.id) === targetUid ? editingUser : u))
+        prev.map((u) =>
+          (u.uid || u.id) === targetUid
+            ? { ...editingUser, approval_status: nextApprovalStatus }
+            : u
+        )
       );
       setEditingUser(null);
       showStatus(`Đã lưu thông tin & phân quyền cho ${editingUser.email}`);
@@ -289,6 +412,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const rejectedCount = usersList.filter((u) => u.status === 'rejected').length;
   const teacherCount = usersList.filter((u) => u.role === 'teacher').length;
   const studentCount = usersList.filter((u) => u.role === 'student').length;
+  const pendingReviewExams = cloudAudit.allExams.filter(
+    (ex) => ex.share_status === 'pending_review'
+  );
+  const cityPublicExams = cloudAudit.allExams.filter(
+    (ex) => ex.share_status === 'city_public'
+  );
 
   const statCards = [
     {
@@ -443,6 +572,236 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         })}
       </section>
 
+      {/* Super Admin Sub-Navigation Tabs */}
+      <nav
+        aria-label="Phân hệ quản trị Super Admin"
+        className="flex flex-wrap items-center gap-2 bg-white border border-slate-200 rounded-2xl p-2 shadow-2xs"
+      >
+        <button
+          type="button"
+          onClick={() => setAdminSection('teachers_schools')}
+          className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
+            adminSection === 'teachers_schools'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-700 hover:bg-slate-100'
+          }`}
+        >
+          <UserCheck className="w-4 h-4 shrink-0" />
+          <span>Quản lý Giáo viên &amp; Trường học</span>
+          {pendingCount > 0 && (
+            <span className="px-2 py-0.5 rounded-md bg-amber-500 text-white text-xs font-bold tabular-nums">
+              {pendingCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setAdminSection('exam_moderation')}
+          className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
+            adminSection === 'exam_moderation'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-700 hover:bg-slate-100'
+          }`}
+        >
+          <Globe className="w-4 h-4 shrink-0" />
+          <span>Duyệt đề chia sẻ Kho TP</span>
+          {pendingReviewExams.length > 0 && (
+            <span className="px-2 py-0.5 rounded-md bg-indigo-600 text-white text-xs font-bold tabular-nums">
+              {pendingReviewExams.length}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setAdminSection('evidence_stats')}
+          className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
+            adminSection === 'evidence_stats'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-700 hover:bg-slate-100'
+          }`}
+        >
+          <BarChart3 className="w-4 h-4 shrink-0" />
+          <span>Thống kê hệ thống &amp; Xuất Excel</span>
+        </button>
+      </nav>
+
+      {/* TAB 3: EVIDENCE STATISTICS DASHBOARD */}
+      {adminSection === 'evidence_stats' && (
+        <SystemEvidenceDashboard
+          users={usersList}
+          allExams={cloudAudit.allExams.length > 0 ? cloudAudit.allExams : exams}
+          allQuestions={cloudAudit.allQuestions.length > 0 ? cloudAudit.allQuestions : questions}
+          allSubmissions={
+            cloudAudit.allSubmissions.length > 0 ? cloudAudit.allSubmissions : submissions
+          }
+        />
+      )}
+
+      {/* TAB 2: CITY SHARED EXAM MODERATION */}
+      {adminSection === 'exam_moderation' && (
+        <div className="space-y-6">
+          <section className="bg-white border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden">
+            <div className="p-5 sm:p-6 border-b border-slate-100 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base sm:text-lg font-bold text-slate-900 flex items-center gap-2">
+                  <Clock className="w-5 h-5 text-amber-600 shrink-0" />
+                  <span>Đề thi chờ phê duyệt lên Kho Thành phố ({pendingReviewExams.length})</span>
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Kiểm tra chất lượng chuyên môn trước khi xuất bản công khai cho toàn bộ giáo viên TP. Đà Nẵng nhân bản.
+                </p>
+              </div>
+            </div>
+
+            {pendingReviewExams.length === 0 ? (
+              <div className="p-10 text-center text-sm text-slate-500">
+                Hiện không có đề thi nào đang chờ duyệt chia sẻ lên Kho Thành phố.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {pendingReviewExams.map((ex) => {
+                  const isBusy = moderatingExamId === ex.id;
+                  return (
+                    <div
+                      key={ex.id}
+                      className="p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 hover:bg-slate-50/70"
+                    >
+                      <div className="space-y-1.5 min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-xs">
+                          <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 font-bold">
+                            Chờ duyệt Kho TP
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-indigo-50 text-indigo-800 font-semibold">
+                            {GRADE_LABELS[ex.grade] || `Lớp ${ex.grade}`}
+                          </span>
+                          <span className="text-slate-500 tabular-nums">
+                            {ex.questions.length} câu · {ex.durationMinutes} phút
+                          </span>
+                        </div>
+                        <h3 className="text-base font-bold text-slate-900">{ex.title}</h3>
+                        <p className="text-xs text-slate-600 flex flex-wrap items-center gap-x-3 gap-y-1">
+                          <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
+                            <School className="w-3.5 h-3.5 text-indigo-600" />
+                            {ex.authorSchool || 'Chưa rõ trường'}
+                          </span>
+                          <span className="inline-flex items-center gap-1">
+                            <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                            {ex.authorDepartment || 'Tổ Hóa học'}
+                          </span>
+                          <span>GV: {ex.authorName}</span>
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPreviewModerationExam(ex);
+                            setReviewNoteInput('');
+                          }}
+                          className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5"
+                        >
+                          <Eye className="w-4 h-4 text-indigo-600" />
+                          <span>Xem &amp; Duyệt chi tiết</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() => void handleModerateCityExam(ex, 'approve')}
+                          className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>Duyệt công khai</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isBusy}
+                          onClick={() =>
+                            void handleModerateCityExam(
+                              ex,
+                              'reject',
+                              'Đề chưa đáp ứng tiêu chuẩn chia sẻ Kho Thành phố, vui lòng rà soát lại.'
+                            )
+                          }
+                          className="px-3.5 py-2 rounded-xl bg-rose-50 hover:bg-rose-100 disabled:opacity-60 text-rose-700 border border-rose-200 text-xs font-bold inline-flex items-center gap-1.5"
+                        >
+                          <XCircle className="w-4 h-4" />
+                          <span>Từ chối</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+
+          {/* Published City Exams Management */}
+          <section className="bg-white border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden">
+            <div className="p-5 sm:p-6 border-b border-slate-100">
+              <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                <Globe className="w-5 h-5 text-emerald-600 shrink-0" />
+                <span>Đề đang công khai trong Kho Thành phố ({cityPublicExams.length})</span>
+              </h2>
+            </div>
+            {cityPublicExams.length === 0 ? (
+              <div className="p-8 text-center text-xs text-slate-500">
+                Chưa có đề thi nào trong Kho đề Thành phố.
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {cityPublicExams.map((ex) => (
+                  <div
+                    key={ex.id}
+                    className="p-4 sm:px-6 flex flex-wrap items-center justify-between gap-3 hover:bg-slate-50/70"
+                  >
+                    <div className="space-y-0.5">
+                      <p className="text-sm font-bold text-slate-900">{ex.title}</p>
+                      <p className="text-xs text-slate-600">
+                        {ex.authorName} · {ex.authorSchool || 'THPT Đà Nẵng'} ·{' '}
+                        {GRADE_LABELS[ex.grade] || ex.grade} · {ex.questions.length} câu
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setPreviewModerationExam(ex);
+                          setReviewNoteInput(ex.cityReviewNote || '');
+                        }}
+                        className="px-3 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-700 text-xs font-semibold inline-flex items-center gap-1"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Xem đề</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={moderatingExamId === ex.id}
+                        onClick={() =>
+                          void handleModerateCityExam(
+                            ex,
+                            'reject',
+                            'Super Admin tạm gỡ khỏi Kho đề Thành phố.'
+                          )
+                        }
+                        className="px-3 py-1.5 rounded-lg border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-semibold"
+                      >
+                        Gỡ khỏi Kho TP
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        </div>
+      )}
+
+      {/* TAB 1: TEACHERS & SCHOOLS + LEGACY DATA */}
+      {adminSection === 'teachers_schools' && (
+      <>
       {/* 3. Filter Bar & Users Management Table */}
       <section className="bg-white border border-slate-200/80 rounded-2xl shadow-xs overflow-hidden">
         <div className="p-5 sm:p-6 border-b border-slate-100 space-y-4">
@@ -502,7 +861,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 <th className="py-3.5 px-5">Người dùng</th>
                 <th className="py-3.5 px-5">Email</th>
                 <th className="py-3.5 px-5">Vai trò</th>
-                <th className="py-3.5 px-5">Đơn vị / Lớp</th>
+                <th className="py-3.5 px-5">Trường / Tổ CM / Lớp</th>
+                <th className="py-3.5 px-5">Nhóm thử nghiệm</th>
                 <th className="py-3.5 px-5 text-center">Trạng thái</th>
                 <th className="py-3.5 px-5 text-right">Thao tác</th>
               </tr>
@@ -524,6 +884,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <div className="h-4 w-32 bg-slate-100 rounded" />
                     </td>
                     <td className="py-4 px-5">
+                      <div className="h-4 w-28 bg-slate-100 rounded" />
+                    </td>
+                    <td className="py-4 px-5">
                       <div className="h-4 w-20 bg-slate-100 rounded mx-auto" />
                     </td>
                     <td className="py-4 px-5">
@@ -533,7 +896,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                 ))
               ) : filteredUsers.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="py-12 px-5 text-center">
+                  <td colSpan={7} className="py-12 px-5 text-center">
                     <p className="text-sm font-medium text-slate-600">
                       Không tìm thấy tài khoản nào phù hợp với bộ lọc hiện tại.
                     </p>
@@ -556,6 +919,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   const uid = u.uid || u.id;
                   const isSelf = uid === adminUid;
                   const isBusy = busyUid === uid;
+                  const currentPilotGroup = resolvePilotGroup(u);
                   return (
                     <tr key={uid} className="hover:bg-slate-50/80 transition-colors">
                       <td className="py-3.5 px-5">
@@ -578,7 +942,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                           {u.role === 'admin' ? 'Admin' : u.role === 'teacher' ? 'Giáo viên' : 'Học sinh'}
                         </span>
                       </td>
-                      <td className="py-3.5 px-5 text-slate-600">{u.school || u.className || '—'}</td>
+                      <td className="py-3.5 px-5 text-slate-700">
+                        <p className="font-medium text-xs text-slate-800">
+                          {u.school || u.className || '—'}
+                        </p>
+                        {u.role !== 'student' && u.department && (
+                          <p className="text-[11px] text-slate-500 mt-0.5">{u.department}</p>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-5">
+                        {u.role === 'teacher' || u.role === 'admin' ? (
+                          <select
+                            aria-label={`Nhóm thử nghiệm của ${u.name}`}
+                            disabled={isBusy}
+                            value={currentPilotGroup}
+                            onChange={(e) =>
+                              void handlePilotGroupChange(u, e.target.value as PilotGroup)
+                            }
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                          >
+                            <option value="host_school">Trường chủ trì</option>
+                            <option value="expanded_pilot">Thử nghiệm mở rộng</option>
+                            <option value="standard">Đại trà</option>
+                          </select>
+                        ) : (
+                          <span className="text-xs text-slate-400">—</span>
+                        )}
+                      </td>
                       <td className="py-3.5 px-5 text-center">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold ${
@@ -744,6 +1134,153 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         </div>
       </section>
+      </>
+      )}
+
+      {/* Moderation Exam Preview Modal */}
+      {previewModerationExam && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="px-6 py-4 bg-slate-900 text-white flex items-start justify-between gap-4 shrink-0">
+              <div>
+                <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+                  KIỂM DUYỆT ĐỀ THI CHIA SẺ KHO THÀNH PHỐ
+                </span>
+                <h3 className="text-base font-extrabold mt-0.5">
+                  {previewModerationExam.title}
+                </h3>
+                <p className="text-xs text-slate-300 mt-0.5">
+                  GV: {previewModerationExam.authorName} ·{' '}
+                  {previewModerationExam.authorDepartment || 'Tổ Hóa học'} ·{' '}
+                  {previewModerationExam.authorSchool || 'THPT Đà Nẵng'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewModerationExam(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-3 bg-slate-50">
+              {previewModerationExam.questions.map((q, idx) => (
+                <div
+                  key={q.id || idx}
+                  className="bg-white rounded-xl border border-slate-200 p-4 space-y-2 text-xs"
+                >
+                  <div className="flex items-center gap-2 font-bold text-slate-700">
+                    <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-900">
+                      Câu {idx + 1}
+                    </span>
+                    <span className="text-indigo-700">
+                      {QUESTION_TYPE_SHORT_LABELS[q.type]}
+                    </span>
+                  </div>
+                  <div className="text-slate-900 font-medium leading-relaxed">
+                    <ChemRenderer text={q.content} />
+                  </div>
+                  {q.type === 'part1_single_choice' && q.options && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                      {q.options.map((o) => (
+                        <div
+                          key={o.id}
+                          className={`px-2.5 py-1.5 rounded-lg border ${
+                            o.id === q.correctOptionId
+                              ? 'bg-emerald-50 border-emerald-300 font-semibold text-emerald-900'
+                              : 'bg-slate-50 border-slate-200 text-slate-700'
+                          }`}
+                        >
+                          <strong>{o.id}.</strong> <ChemRenderer text={o.text} inline />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {q.type === 'part2_true_false' && q.statements && (
+                    <div className="space-y-1">
+                      {q.statements.map((st) => (
+                        <div
+                          key={st.id}
+                          className="flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg bg-slate-50 border border-slate-200"
+                        >
+                          <span>
+                            <strong>{st.id})</strong> <ChemRenderer text={st.statement} inline />
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold shrink-0 ${
+                              st.correctAnswer
+                                ? 'bg-emerald-100 text-emerald-800'
+                                : 'bg-rose-100 text-rose-800'
+                            }`}
+                          >
+                            {st.correctAnswer ? 'Đúng' : 'Sai'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {q.type === 'part3_short_answer' && (
+                    <div className="text-[11px] font-semibold text-indigo-800 bg-indigo-50 px-2.5 py-1.5 rounded-lg inline-block">
+                      Đáp án: {q.shortAnswerConfig?.acceptableAnswers?.join(' / ') || '—'}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+
+            <div className="px-6 py-4 bg-white border-t border-slate-200 space-y-3 shrink-0">
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Ghi chú kiểm duyệt gửi lại giáo viên (tùy chọn)
+                </label>
+                <input
+                  type="text"
+                  value={reviewNoteInput}
+                  onChange={(e) => setReviewNoteInput(e.target.value)}
+                  placeholder="VD: Đề chuẩn ma trận GDPT 2018, đã kiểm tra đáp án..."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500/30"
+                />
+              </div>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPreviewModerationExam(null)}
+                  className="px-4 py-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-bold"
+                >
+                  Đóng
+                </button>
+                <button
+                  type="button"
+                  disabled={moderatingExamId === previewModerationExam.id}
+                  onClick={() =>
+                    void handleModerateCityExam(previewModerationExam, 'reject', reviewNoteInput)
+                  }
+                  className="px-4 py-2 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <XCircle className="w-4 h-4" />
+                  <span>Từ chối / Gỡ công khai</span>
+                </button>
+                <button
+                  type="button"
+                  disabled={moderatingExamId === previewModerationExam.id}
+                  onClick={() =>
+                    void handleModerateCityExam(previewModerationExam, 'approve', reviewNoteInput)
+                  }
+                  className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                >
+                  <Check className="w-4 h-4" />
+                  <span>Phê duyệt lên Kho Thành phố</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Edit User Modal */}
       {editingUser && (
@@ -789,7 +1326,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     }
                     className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/25 focus:border-emerald-500"
                   >
-                    <option value="active">Hoạt động</option>
+                    <option value="active">Hoạt động (Đã duyệt)</option>
                     <option value="pending">Chờ duyệt</option>
                     <option value="locked">Khóa</option>
                     <option value="rejected">Từ chối</option>
@@ -798,9 +1335,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Trường / Lớp</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {editingUser.role === 'student' ? 'Lớp học' : 'Trường THPT công tác'}
+                </label>
                 <input
                   type="text"
+                  list={editingUser.role === 'student' ? undefined : 'admin-edit-schools-list'}
                   value={editingUser.role === 'student' ? editingUser.className || '' : editingUser.school || ''}
                   onChange={(e) =>
                     setEditingUser(
@@ -811,7 +1351,56 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   }
                   className="w-full px-3.5 py-2.5 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500/25 focus:border-emerald-500"
                 />
+                <datalist id="admin-edit-schools-list">
+                  {DANANG_HIGH_SCHOOLS.map((s) => (
+                    <option key={s} value={s} />
+                  ))}
+                </datalist>
               </div>
+
+              {editingUser.role !== 'student' && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Tổ chuyên môn
+                    </label>
+                    <input
+                      type="text"
+                      list="admin-edit-depts-list"
+                      value={editingUser.department || ''}
+                      onChange={(e) =>
+                        setEditingUser({ ...editingUser, department: e.target.value })
+                      }
+                      placeholder="Tổ Hóa học"
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 text-xs font-medium"
+                    />
+                    <datalist id="admin-edit-depts-list">
+                      {DEFAULT_TEACHER_DEPARTMENTS.map((d) => (
+                        <option key={d} value={d} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Nhóm thử nghiệm
+                    </label>
+                    <select
+                      value={resolvePilotGroup(editingUser)}
+                      onChange={(e) =>
+                        setEditingUser({
+                          ...editingUser,
+                          pilot_group: e.target.value as PilotGroup,
+                        })
+                      }
+                      className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-xs font-medium"
+                    >
+                      <option value="host_school">Trường chủ trì</option>
+                      <option value="expanded_pilot">Thử nghiệm mở rộng</option>
+                      <option value="standard">Đại trà</option>
+                    </select>
+                  </div>
+                </div>
+              )}
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                 <button

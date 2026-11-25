@@ -1,9 +1,84 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 @import "katex/dist/katex.min.css";
+
+/* ==========================================================================
+   HQTest EdTech Design System Tokens (Tailwind CSS v4 @theme + CSS Variables)
+   WCAG AA High-Contrast Academic Palette — Low Eye-Strain for Long Exams
+   ========================================================================== */
+
+@theme {
+  /* Primary: Deep Indigo / Slate Navy (Academic authority & focus) */
+  --color-hq-primary: #0f172a;
+  --color-hq-primary-light: #1e293b;
+  --color-hq-primary-muted: #334155;
+
+  /* Secondary / Brand Accent: Electric Indigo & Royal Blue (Actions & Active states) */
+  --color-hq-accent: #4f46e5;
+  --color-hq-accent-hover: #4338ca;
+  --color-hq-accent-soft: #eef2ff;
+  --color-hq-royal: #2563eb;
+  --color-hq-royal-hover: #1d4ed8;
+
+  /* Pedagogical Status Colors */
+  --color-hq-success: #059669;
+  --color-hq-success-soft: #ecfdf5;
+  --color-hq-danger: #e11d48;
+  --color-hq-danger-soft: #fff1f2;
+  --color-hq-warning: #d97706;
+  --color-hq-warning-soft: #fffbeb;
+  --color-hq-review: #7c3aed;
+  --color-hq-review-soft: #f5f3ff;
+
+  /* Surfaces & Typography Neutrals */
+  --color-hq-canvas: #f8fafc;
+  --color-hq-surface: #ffffff;
+  --color-hq-border: #e2e8f0;
+  --color-hq-ink: #0f172a;
+  --color-hq-muted: #475569;
+}
+
+:root {
+  --hq-bg-canvas: #f8fafc;
+  --hq-bg-surface: #ffffff;
+  --hq-bg-subtle: #f1f5f9;
+  --hq-border: #e2e8f0;
+  --hq-text-heading: #0f172a;
+  --hq-text-body: #475569;
+  --hq-text-muted: #64748b;
+  --hq-primary: #0f172a;
+  --hq-accent: #4f46e5;
+  --hq-accent-hover: #4338ca;
+  --hq-success: #059669;
+  --hq-danger: #e11d48;
+  --hq-warning: #d97706;
+  --hq-review: #7c3aed;
+}
+
+.dark {
+  --hq-bg-canvas: #0b1120;
+  --hq-bg-surface: #0f172a;
+  --hq-bg-subtle: #1e293b;
+  --hq-border: #1e293b;
+  --hq-text-heading: #f8fafc;
+  --hq-text-body: #cbd5e1;
+  --hq-text-muted: #94a3b8;
+  --hq-primary: #f8fafc;
+  --hq-accent: #6366f1;
+  --hq-accent-hover: #818cf8;
+  --hq-success: #10b981;
+  --hq-danger: #fb7185;
+  --hq-warning: #f59e0b;
+  --hq-review: #a78bfa;
+}
 
 @layer base {
   body {
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background-color: var(--hq-bg-canvas);
+    color: var(--hq-text-heading);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
@@ -21,6 +96,12 @@
 }
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #475569;
 }
 
 /* Chemical notation & KaTeX display helpers */

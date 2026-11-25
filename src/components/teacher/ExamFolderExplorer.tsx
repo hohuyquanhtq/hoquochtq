@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Exam, Folder, StudentSubmission } from '../../types';
+import { Exam, Folder, StudentSubmission, User } from '../../types';
 import {
   Award,
   BarChart3,
@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Download,
   Edit3,
   ExternalLink,
   FileCheck,
@@ -14,6 +15,7 @@ import {
   FolderInput,
   FolderOpen,
   FolderPlus,
+  Globe,
   Link as LinkIcon,
   Lock,
   PanelLeft,
@@ -21,8 +23,10 @@ import {
   Plus,
   QrCode,
   Search,
+  Send,
   ShieldCheck,
   Trash2,
+  Undo2,
   Unlock,
   X,
   ArrowUpDown,
@@ -44,6 +48,7 @@ import {
   sortFolders,
 } from '../../utils/folderTree';
 import { GRADE_LABELS } from '../../constants/subjects';
+import { EXAM_SHARE_STATUS_META } from '../../constants/danangSchools';
 import { getEffectiveAnswerReviewConfig } from '../../services/examSecurityApi';
 import {
   getExamShortUrl,
@@ -52,6 +57,11 @@ import {
   normalizePublicExamCode,
 } from '../../utils/urlHelper';
 import { syncExamToFirestore } from '../../services/firebase';
+import {
+  requestExamCityShare,
+  withdrawExamCityShareRequest,
+} from '../../services/workspaceService';
+import { exportPrintReadyExamWithAnswersDocx } from '../../services/sampleWordTemplateService';
 import { ExamShareModal } from '../common/ExamShareModal';
 import { ExamSecurityModal } from './ExamSecurityModal';
 import { ConfirmDialog } from '../common/ConfirmDialog';
@@ -61,6 +71,7 @@ export interface ExamFolderExplorerProps {
   folders: Folder[];
   submissions: StudentSubmission[];
   currentUserId?: string;
+  currentUser?: User | null;
   userRole?: 'admin' | 'teacher';
   mode?: 'all' | 'online';
   activeFolderId?: string | null;
@@ -91,6 +102,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   folders,
   submissions,
   currentUserId,
+  currentUser,
   userRole,
   mode = 'all',
   activeFolderId: activeFolderIdProp,
@@ -140,6 +152,8 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   const [copiedLinkId, setCopiedLinkId] = useState<string | null>(null);
   const [activeShareExam, setActiveShareExam] = useState<Exam | null>(null);
   const [activeSecurityExam, setActiveSecurityExam] = useState<Exam | null>(null);
+  const [exportingWordExamId, setExportingWordExamId] = useState<string | null>(null);
+  const [proposingShareExamId, setProposingShareExamId] = useState<string | null>(null);
   const [toastState, setToastState] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   // Modals state
@@ -636,6 +650,55 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
     const folderLabel = getFolderPathLabel(exam.folderId, folders);
     const shortUrl = getExamShortUrl(exam);
 
+    const shareStatus = exam.share_status || 'private';
+    const shareBadgeMeta = EXAM_SHARE_STATUS_META[shareStatus];
+    const isExportingThisWord = exportingWordExamId === exam.id;
+    const isUpdatingThisShare = proposingShareExamId === exam.id;
+
+    const handleExportExamWord = async () => {
+      setExportingWordExamId(exam.id);
+      try {
+        await exportPrintReadyExamWithAnswersDocx(
+          exam,
+          exam.authorSchool || currentUser?.school
+        );
+        showToast(`Đã xuất file Word đề thi "${exam.title}" kèm bảng đáp án!`);
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Không thể xuất file Word cho đề thi này.',
+          'error'
+        );
+      } finally {
+        setExportingWordExamId(null);
+      }
+    };
+
+    const handleToggleCityShareProposal = async () => {
+      if (!currentUser) {
+        showToast('Cần đăng nhập tài khoản Giáo viên để thao tác chia sẻ Kho Thành phố.', 'error');
+        return;
+      }
+      setProposingShareExamId(exam.id);
+      try {
+        if (shareStatus === 'pending_review') {
+          const updated = await withdrawExamCityShareRequest(exam);
+          onExamUpdated?.(updated);
+          showToast('Đã thu hồi yêu cầu chia sẻ đề thi lên Kho Thành phố.');
+        } else if (shareStatus === 'private') {
+          const updated = await requestExamCityShare(exam, currentUser);
+          onExamUpdated?.(updated);
+          showToast('Đã gửi đề xuất chia sẻ lên Kho đề Thành phố (chờ Super Admin duyệt).');
+        }
+      } catch (err) {
+        showToast(
+          err instanceof Error ? err.message : 'Không thể cập nhật trạng thái chia sẻ đề thi.',
+          'error'
+        );
+      } finally {
+        setProposingShareExamId(null);
+      }
+    };
+
     return (
       <div
         key={exam.id}
@@ -664,6 +727,15 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               />
               {exam.isPublished ? 'Đang mở thi' : 'Đã đóng'}
             </button>
+
+            {shareStatus !== 'private' && (
+              <span
+                className={`px-2.5 py-0.5 text-[11px] font-bold rounded-md border inline-flex items-center gap-1 ${shareBadgeMeta.badgeClass}`}
+              >
+                <Globe className="w-3 h-3 shrink-0" />
+                <span>{shareBadgeMeta.label}</span>
+              </span>
+            )}
 
             <span className="inline-flex items-center gap-1 text-slate-600 font-medium">
               {exam.requiresPassword ? (
@@ -712,6 +784,12 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
           {exam.description && (
             <p className="text-xs text-slate-600 w-full break-words whitespace-normal line-clamp-2">
               {exam.description}
+            </p>
+          )}
+
+          {exam.cityReviewNote && shareStatus === 'private' && (
+            <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+              <strong>Ghi chú duyệt Kho TP:</strong> {exam.cityReviewNote}
             </p>
           )}
 
@@ -794,6 +872,43 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
 
           {/* Primary management actions */}
           <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              disabled={isExportingThisWord}
+              onClick={() => void handleExportExamWord()}
+              className="min-h-[36px] px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/80 hover:bg-indigo-100 disabled:opacity-60 text-indigo-800 text-xs font-semibold inline-flex items-center gap-1.5"
+              title="Xuất đề thi chuẩn in A4 kèm bảng đáp án (.docx)"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>{isExportingThisWord ? 'Đang xuất...' : 'Xuất Word'}</span>
+            </button>
+
+            {currentUser && shareStatus === 'private' && (
+              <button
+                type="button"
+                disabled={isUpdatingThisShare}
+                onClick={() => void handleToggleCityShareProposal()}
+                className="min-h-[36px] px-3 py-1.5 rounded-xl border border-emerald-200 bg-emerald-50 hover:bg-emerald-100 disabled:opacity-60 text-emerald-800 text-xs font-semibold inline-flex items-center gap-1.5"
+                title="Đề xuất chia sẻ đề thi này lên Kho đề Thành phố (Super Admin duyệt)"
+              >
+                <Send className="w-3.5 h-3.5" />
+                <span>{isUpdatingThisShare ? 'Đang gửi...' : 'Đề xuất Kho TP'}</span>
+              </button>
+            )}
+
+            {currentUser && shareStatus === 'pending_review' && (
+              <button
+                type="button"
+                disabled={isUpdatingThisShare}
+                onClick={() => void handleToggleCityShareProposal()}
+                className="min-h-[36px] px-3 py-1.5 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 disabled:opacity-60 text-amber-800 text-xs font-semibold inline-flex items-center gap-1.5"
+                title="Thu hồi đề xuất chia sẻ lên Kho Thành phố"
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+                <span>{isUpdatingThisShare ? 'Đang xử lý...' : 'Thu hồi đề xuất'}</span>
+              </button>
+            )}
+
             {mode === 'all' && (
               <button
                 type="button"

@@ -545,6 +545,47 @@ export async function syncExamToFirestore(
     createdBy: (typeof existingData?.createdBy === 'string' && existingData.createdBy) || exam.createdBy || exam.authorId || targetOwnerId,
     updatedBy: user.uid || targetOwnerId,
     authorName: (exam.authorName || user.displayName || 'Giáo viên').slice(0, 150),
+    ...(exam.authorSchool?.trim()
+      ? { authorSchool: exam.authorSchool.trim().slice(0, 200) }
+      : typeof existingData?.authorSchool === 'string' && existingData.authorSchool
+      ? { authorSchool: existingData.authorSchool }
+      : {}),
+    ...(exam.authorDepartment?.trim()
+      ? { authorDepartment: exam.authorDepartment.trim().slice(0, 150) }
+      : typeof existingData?.authorDepartment === 'string' && existingData.authorDepartment
+      ? { authorDepartment: existingData.authorDepartment }
+      : {}),
+    share_status: exam.share_status || (existingData?.share_status as Exam['share_status']) || 'private',
+    ...(exam.shareRequestedAt !== undefined
+      ? { shareRequestedAt: exam.shareRequestedAt }
+      : existingData?.shareRequestedAt !== undefined
+      ? { shareRequestedAt: existingData.shareRequestedAt }
+      : {}),
+    ...(exam.cityApprovedBy !== undefined
+      ? { cityApprovedBy: exam.cityApprovedBy }
+      : existingData?.cityApprovedBy !== undefined
+      ? { cityApprovedBy: existingData.cityApprovedBy }
+      : {}),
+    ...(exam.cityApprovedAt !== undefined
+      ? { cityApprovedAt: exam.cityApprovedAt }
+      : existingData?.cityApprovedAt !== undefined
+      ? { cityApprovedAt: existingData.cityApprovedAt }
+      : {}),
+    ...(exam.cityReviewNote !== undefined
+      ? { cityReviewNote: exam.cityReviewNote }
+      : existingData?.cityReviewNote !== undefined
+      ? { cityReviewNote: existingData.cityReviewNote }
+      : {}),
+    ...(exam.clonedFromExamId
+      ? { clonedFromExamId: exam.clonedFromExamId.slice(0, 128) }
+      : typeof existingData?.clonedFromExamId === 'string' && existingData.clonedFromExamId
+      ? { clonedFromExamId: existingData.clonedFromExamId }
+      : {}),
+    ...(typeof exam.cloneCount === 'number'
+      ? { cloneCount: exam.cloneCount }
+      : typeof existingData?.cloneCount === 'number'
+      ? { cloneCount: existingData.cloneCount }
+      : {}),
     createdAt: (typeof existingData?.createdAt === 'string' && existingData.createdAt) || exam.createdAt || nowIso,
     updatedAt: nowIso,
   });

@@ -7,6 +7,12 @@ export type UserRole = 'admin' | 'teacher' | 'student';
 
 export type AccountStatus = 'pending' | 'active' | 'locked' | 'rejected';
 
+export type TeacherApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+export type PilotGroup = 'host_school' | 'expanded_pilot' | 'standard';
+
+export type ExamShareStatus = 'private' | 'pending_review' | 'city_public';
+
 export interface User {
   id: string;
   uid?: string;
@@ -14,6 +20,9 @@ export interface User {
   email: string;
   role: UserRole;
   status?: AccountStatus;
+  approval_status?: TeacherApprovalStatus;
+  pilot_group?: PilotGroup;
+  department?: string; // Tổ chuyên môn (VD: Tổ Hóa học)
   phone?: string;
   avatar?: string;
   className?: string; // For students
@@ -315,6 +324,15 @@ export interface Exam {
   ownerId?: string;
   authorId: string;
   authorName: string;
+  authorSchool?: string;
+  authorDepartment?: string;
+  share_status?: ExamShareStatus;
+  shareRequestedAt?: string;
+  cityApprovedBy?: string;
+  cityApprovedAt?: string;
+  cityReviewNote?: string;
+  clonedFromExamId?: string;
+  cloneCount?: number;
   createdBy?: string;
   updatedBy?: string;
   createdAt: string;

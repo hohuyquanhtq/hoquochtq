@@ -87,7 +87,8 @@ service cloud.firestore {
           'uid', 'email', 'role', 'status', 'createdAt', 'updatedAt', 'serverUpdatedAt'
         ])
         && data.keys().hasOnly([
-          'uid', 'email', 'name', 'role', 'status', 'phone', 'school', 'className',
+          'uid', 'email', 'name', 'role', 'status', 'approval_status', 'pilot_group', 'department',
+          'phone', 'school', 'className',
           'approvedBy', 'approvedAt', 'createdAt', 'updatedAt',
           'serverCreatedAt', 'serverUpdatedAt'
         ])
@@ -96,6 +97,9 @@ service cloud.firestore {
         && (!('name' in data) || (data.name is string && data.name.size() >= 1 && data.name.size() <= 150))
         && data.role in ['teacher', 'student', 'admin']
         && data.status in ['pending', 'active', 'locked', 'rejected']
+        && (!('approval_status' in data) || data.approval_status in ['pending', 'approved', 'rejected'])
+        && (!('pilot_group' in data) || data.pilot_group in ['host_school', 'expanded_pilot', 'standard'])
+        && (!('department' in data) || (data.department is string && data.department.size() <= 150))
         && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
         && (!('school' in data) || (data.school is string && data.school.size() <= 200))
         && (!('className' in data) || (data.className is string && data.className.size() <= 80))
@@ -311,8 +315,10 @@ service cloud.firestore {
           'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
           'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
           'answerReviewMinScore', 'answerReviewEnabledAt',
-          'ownerId', 'authorId', 'createdBy', 'updatedBy', 'authorName', 'createdAt', 'updatedAt',
-          'serverCreatedAt', 'serverUpdatedAt'
+          'ownerId', 'authorId', 'createdBy', 'updatedBy', 'authorName',
+          'authorSchool', 'authorDepartment', 'share_status', 'shareRequestedAt',
+          'cityApprovedBy', 'cityApprovedAt', 'cityReviewNote', 'clonedFromExamId', 'cloneCount',
+          'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
         ])
         && isValidId(data.id)
         && (!('examId' in data) || isValidId(data.examId))
@@ -352,6 +358,15 @@ service cloud.firestore {
         && (!('createdBy' in data) || (data.createdBy is string && data.createdBy.size() <= 128))
         && (!('updatedBy' in data) || (data.updatedBy is string && data.updatedBy.size() <= 128))
         && data.authorName is string && data.authorName.size() >= 1 && data.authorName.size() <= 150
+        && (!('authorSchool' in data) || (data.authorSchool is string && data.authorSchool.size() <= 200))
+        && (!('authorDepartment' in data) || (data.authorDepartment is string && data.authorDepartment.size() <= 150))
+        && (!('share_status' in data) || data.share_status in ['private', 'pending_review', 'city_public'])
+        && (!('shareRequestedAt' in data) || data.shareRequestedAt == null || (data.shareRequestedAt is string && data.shareRequestedAt.size() <= 64))
+        && (!('cityApprovedBy' in data) || data.cityApprovedBy == null || (data.cityApprovedBy is string && data.cityApprovedBy.size() <= 128))
+        && (!('cityApprovedAt' in data) || data.cityApprovedAt == null || (data.cityApprovedAt is string && data.cityApprovedAt.size() <= 64))
+        && (!('cityReviewNote' in data) || data.cityReviewNote == null || (data.cityReviewNote is string && data.cityReviewNote.size() <= 500))
+        && (!('clonedFromExamId' in data) || data.clonedFromExamId == null || (data.clonedFromExamId is string && data.clonedFromExamId.size() <= 128))
+        && (!('cloneCount' in data) || (data.cloneCount is number && data.cloneCount >= 0 && data.cloneCount <= 100000))
         && data.createdAt is string && data.createdAt.size() <= 64
         && data.updatedAt is string && data.updatedAt.size() <= 64
         && data.serverCreatedAt is timestamp
@@ -623,8 +638,14 @@ service cloud.firestore {
         && incoming().serverCreatedAt == request.time
         && incoming().serverUpdatedAt == request.time
         && (
-          (incoming().role == 'student' && incoming().status == 'active') ||
-          (incoming().role == 'teacher' && incoming().status == 'pending') ||
+          (incoming().role == 'student'
+            && incoming().status == 'active'
+            && !('approval_status' in incoming())
+            && !('pilot_group' in incoming())) ||
+          (incoming().role == 'teacher'
+            && incoming().status == 'pending'
+            && (!('approval_status' in incoming()) || incoming().approval_status == 'pending')
+            && (!('pilot_group' in incoming()) || incoming().pilot_group == 'standard')) ||
           (isAdmin() && incoming().role == 'admin' && incoming().status == 'active')
         );
       allow update: if isSignedIn()
@@ -644,7 +665,8 @@ service cloud.firestore {
         && incoming().serverUpdatedAt == request.time
         && (
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'uid', 'email', 'name', 'phone', 'school', 'className', 'role', 'status',
+            'uid', 'email', 'name', 'phone', 'school', 'department', 'className', 'role', 'status',
+            'approval_status', 'pilot_group',
             'approvedBy', 'approvedAt', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
           ])) ||
           (isOwner(userId)
@@ -652,8 +674,10 @@ service cloud.firestore {
             && existing().status != 'rejected'
             && incoming().role == existing().role
             && incoming().status == existing().status
+            && (!('approval_status' in existing()) ? !('approval_status' in incoming()) : incoming().approval_status == existing().approval_status)
+            && (!('pilot_group' in existing()) ? !('pilot_group' in incoming()) : incoming().pilot_group == existing().pilot_group)
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'uid', 'email', 'name', 'phone', 'school', 'className',
+              'uid', 'email', 'name', 'phone', 'school', 'department', 'className',
               'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ]))
         );
@@ -914,17 +938,24 @@ service cloud.firestore {
 
     match /exams/{examId} {
       allow get: if isValidId(examId) && (
-        (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
+        (isActiveTeacher() && (isOwner(existing().ownerId) || existing().share_status == 'city_public')) || isAdmin()
       );
       allow list: if isSignedIn() && (
-        (isActiveTeacher() && existing().ownerId == request.auth.uid) || isAdmin()
+        (isActiveTeacher() && (existing().ownerId == request.auth.uid || existing().share_status == 'city_public')) || isAdmin()
       );
       allow create: if isValidId(examId)
         && isValidExamMaster(incoming())
         && incoming().id == examId
         && incoming().serverCreatedAt == request.time
         && incoming().serverUpdatedAt == request.time
-        && ((isActiveTeacher() && incoming().ownerId == request.auth.uid) || isAdmin());
+        && (
+          (isActiveTeacher()
+            && incoming().ownerId == request.auth.uid
+            && (!('share_status' in incoming()) || incoming().share_status == 'private')
+            && !('cityApprovedBy' in incoming())
+            && !('cityApprovedAt' in incoming())) ||
+          isAdmin()
+        );
       allow update: if isValidId(examId)
         && isValidExamMaster(incoming())
         && incoming().id == existing().id
@@ -938,6 +969,9 @@ service cloud.firestore {
             && isOwner(existing().ownerId)
             && incoming().ownerId == existing().ownerId
             && (!('createdBy' in existing()) || incoming().createdBy == existing().createdBy)
+            && (!('share_status' in incoming())
+              || incoming().share_status in ['private', 'pending_review']
+              || ('share_status' in existing() && incoming().share_status == existing().share_status))
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'examId', 'code', 'publicCode', 'title', 'description', 'subjectId', 'subjectName',
               'grade', 'topic', 'folderId', 'durationMinutes',
@@ -947,6 +981,7 @@ service cloud.firestore {
               'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
               'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
               'answerReviewMinScore', 'answerReviewEnabledAt',
+              'authorSchool', 'authorDepartment', 'share_status', 'shareRequestedAt', 'clonedFromExamId',
               'createdBy', 'updatedBy', 'authorName', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -958,7 +993,10 @@ service cloud.firestore {
             'showSolutionsAfterSubmit', 'allowReviewLater', 'assignedClassCodes',
             'requiresPassword', 'passwordUpdatedAt', 'allowAnswerReview',
             'answerReviewMinScore', 'answerReviewEnabledAt',
-            'authorName', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+            'authorName', 'authorSchool', 'authorDepartment',
+            'share_status', 'shareRequestedAt', 'cityApprovedBy', 'cityApprovedAt', 'cityReviewNote',
+            'clonedFromExamId', 'cloneCount',
+            'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
           ]))
         );
       allow delete: if isValidId(examId) && (

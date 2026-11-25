@@ -24,7 +24,9 @@ import {
   ArrowRight,
   Cpu,
   Check,
+  Download,
 } from 'lucide-react';
+import { downloadStandardChemistryWordTemplate } from '../../services/sampleWordTemplateService';
 import {
   parseDocxExam,
   parsePdfExam,
@@ -1000,15 +1002,34 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               Định dạng hỗ trợ: <strong className="text-slate-800">.docx</strong> (Word chuẩn), <strong className="text-slate-800">.pdf</strong> (có lớp văn bản), <strong className="text-slate-800">.txt / .md / .csv</strong>.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={() => fileInputRef.current?.click()}
-            disabled={isProcessing}
-            className="min-h-[44px] px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white text-[15px] font-semibold shadow-xs transition-colors flex items-center gap-2 shrink-0 whitespace-nowrap"
-          >
-            <FileUp className="w-4 h-4 shrink-0" />
-            <span>Chọn file từ máy tính</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await downloadStandardChemistryWordTemplate();
+                  showToast('Đã tải file Word mẫu chuẩn GDPT 2018 (.docx)!');
+                } catch (err) {
+                  setParseError(
+                    err instanceof Error ? err.message : 'Không thể tạo file Word mẫu.'
+                  );
+                }
+              }}
+              className="min-h-[44px] px-4 py-2.5 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 text-[14px] font-semibold transition-colors flex items-center gap-2 shrink-0 whitespace-nowrap"
+            >
+              <Download className="w-4 h-4 shrink-0" />
+              <span>Tải file Word mẫu chuẩn (.docx)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={isProcessing}
+              className="min-h-[44px] px-5 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white text-[15px] font-semibold shadow-xs transition-colors flex items-center gap-2 shrink-0 whitespace-nowrap"
+            >
+              <FileUp className="w-4 h-4 shrink-0" />
+              <span>Chọn file từ máy tính</span>
+            </button>
+          </div>
         </div>
 
         {/* Drag & Drop Zone */}

@@ -47,6 +47,7 @@ export interface PendingProfileDraft {
   role: 'teacher' | 'student';
   phone?: string;
   school?: string;
+  department?: string;
   className?: string;
   classCode?: string;
 }
@@ -58,6 +59,7 @@ export interface RegisterTeacherInput {
   confirmPassword: string;
   phone?: string;
   school?: string;
+  department?: string;
 }
 
 export interface RegisterStudentInput {
@@ -140,6 +142,7 @@ export interface SyncProfileByUidOptions {
   name?: string;
   phone?: string;
   school?: string;
+  department?: string;
   className?: string;
   classCode?: string;
 }
@@ -393,8 +396,15 @@ export async function createOrSyncUserProfileDoc(
     name: draft.name.trim().slice(0, 150) || email.split('@')[0] || 'Người dùng HQTest',
     role: safeRole,
     status: initialStatus,
+    ...(safeRole === 'teacher'
+      ? {
+          approval_status: 'pending' as const,
+          pilot_group: 'standard' as const,
+        }
+      : {}),
     ...(draft.phone?.trim() ? { phone: draft.phone.trim().slice(0, 32) } : {}),
     ...(draft.school?.trim() ? { school: draft.school.trim().slice(0, 200) } : {}),
+    ...(draft.department?.trim() ? { department: draft.department.trim().slice(0, 150) } : {}),
     ...(resolvedClassName ? { className: resolvedClassName.slice(0, 80) } : {}),
     createdAt: nowIso,
     updatedAt: nowIso,
@@ -433,8 +443,12 @@ export async function createOrSyncUserProfileDoc(
       email,
       role: safeRole,
       status: initialStatus,
+      ...(safeRole === 'teacher'
+        ? { approval_status: 'pending' as const, pilot_group: 'standard' as const }
+        : {}),
       phone: userPayload.phone,
       school: userPayload.school,
+      department: userPayload.department,
       className: resolvedClassName || userPayload.className,
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -480,6 +494,28 @@ function parseUserDoc(
     cleanEmail.split('@')[0] ||
     'Người dùng HQTest';
 
+  const rawApproval = raw.approval_status;
+  const approval_status =
+    rawApproval === 'pending' || rawApproval === 'approved' || rawApproval === 'rejected'
+      ? rawApproval
+      : role === 'teacher'
+      ? status === 'active'
+        ? 'approved'
+        : status === 'rejected'
+        ? 'rejected'
+        : 'pending'
+      : undefined;
+
+  const rawPilotGroup = raw.pilot_group;
+  const pilot_group =
+    rawPilotGroup === 'host_school' ||
+    rawPilotGroup === 'expanded_pilot' ||
+    rawPilotGroup === 'standard'
+      ? rawPilotGroup
+      : role === 'teacher'
+      ? 'standard'
+      : undefined;
+
   return {
     id: uid,
     uid,
@@ -487,6 +523,9 @@ function parseUserDoc(
     name: cleanName,
     role,
     status,
+    approval_status,
+    pilot_group,
+    department: typeof raw.department === 'string' ? raw.department : undefined,
     phone: typeof raw.phone === 'string' ? raw.phone : undefined,
     school: typeof raw.school === 'string' ? raw.school : undefined,
     className: typeof raw.className === 'string' ? raw.className : undefined,
@@ -981,6 +1020,9 @@ export async function syncUserProfileByUid(
       if (!existingRaw.school && options.school?.trim()) {
         patchPayload.school = options.school.trim().slice(0, 200);
       }
+      if (!existingRaw.department && options.department?.trim()) {
+        patchPayload.department = options.department.trim().slice(0, 150);
+      }
       if (!existingRaw.phone && options.phone?.trim()) {
         patchPayload.phone = options.phone.trim().slice(0, 32);
       }
@@ -1023,6 +1065,7 @@ export async function syncUserProfileByUid(
           status: 'active' as const,
           ...(options.phone?.trim() ? { phone: options.phone.trim().slice(0, 32) } : {}),
           ...(options.school?.trim() ? { school: options.school.trim().slice(0, 200) } : {}),
+          ...(options.department?.trim() ? { department: options.department.trim().slice(0, 150) } : {}),
           createdAt: nowIso,
           updatedAt: nowIso,
           serverCreatedAt: serverTimestamp(),
@@ -1046,6 +1089,7 @@ export async function syncUserProfileByUid(
           role: options.intendedRole === 'teacher' ? 'teacher' : 'student',
           phone: options.phone?.trim(),
           school: options.school?.trim(),
+          department: options.department?.trim(),
           className: options.className?.trim(),
           classCode: options.classCode?.trim(),
         });
@@ -1179,6 +1223,7 @@ export async function registerTeacherAccount(
       role: 'teacher',
       phone: input.phone?.trim(),
       school: input.school?.trim(),
+      department: input.department?.trim(),
     });
 
     const synced = await createOrSyncUserProfileDoc(cred.user, {
@@ -1186,6 +1231,7 @@ export async function registerTeacherAccount(
       role: 'teacher',
       phone: input.phone?.trim(),
       school: input.school?.trim(),
+      department: input.department?.trim(),
     });
 
     return { success: true, user: synced.user };
@@ -1311,7 +1357,7 @@ export async function changeCurrentUserPassword(
 
 export async function updateOwnUserProfile(
   uid: string,
-  updates: { name: string; phone?: string; school?: string; className?: string }
+  updates: { name: string; phone?: string; school?: string; department?: string; className?: string }
 ): Promise<AuthActionResult> {
   if (firebaseInitError || !auth.currentUser || auth.currentUser.uid !== uid) {
     return { success: false, errorMessage: 'Không thể xác thực người dùng để cập nhật hồ sơ.' };
@@ -1328,6 +1374,7 @@ export async function updateOwnUserProfile(
       name: cleanName.slice(0, 150),
       ...(updates.phone !== undefined ? { phone: updates.phone.trim().slice(0, 32) } : {}),
       ...(updates.school !== undefined ? { school: updates.school.trim().slice(0, 200) } : {}),
+      ...(updates.department !== undefined ? { department: updates.department.trim().slice(0, 150) } : {}),
       ...(updates.className !== undefined ? { className: updates.className.trim().slice(0, 80) } : {}),
       updatedAt: nowIso,
       serverUpdatedAt: serverTimestamp(),

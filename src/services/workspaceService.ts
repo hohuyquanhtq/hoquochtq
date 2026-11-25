@@ -27,6 +27,8 @@ import {
   User,
   UserRole,
   AccountStatus,
+  TeacherApprovalStatus,
+  PilotGroup,
   Question,
   Folder,
   SubjectItem,
@@ -37,7 +39,7 @@ import {
   ClassEnrollment,
   UploadRecord,
 } from '../types';
-import { normalizeExamCode } from '../utils/urlHelper';
+import { generateExamCode6, normalizeExamCode } from '../utils/urlHelper';
 import { normalizeFolderId, normalizeParentId } from '../utils/folderTree';
 
 export interface TeacherWorkspaceData {
@@ -846,13 +848,37 @@ export async function fetchAllUsersForAdmin(): Promise<User[]> {
   return snap.docs
     .map((d) => {
       const raw = d.data() as Record<string, unknown>;
+      const role = (raw.role as UserRole) || 'student';
+      const status = (raw.status as AccountStatus) || 'active';
+      const rawApproval = raw.approval_status;
+      const approval_status: TeacherApprovalStatus | undefined =
+        rawApproval === 'pending' || rawApproval === 'approved' || rawApproval === 'rejected'
+          ? rawApproval
+          : role === 'teacher'
+          ? status === 'active'
+            ? 'approved'
+            : status === 'rejected'
+            ? 'rejected'
+            : 'pending'
+          : undefined;
+      const rawPilot = raw.pilot_group;
+      const pilot_group: PilotGroup | undefined =
+        rawPilot === 'host_school' || rawPilot === 'expanded_pilot' || rawPilot === 'standard'
+          ? rawPilot
+          : role === 'teacher'
+          ? 'standard'
+          : undefined;
+
       return {
         id: String(raw.uid || d.id),
         uid: String(raw.uid || d.id),
         name: String(raw.name || ''),
         email: String(raw.email || ''),
-        role: (raw.role as UserRole) || 'student',
-        status: (raw.status as AccountStatus) || 'active',
+        role,
+        status,
+        approval_status,
+        pilot_group,
+        department: typeof raw.department === 'string' ? raw.department : undefined,
         phone: typeof raw.phone === 'string' ? raw.phone : undefined,
         school: typeof raw.school === 'string' ? raw.school : undefined,
         className: typeof raw.className === 'string' ? raw.className : undefined,
@@ -870,9 +896,12 @@ export async function updateUserAccountByAdmin(
   adminUid: string,
   updates: {
     status?: AccountStatus;
+    approval_status?: TeacherApprovalStatus;
+    pilot_group?: PilotGroup;
     role?: UserRole;
     name?: string;
     school?: string;
+    department?: string;
     className?: string;
     phone?: string;
   }
@@ -881,21 +910,212 @@ export async function updateUserAccountByAdmin(
     throw new Error('Firebase chưa sẵn sàng.');
   }
   const nowIso = new Date().toISOString();
+
+  // Keep status and approval_status strictly synchronized
+  let resolvedStatus = updates.status;
+  let resolvedApproval = updates.approval_status;
+  if (resolvedStatus && !resolvedApproval) {
+    if (resolvedStatus === 'active') resolvedApproval = 'approved';
+    else if (resolvedStatus === 'pending') resolvedApproval = 'pending';
+    else if (resolvedStatus === 'rejected') resolvedApproval = 'rejected';
+  } else if (resolvedApproval && !resolvedStatus) {
+    if (resolvedApproval === 'approved') resolvedStatus = 'active';
+    else if (resolvedApproval === 'pending') resolvedStatus = 'pending';
+    else if (resolvedApproval === 'rejected') resolvedStatus = 'rejected';
+  }
+
   const payload = stripUndefinedDeep({
-    ...(updates.status ? { status: updates.status } : {}),
+    ...(resolvedStatus ? { status: resolvedStatus } : {}),
+    ...(resolvedApproval ? { approval_status: resolvedApproval } : {}),
+    ...(updates.pilot_group ? { pilot_group: updates.pilot_group } : {}),
     ...(updates.role ? { role: updates.role } : {}),
     ...(updates.name !== undefined ? { name: updates.name.trim().slice(0, 150) } : {}),
     ...(updates.school !== undefined ? { school: updates.school.trim().slice(0, 200) } : {}),
+    ...(updates.department !== undefined
+      ? { department: updates.department.trim().slice(0, 150) }
+      : {}),
     ...(updates.className !== undefined ? { className: updates.className.trim().slice(0, 80) } : {}),
     ...(updates.phone !== undefined ? { phone: updates.phone.trim().slice(0, 32) } : {}),
-    ...(updates.status === 'active'
-      ? { approvedBy: adminUid, approvedAt: nowIso }
-      : {}),
+    ...(resolvedStatus === 'active' ? { approvedBy: adminUid, approvedAt: nowIso } : {}),
     updatedAt: nowIso,
     serverUpdatedAt: serverTimestamp(),
   });
 
   await updateDoc(doc(db, 'users', targetUid), payload);
+}
+
+// ============================================================================
+// CITY-WIDE SHARED EXAM REPOSITORY (KHO ĐỀ THÀNH PHỐ — KIỂM DUYỆT)
+// ============================================================================
+
+export async function requestExamCityShare(
+  exam: Exam,
+  teacher: User
+): Promise<Exam> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để gửi đề xuất chia sẻ lên Kho Thành phố.');
+  }
+  const safeId = safeDocId(exam.id);
+  const nowIso = new Date().toISOString();
+  const nextSchool = (exam.authorSchool || teacher.school || '').trim().slice(0, 200);
+  const nextDept = (exam.authorDepartment || teacher.department || 'Tổ Hóa học').trim().slice(0, 150);
+
+  await updateDoc(
+    doc(db, 'exams', safeId),
+    stripUndefinedDeep({
+      share_status: 'pending_review',
+      shareRequestedAt: nowIso,
+      ...(nextSchool ? { authorSchool: nextSchool } : {}),
+      ...(nextDept ? { authorDepartment: nextDept } : {}),
+      updatedBy: auth.currentUser.uid,
+      updatedAt: nowIso,
+      serverUpdatedAt: serverTimestamp(),
+    })
+  );
+
+  return {
+    ...exam,
+    share_status: 'pending_review',
+    shareRequestedAt: nowIso,
+    authorSchool: nextSchool || exam.authorSchool,
+    authorDepartment: nextDept || exam.authorDepartment,
+    updatedAt: nowIso,
+  };
+}
+
+export async function withdrawExamCityShareRequest(exam: Exam): Promise<Exam> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để thu hồi yêu cầu chia sẻ.');
+  }
+  const safeId = safeDocId(exam.id);
+  const nowIso = new Date().toISOString();
+
+  await updateDoc(
+    doc(db, 'exams', safeId),
+    stripUndefinedDeep({
+      share_status: 'private',
+      updatedBy: auth.currentUser.uid,
+      updatedAt: nowIso,
+      serverUpdatedAt: serverTimestamp(),
+    })
+  );
+
+  return {
+    ...exam,
+    share_status: 'private',
+    updatedAt: nowIso,
+  };
+}
+
+export async function reviewExamCityShareByAdmin(
+  examId: string,
+  adminUid: string,
+  decision: 'approve' | 'reject',
+  note?: string
+): Promise<void> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Cần quyền Quản trị viên để duyệt đề chia sẻ.');
+  }
+  const safeId = safeDocId(examId);
+  const nowIso = new Date().toISOString();
+  const cleanNote = (note || '').trim().slice(0, 500);
+
+  await updateDoc(
+    doc(db, 'exams', safeId),
+    stripUndefinedDeep({
+      share_status: decision === 'approve' ? 'city_public' : 'private',
+      ...(decision === 'approve'
+        ? {
+            cityApprovedBy: adminUid,
+            cityApprovedAt: nowIso,
+          }
+        : {}),
+      cityReviewNote: cleanNote || (decision === 'approve' ? 'Đã kiểm duyệt chuẩn GDPT 2018.' : 'Chưa đạt yêu cầu kiểm duyệt.'),
+      updatedBy: adminUid,
+      updatedAt: nowIso,
+      serverUpdatedAt: serverTimestamp(),
+    })
+  );
+}
+
+export async function fetchCityPublicExams(): Promise<Exam[]> {
+  if (firebaseInitError || !auth.currentUser) return [];
+  const snap = await getDocs(
+    query(collection(db, 'exams'), where('share_status', '==', 'city_public'))
+  );
+  return snap.docs
+    .map((d) => {
+      const raw = d.data() as Exam;
+      return {
+        ...raw,
+        id: d.id,
+        examId: raw.examId || d.id,
+        share_status: 'city_public' as const,
+      } satisfies Exam;
+    })
+    .sort(
+      (a, b) =>
+        new Date(b.cityApprovedAt || b.updatedAt || b.createdAt).getTime() -
+        new Date(a.cityApprovedAt || a.updatedAt || a.createdAt).getTime()
+    );
+}
+
+export async function cloneCityExamToPersonalBank(
+  sourceExam: Exam,
+  targetTeacher: User
+): Promise<Exam> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để nhân bản đề thi.');
+  }
+  const ownerId = targetTeacher.uid || targetTeacher.id || auth.currentUser.uid;
+  const nowIso = new Date().toISOString();
+  const newExamId = `exam_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+  const newCode = generateExamCode6();
+
+  const clonedQuestions: Question[] = (sourceExam.questions || []).map((q, idx) => ({
+    ...structuredClone(q),
+    id: `q_clone_${Date.now()}_${idx}_${Math.random().toString(36).slice(2, 5)}`,
+    ownerId,
+    authorId: ownerId,
+    updatedAt: nowIso,
+  }));
+
+  const clonedExam: Exam = {
+    ...sourceExam,
+    id: newExamId,
+    examId: newExamId,
+    code: newCode,
+    publicCode: newCode,
+    shortId: newCode,
+    slug: `/${newCode}`,
+    title: `${sourceExam.title} (Bản sao)`,
+    folderId: null,
+    questions: clonedQuestions,
+    totalQuestions: clonedQuestions.length,
+    isPublished: false,
+    requiresPassword: false,
+    passwordUpdatedAt: null,
+    assignedClassCodes: [],
+    ownerId,
+    authorId: ownerId,
+    authorName: targetTeacher.name || auth.currentUser.displayName || 'Giáo viên',
+    authorSchool: targetTeacher.school || undefined,
+    authorDepartment: targetTeacher.department || 'Tổ Hóa học',
+    share_status: 'private',
+    shareRequestedAt: undefined,
+    cityApprovedBy: undefined,
+    cityApprovedAt: undefined,
+    cityReviewNote: undefined,
+    clonedFromExamId: sourceExam.id,
+    cloneCount: 0,
+    createdBy: ownerId,
+    updatedBy: ownerId,
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+
+  await syncExamToFirestore(clonedExam, ownerId);
+  return clonedExam;
 }
 
 export interface LegacyCloudAuditResult {

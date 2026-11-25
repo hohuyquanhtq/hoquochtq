@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { CognitiveLevel, Question, QuestionType, SubjectItem } from '../../types';
 import {
   COGNITIVE_LEVEL_SHORT_LABELS,
@@ -15,9 +15,12 @@ import {
   CheckSquare,
   Grid,
   ListChecks,
+  Plus,
   Search,
   Sparkles,
   Square,
+  Trash2,
+  Wand2,
   X,
 } from 'lucide-react';
 
@@ -28,8 +31,16 @@ export interface QuestionBankPickerModalProps {
   subjects?: SubjectItem[];
   defaultSubjectId?: string;
   defaultGrade?: string;
+  initialTab?: 'manual' | 'matrix';
   onAddQuestions: (picked: Question[]) => void;
   onClose: () => void;
+}
+
+interface TopicMatrixRow {
+  id: string;
+  topic: string;
+  type: QuestionType;
+  counts: Record<CognitiveLevel, number>;
 }
 
 type MatrixGrid = Record<QuestionType, Record<CognitiveLevel, number>>;
@@ -102,10 +113,12 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
   subjects = DEFAULT_GDPT_2018_SUBJECTS,
   defaultSubjectId = 'all',
   defaultGrade = 'all',
+  initialTab = 'manual',
   onAddQuestions,
   onClose,
 }) => {
-  const [activeTab, setActiveTab] = useState<'manual' | 'matrix'>('manual');
+  const [activeTab, setActiveTab] = useState<'manual' | 'matrix'>(initialTab);
+  const [matrixMode, setMatrixMode] = useState<'overall' | 'by_topic'>('overall');
   const [searchTerm, setSearchTerm] = useState('');
   const [subjectFilter, setSubjectFilter] = useState<string>(defaultSubjectId || 'all');
   const [gradeFilter, setGradeFilter] = useState<string>(defaultGrade || 'all');
@@ -115,7 +128,15 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   const [matrix, setMatrix] = useState<MatrixGrid>(() => createEmptyMatrix());
+  const [topicRows, setTopicRows] = useState<TopicMatrixRow[]>([]);
   const [matrixWarning, setMatrixWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab(initialTab);
+      setMatrixWarning(null);
+    }
+  }, [isOpen, initialTab]);
 
   // Track original bank IDs already in exam (strips `__ex_...` suffix if cloned before)
   const alreadyInExamBaseIds = useMemo(() => {
@@ -184,10 +205,31 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
   }, [scopedPool, alreadyInExamBaseIds]);
 
   const totalMatrixRequested = useMemo(() => {
+    if (matrixMode === 'by_topic') {
+      return topicRows.reduce(
+        (sum, row) => sum + LEVELS.reduce((rowSum, l) => rowSum + (row.counts[l] || 0), 0),
+        0
+      );
+    }
     let total = 0;
     TYPES.forEach((t) => LEVELS.forEach((l) => (total += matrix[t][l] || 0)));
     return total;
-  }, [matrix]);
+  }, [matrix, matrixMode, topicRows]);
+
+  const countAvailableForTopicCell = (
+    topic: string,
+    qType: QuestionType,
+    lvl: CognitiveLevel
+  ): number => {
+    return bankQuestions.filter((q) => {
+      if (alreadyInExamBaseIds.has(q.id)) return false;
+      const sub = resolveQuestionSubject(q, subjects);
+      if (subjectFilter !== 'all' && sub.id !== subjectFilter) return false;
+      if (gradeFilter !== 'all' && q.grade !== gradeFilter) return false;
+      if (topic !== 'all' && getQuestionTopicDisplay(q) !== topic) return false;
+      return q.type === qType && q.level === lvl;
+    }).length;
+  };
 
   if (!isOpen) return null;
 
@@ -206,12 +248,111 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
     onClose();
   };
 
+  const handleApplyStandard2018Preset = () => {
+    setMatrixMode('overall');
+    setMatrixWarning(null);
+    // Standard MOET GDPT 2018 Chemistry blueprint: 18 Part I (8 Biết, 6 Hiểu, 4 Vận dụng), 4 Part II (1 Biết, 2 Hiểu, 1 VD), 6 Part III (2 Hiểu, 3 VD, 1 VDC)
+    const preset: MatrixGrid = {
+      part1_single_choice: {
+        nhan_biet: Math.min(8, availableMatrixCounts.part1_single_choice.nhan_biet),
+        thong_hieu: Math.min(6, availableMatrixCounts.part1_single_choice.thong_hieu),
+        van_dung: Math.min(4, availableMatrixCounts.part1_single_choice.van_dung),
+        van_dung_cao: 0,
+      },
+      part1_multiple_choice: { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 },
+      part2_true_false: {
+        nhan_biet: Math.min(1, availableMatrixCounts.part2_true_false.nhan_biet),
+        thong_hieu: Math.min(2, availableMatrixCounts.part2_true_false.thong_hieu),
+        van_dung: Math.min(1, availableMatrixCounts.part2_true_false.van_dung),
+        van_dung_cao: 0,
+      },
+      part3_short_answer: {
+        nhan_biet: 0,
+        thong_hieu: Math.min(2, availableMatrixCounts.part3_short_answer.thong_hieu),
+        van_dung: Math.min(3, availableMatrixCounts.part3_short_answer.van_dung),
+        van_dung_cao: Math.min(1, availableMatrixCounts.part3_short_answer.van_dung_cao),
+      },
+    };
+    const totalPreset = TYPES.reduce(
+      (s, t) => s + LEVELS.reduce((rs, l) => rs + preset[t][l], 0),
+      0
+    );
+    if (totalPreset === 0) {
+      setMatrixWarning(
+        'Ngân hàng theo bộ lọc hiện tại chưa đủ câu hỏi cho mẫu GDPT 2018. Hãy mở rộng bộ lọc Khối lớp / Chủ đề hoặc nhập trực tiếp.'
+      );
+      return;
+    }
+    setMatrix(preset);
+  };
+
+  const handleAddTopicRow = () => {
+    const defaultTopic = availableTopics[0] || 'all';
+    setTopicRows((prev) => [
+      ...prev,
+      {
+        id: `trow_${Date.now()}_${Math.random().toString(36).slice(2, 5)}`,
+        topic: defaultTopic,
+        type: 'part1_single_choice',
+        counts: { nhan_biet: 1, thong_hieu: 1, van_dung: 0, van_dung_cao: 0 },
+      },
+    ]);
+  };
+
   const handleConfirmMatrix = () => {
     setMatrixWarning(null);
     if (totalMatrixRequested <= 0) {
       setMatrixWarning('Vui lòng nhập số lượng ít nhất 1 câu hỏi vào bảng ma trận.');
       return;
     }
+
+    if (matrixMode === 'by_topic') {
+      const usedIds = new Set<string>(alreadyInExamBaseIds);
+      const picked: Question[] = [];
+      const shortages: string[] = [];
+
+      for (const row of topicRows) {
+        for (const lvl of LEVELS) {
+          const target = Math.max(0, Math.floor(row.counts[lvl] || 0));
+          if (target === 0) continue;
+          const candidates = bankQuestions.filter((q) => {
+            if (usedIds.has(q.id)) return false;
+            const sub = resolveQuestionSubject(q, subjects);
+            if (subjectFilter !== 'all' && sub.id !== subjectFilter) return false;
+            if (gradeFilter !== 'all' && q.grade !== gradeFilter) return false;
+            if (row.topic !== 'all' && getQuestionTopicDisplay(q) !== row.topic) return false;
+            return q.type === row.type && q.level === lvl;
+          });
+          const chosen = [...candidates].sort(() => Math.random() - 0.5).slice(0, target);
+          chosen.forEach((c) => {
+            usedIds.add(c.id);
+            picked.push(c);
+          });
+          if (chosen.length < target) {
+            shortages.push(
+              `${row.topic === 'all' ? 'Tất cả chủ đề' : row.topic} · ${QUESTION_TYPE_SHORT_LABELS[row.type]} · ${COGNITIVE_LEVEL_SHORT_LABELS[lvl]}: cần ${target}, có ${chosen.length}`
+            );
+          }
+        }
+      }
+
+      if (picked.length === 0) {
+        setMatrixWarning('Không có câu hỏi khả dụng phù hợp với các dòng ma trận chuyên đề hiện tại.');
+        return;
+      }
+
+      onAddQuestions(cloneQuestionsForExam(picked));
+      if (shortages.length > 0) {
+        setMatrixWarning(
+          `Đã thêm ${picked.length} câu vào đề. Một số dòng thiếu câu trong ngân hàng: ${shortages.join('; ')}`
+        );
+        return;
+      }
+      setTopicRows([]);
+      onClose();
+      return;
+    }
+
     const { picked, shortages } = pickQuestionsByMatrix({
       pool: scopedPool,
       matrix,
@@ -225,7 +366,6 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
     }
     onAddQuestions(cloneQuestionsForExam(picked));
     if (shortages.length > 0) {
-      // Still close after adding? Let's inform teacher cleanly before closing or stay if 0.
       setMatrixWarning(
         `Đã thêm ${picked.length} câu vào đề. Một số ô thiếu câu hỏi trong ngân hàng: ${shortages.join('; ')}`
       );
@@ -463,87 +603,275 @@ export const QuestionBankPickerModal: React.FC<QuestionBankPickerModalProps> = (
                 </div>
               )}
 
-              <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600 leading-relaxed">
-                Nhập số lượng câu hỏi cần bốc ngẫu nhiên cho từng dạng bài và mức độ nhận thức từ bộ lọc ở trên. Hệ thống tự động loại trừ các câu đã có sẵn trong đề thi hiện tại.
-              </div>
+              <div className="flex flex-wrap items-center justify-between gap-2.5 p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMatrixMode('overall');
+                      setMatrixWarning(null);
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                      matrixMode === 'overall'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Ma trận tổng hợp (3 Phần × 4 Mức độ)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMatrixMode('by_topic');
+                      setMatrixWarning(null);
+                      if (topicRows.length === 0) {
+                        handleAddTopicRow();
+                      }
+                    }}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${
+                      matrixMode === 'by_topic'
+                        ? 'bg-slate-900 text-white'
+                        : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    Ma trận chi tiết theo Chuyên đề
+                  </button>
+                </div>
 
-              <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                <table className="w-full text-xs text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
-                      <th className="py-3 px-4">Dạng câu hỏi</th>
-                      {LEVELS.map((lvl) => (
-                        <th key={lvl} className="py-3 px-3 text-center">
-                          {COGNITIVE_LEVEL_SHORT_LABELS[lvl]}
-                        </th>
-                      ))}
-                      <th className="py-3 px-4 text-right">Tổng theo dạng</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {TYPES.map((qType) => {
-                      const rowSum = LEVELS.reduce((sum, l) => sum + (matrix[qType][l] || 0), 0);
-                      return (
-                        <tr key={qType} className="hover:bg-slate-50/70">
-                          <td className="py-3 px-4 font-semibold text-slate-900">
-                            {QUESTION_TYPE_SHORT_LABELS[qType]}
-                          </td>
-                          {LEVELS.map((lvl) => {
-                            const maxAvail = availableMatrixCounts[qType][lvl];
-                            const val = matrix[qType][lvl];
-                            return (
-                              <td key={lvl} className="py-3 px-3 text-center">
-                                <div className="inline-flex flex-col items-center gap-1">
-                                  <input
-                                    type="number"
-                                    min={0}
-                                    max={maxAvail}
-                                    value={val}
-                                    onChange={(e) => {
-                                      const n = Math.max(0, Math.floor(Number(e.target.value) || 0));
-                                      setMatrix((prev) => ({
-                                        ...prev,
-                                        [qType]: {
-                                          ...prev[qType],
-                                          [lvl]: n,
-                                        },
-                                      }));
-                                    }}
-                                    className={`w-16 min-h-[36px] px-2 py-1 rounded-lg border text-center font-bold tabular-nums ${
-                                      val > maxAvail
-                                        ? 'border-amber-400 bg-amber-50 text-amber-900'
-                                        : 'border-slate-300 bg-white text-slate-900'
-                                    }`}
-                                  />
-                                  <span className="text-[11px] text-slate-500 tabular-nums">
-                                    Có sẵn: {maxAvail}
-                                  </span>
-                                </div>
-                              </td>
-                            );
-                          })}
-                          <td className="py-3 px-4 text-right font-bold text-slate-900 tabular-nums">
-                            {rowSum} câu
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-
-              <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                 <button
                   type="button"
-                  onClick={() => setMatrix(createEmptyMatrix())}
-                  className="text-slate-600 hover:text-slate-900 font-semibold"
+                  onClick={handleApplyStandard2018Preset}
+                  className="px-3 py-1.5 rounded-lg bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-800 text-xs font-bold inline-flex items-center gap-1.5"
                 >
-                  Đặt lại ma trận về 0
+                  <Wand2 className="w-3.5 h-3.5" />
+                  <span>Áp dụng mẫu chuẩn GDPT 2018 (18-4-6)</span>
                 </button>
-                <span className="font-bold text-teal-800 tabular-nums">
-                  Tổng số câu sẽ bốc thêm: {totalMatrixRequested} câu
-                </span>
               </div>
+
+              {matrixMode === 'overall' ? (
+                <>
+                  <div className="p-3.5 rounded-xl bg-indigo-50/50 border border-indigo-100 text-xs text-slate-700 leading-relaxed">
+                    Nhập số lượng câu hỏi cần bốc ngẫu nhiên cho từng dạng bài (Phần I, II, III) và mức độ nhận thức (Biết / Hiểu / Vận dụng / VDC). Hệ thống tự động loại trừ các câu đã có sẵn trong đề thi.
+                  </div>
+
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
+                          <th className="py-3 px-4">Dạng câu hỏi</th>
+                          {LEVELS.map((lvl) => (
+                            <th key={lvl} className="py-3 px-3 text-center">
+                              {COGNITIVE_LEVEL_SHORT_LABELS[lvl]}
+                            </th>
+                          ))}
+                          <th className="py-3 px-4 text-right">Tổng theo dạng</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {TYPES.map((qType) => {
+                          const rowSum = LEVELS.reduce((sum, l) => sum + (matrix[qType][l] || 0), 0);
+                          return (
+                            <tr key={qType} className="hover:bg-slate-50/70">
+                              <td className="py-3 px-4 font-semibold text-slate-900">
+                                {QUESTION_TYPE_SHORT_LABELS[qType]}
+                              </td>
+                              {LEVELS.map((lvl) => {
+                                const maxAvail = availableMatrixCounts[qType][lvl];
+                                const val = matrix[qType][lvl];
+                                return (
+                                  <td key={lvl} className="py-3 px-3 text-center">
+                                    <div className="inline-flex flex-col items-center gap-1">
+                                      <input
+                                        type="number"
+                                        min={0}
+                                        max={maxAvail}
+                                        value={val}
+                                        onChange={(e) => {
+                                          const n = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                                          setMatrix((prev) => ({
+                                            ...prev,
+                                            [qType]: {
+                                              ...prev[qType],
+                                              [lvl]: n,
+                                            },
+                                          }));
+                                        }}
+                                        className={`w-16 min-h-[36px] px-2 py-1 rounded-lg border text-center font-bold tabular-nums ${
+                                          val > maxAvail
+                                            ? 'border-amber-400 bg-amber-50 text-amber-900'
+                                            : 'border-slate-300 bg-white text-slate-900'
+                                        }`}
+                                      />
+                                      <span className="text-[11px] text-slate-500 tabular-nums">
+                                        Có sẵn: {maxAvail}
+                                      </span>
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                              <td className="py-3 px-4 text-right font-bold text-slate-900 tabular-nums">
+                                {rowSum} câu
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setMatrix(createEmptyMatrix())}
+                      className="text-slate-600 hover:text-slate-900 font-semibold"
+                    >
+                      Đặt lại ma trận về 0
+                    </button>
+                    <span className="font-bold text-teal-800 tabular-nums">
+                      Tổng số câu sẽ bốc thêm: {totalMatrixRequested} câu
+                    </span>
+                  </div>
+                </>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs text-slate-600">
+                      Thiết lập nhiều dòng ma trận theo từng <strong>Chuyên đề / Chương</strong> và <strong>Dạng câu hỏi</strong> (Phần I, II, III) kết hợp mức độ nhận thức.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={handleAddTopicRow}
+                      className="px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold inline-flex items-center gap-1 shrink-0"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Thêm dòng chuyên đề</span>
+                    </button>
+                  </div>
+
+                  <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                    <table className="w-full text-xs text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-slate-700 font-bold">
+                          <th className="py-2.5 px-3 min-w-[180px]">Chuyên đề / Chương</th>
+                          <th className="py-2.5 px-3 min-w-[150px]">Dạng câu hỏi</th>
+                          {LEVELS.map((lvl) => (
+                            <th key={lvl} className="py-2.5 px-2 text-center">
+                              {COGNITIVE_LEVEL_SHORT_LABELS[lvl]}
+                            </th>
+                          ))}
+                          <th className="py-2.5 px-2 text-center">Xóa</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {topicRows.map((row) => (
+                          <tr key={row.id} className="hover:bg-slate-50/70">
+                            <td className="py-2.5 px-3">
+                              <select
+                                value={row.topic}
+                                onChange={(e) =>
+                                  setTopicRows((prev) =>
+                                    prev.map((r) =>
+                                      r.id === row.id ? { ...r, topic: e.target.value } : r
+                                    )
+                                  )
+                                }
+                                className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium"
+                              >
+                                <option value="all">Tất cả chuyên đề</option>
+                                {availableTopics.map((t) => (
+                                  <option key={t} value={t}>
+                                    {t}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <select
+                                value={row.type}
+                                onChange={(e) =>
+                                  setTopicRows((prev) =>
+                                    prev.map((r) =>
+                                      r.id === row.id
+                                        ? { ...r, type: e.target.value as QuestionType }
+                                        : r
+                                    )
+                                  )
+                                }
+                                className="w-full px-2 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-medium"
+                              >
+                                {TYPES.map((t) => (
+                                  <option key={t} value={t}>
+                                    {QUESTION_TYPE_SHORT_LABELS[t]}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            {LEVELS.map((lvl) => {
+                              const avail = countAvailableForTopicCell(row.topic, row.type, lvl);
+                              const val = row.counts[lvl] || 0;
+                              return (
+                                <td key={lvl} className="py-2.5 px-2 text-center">
+                                  <div className="inline-flex flex-col items-center gap-0.5">
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      max={avail}
+                                      value={val}
+                                      onChange={(e) => {
+                                        const n = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                                        setTopicRows((prev) =>
+                                          prev.map((r) =>
+                                            r.id === row.id
+                                              ? { ...r, counts: { ...r.counts, [lvl]: n } }
+                                              : r
+                                          )
+                                        );
+                                      }}
+                                      className={`w-14 px-1.5 py-1 rounded-lg border text-center font-bold tabular-nums ${
+                                        val > avail
+                                          ? 'border-amber-400 bg-amber-50 text-amber-900'
+                                          : 'border-slate-300 bg-white text-slate-900'
+                                      }`}
+                                    />
+                                    <span className="text-[10px] text-slate-500 tabular-nums">
+                                      /{avail}
+                                    </span>
+                                  </div>
+                                </td>
+                              );
+                            })}
+                            <td className="py-2.5 px-2 text-center">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setTopicRows((prev) => prev.filter((r) => r.id !== row.id))
+                                }
+                                className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                                title="Xóa dòng ma trận"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div className="flex items-center justify-between text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setTopicRows([])}
+                      className="text-slate-600 hover:text-slate-900 font-semibold"
+                    >
+                      Xóa tất cả dòng
+                    </button>
+                    <span className="font-bold text-teal-800 tabular-nums">
+                      Tổng số câu sẽ bốc thêm: {totalMatrixRequested} câu
+                    </span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
