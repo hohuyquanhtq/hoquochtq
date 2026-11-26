@@ -13,6 +13,8 @@ export type PilotGroup = 'host_school' | 'expanded_pilot' | 'standard';
 
 export type ExamShareStatus = 'private' | 'pending_review' | 'city_public';
 
+export type QuestionCityStatus = 'pending' | 'approved' | 'rejected';
+
 export interface User {
   id: string;
   uid?: string;
@@ -241,6 +243,7 @@ export interface Question {
   teacherVerified?: boolean;
   isSharedCity?: boolean;     // Chia sẻ câu hỏi vào Kho Thành phố
   isPublicCity?: boolean;     // Tương thích ngược trường chia sẻ Kho TP
+  cityStatus?: QuestionCityStatus; // Trạng thái kiểm duyệt câu hỏi đóng góp Kho TP
   recognitionSource?: RecognitionSource;
   sectionId?: string;
   section?: string;

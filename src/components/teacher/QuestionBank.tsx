@@ -575,12 +575,13 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         onUpdateQuestion({
           ...q,
           isSharedCity: nextValue,
+          cityStatus: 'pending',
           updatedAt: new Date().toISOString(),
         });
       }
       showToast(
         nextValue
-          ? `Đã bật chia sẻ câu ${q.code} vào Kho TP.`
+          ? `Đã gửi câu ${q.code} vào Kho TP (Chờ Super Admin duyệt).`
           : `Đã tắt chia sẻ câu ${q.code} khỏi Kho TP.`
       );
     } catch (err: any) {

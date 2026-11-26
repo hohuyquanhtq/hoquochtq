@@ -30,6 +30,7 @@ import {
   TeacherApprovalStatus,
   PilotGroup,
   Question,
+  QuestionCityStatus,
   Folder,
   SubjectItem,
   Exam,
@@ -247,6 +248,7 @@ export function buildQuestionDocPayload(q: Question, ownerId: string, existingCr
     ...(q.teacherVerified !== undefined ? { teacherVerified: !!q.teacherVerified } : {}),
     ...(q.isSharedCity !== undefined ? { isSharedCity: !!q.isSharedCity } : {}),
     ...(q.isPublicCity !== undefined ? { isPublicCity: !!q.isPublicCity } : {}),
+    ...(q.cityStatus ? { cityStatus: q.cityStatus } : {}),
     ...(q.section ? { section: q.section.slice(0, 64) } : {}),
     ...(q.sectionTitle ? { sectionTitle: q.sectionTitle.slice(0, 300) } : {}),
     createdAt: q.createdAt || nowIso,
@@ -309,6 +311,7 @@ export async function updateQuestionCityShareInFirestore(
   const cleanAuthorSchool = (authorMeta?.authorSchool || q.authorSchool || '').trim().slice(0, 200);
   const sharePatch = stripUndefinedDeep({
     isSharedCity: !!isSharedCity,
+    cityStatus: 'pending' as QuestionCityStatus,
     ...(isSharedCity && cleanAuthorName ? { authorName: cleanAuthorName } : {}),
     ...(isSharedCity && cleanAuthorSchool ? { authorSchool: cleanAuthorSchool } : {}),
     updatedAt: nowIso,
@@ -333,6 +336,7 @@ export async function updateQuestionCityShareInFirestore(
         {
           ...q,
           isSharedCity: !!isSharedCity,
+          cityStatus: 'pending',
           ...(cleanAuthorName ? { authorName: cleanAuthorName } : {}),
           ...(cleanAuthorSchool ? { authorSchool: cleanAuthorSchool } : {}),
           updatedAt: nowIso,
@@ -364,6 +368,7 @@ export async function bulkShareQuestionsToCityInFirestore(
           const ref = doc(db, 'questions', safeDocId(q.id));
           batch.update(ref, {
             isSharedCity: true,
+            cityStatus: 'pending',
             updatedAt: nowIso,
             serverUpdatedAt: serverTimestamp(),
           });
@@ -1145,31 +1150,122 @@ export async function reviewExamCityShareByAdmin(
   }
 }
 
-export async function fetchCitySharedQuestions(): Promise<Question[]> {
+export async function fetchCitySharedQuestions(options?: {
+  isSuperAdmin?: boolean;
+}): Promise<Question[]> {
   if (firebaseInitError || !auth.currentUser) return [];
+  const isSuperAdmin = Boolean(options?.isSuperAdmin);
   try {
-    const snap = await getDocs(
-      query(collection(db, 'questions'), where('isSharedCity', '==', true))
-    );
+    const qRef = isSuperAdmin
+      ? query(collection(db, 'questions'), where('isSharedCity', '==', true))
+      : query(
+          collection(db, 'questions'),
+          where('isSharedCity', '==', true),
+          where('cityStatus', '==', 'approved')
+        );
+    const snap = await getDocs(qRef);
+    const statusWeight: Record<QuestionCityStatus, number> = {
+      pending: 0,
+      approved: 1,
+      rejected: 2,
+    };
+
     return snap.docs
       .map((d) => {
         const raw = d.data() as Question;
         const normalizedGrade = normalizeQuestionGrade(raw.grade);
+        const normalizedCityStatus: QuestionCityStatus =
+          raw.cityStatus === 'approved' ||
+          raw.cityStatus === 'rejected' ||
+          raw.cityStatus === 'pending'
+            ? raw.cityStatus
+            : 'pending';
         return {
           ...raw,
           id: raw.id || d.id,
           grade: normalizedGrade || raw.grade,
           isSharedCity: true,
+          cityStatus: normalizedCityStatus,
         } satisfies Question;
       })
-      .sort(
-        (a, b) =>
+      .filter((q) => (isSuperAdmin ? true : q.cityStatus === 'approved'))
+      .sort((a, b) => {
+        if (isSuperAdmin) {
+          const diff =
+            statusWeight[a.cityStatus || 'pending'] - statusWeight[b.cityStatus || 'pending'];
+          if (diff !== 0) return diff;
+        }
+        return (
           new Date(b.updatedAt || b.createdAt).getTime() -
           new Date(a.updatedAt || a.createdAt).getTime()
-      );
+        );
+      });
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'questions');
     return [];
+  }
+}
+
+export async function reviewCityQuestionStatusByAdmin(
+  questionId: string,
+  nextStatus: QuestionCityStatus
+): Promise<void> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Cần quyền Quản trị viên để kiểm duyệt câu hỏi đóng góp.');
+  }
+  const safeId = safeDocId(questionId);
+  const ref = doc(db, 'questions', safeId);
+  const nowIso = new Date().toISOString();
+  const patch = {
+    cityStatus: nextStatus,
+    updatedAt: nowIso,
+    serverUpdatedAt: serverTimestamp(),
+  };
+
+  try {
+    await updateDoc(ref, patch);
+  } catch (err) {
+    const existing = await getDoc(ref).catch(() => null);
+    if (existing?.exists() && !existing.data()?.serverCreatedAt) {
+      await updateDoc(ref, {
+        ...patch,
+        serverCreatedAt: serverTimestamp(),
+      });
+      return;
+    }
+    handleFirestoreError(err, OperationType.UPDATE, `questions/${safeId}`);
+  }
+}
+
+export async function bulkReviewCityQuestionsStatusByAdmin(
+  questionIds: string[],
+  nextStatus: QuestionCityStatus
+): Promise<void> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Cần quyền Quản trị viên để kiểm duyệt hàng loạt câu hỏi.');
+  }
+  const uniqueIds = Array.from(new Set(questionIds.map((id) => safeDocId(id)).filter(Boolean)));
+  if (uniqueIds.length === 0) return;
+  const nowIso = new Date().toISOString();
+
+  for (let i = 0; i < uniqueIds.length; i += 400) {
+    const chunk = uniqueIds.slice(i, i + 400);
+    try {
+      const batch = writeBatch(db);
+      chunk.forEach((safeId) => {
+        batch.update(doc(db, 'questions', safeId), {
+          cityStatus: nextStatus,
+          updatedAt: nowIso,
+          serverUpdatedAt: serverTimestamp(),
+        });
+      });
+      await batch.commit();
+    } catch {
+      // Fallback per-document to safely handle legacy docs lacking serverCreatedAt
+      for (const safeId of chunk) {
+        await reviewCityQuestionStatusByAdmin(safeId, nextStatus);
+      }
+    }
   }
 }
 
@@ -1193,6 +1289,7 @@ export async function cloneCityQuestionToPersonalBank(
     authorSchool: targetTeacher.school || sourceQuestion.authorSchool,
     isSharedCity: false,
     isPublicCity: false,
+    cityStatus: undefined,
     source:
       sourceQuestion.source ||
       (sourceQuestion.authorSchool

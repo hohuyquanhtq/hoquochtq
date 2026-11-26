@@ -769,6 +769,7 @@ export default function App() {
     const scoped: Question = {
       ...q,
       isSharedCity,
+      cityStatus: 'pending',
       ownerId: activeUid,
       authorId: q.authorId || activeUid,
       authorName: q.authorName || userProfile?.name,
@@ -1576,6 +1577,25 @@ export default function App() {
                       StorageService.saveExams(updated, activeUid);
                     }
                     return updated;
+                  });
+                }}
+                onQuestionCityStatusChanged={(questionIds, nextStatus) => {
+                  const idSet = new Set(questionIds);
+                  setQuestions((prev) => {
+                    let changed = false;
+                    const updated = prev.map((item) => {
+                      if (!idSet.has(item.id)) return item;
+                      changed = true;
+                      return {
+                        ...item,
+                        cityStatus: nextStatus,
+                        updatedAt: new Date().toISOString(),
+                      };
+                    });
+                    if (changed && activeUid) {
+                      StorageService.saveQuestions(updated, activeUid);
+                    }
+                    return changed ? updated : prev;
                   });
                 }}
                 onOpenPersonalExams={() => setActiveTab('exam_manager')}

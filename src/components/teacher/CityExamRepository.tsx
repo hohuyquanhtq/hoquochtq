@@ -1,11 +1,13 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Exam, ExamShareStatus, Question, User } from '../../types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Exam, ExamShareStatus, Question, QuestionCityStatus, User } from '../../types';
 import {
+  bulkReviewCityQuestionsStatusByAdmin,
   cloneCityExamToPersonalBank,
   cloneCityQuestionToPersonalBank,
   fetchCityExamsForSuperAdmin,
   fetchCityPublicExams,
   fetchCitySharedQuestions,
+  reviewCityQuestionStatusByAdmin,
   reviewExamCityShareByAdmin,
 } from '../../services/workspaceService';
 import { exportPrintReadyExamWithAnswersDocx } from '../../services/sampleWordTemplateService';
@@ -21,6 +23,7 @@ import {
   ArrowRight,
   BookOpen,
   Building2,
+  Check,
   CheckCircle2,
   Clock,
   CopyPlus,
@@ -49,12 +52,24 @@ interface CityExamRepositoryProps {
     nextStatus: ExamShareStatus,
     reviewNote?: string
   ) => void;
+  onQuestionCityStatusChanged?: (
+    questionIds: string[],
+    nextStatus: QuestionCityStatus
+  ) => void;
   onOpenPersonalExams?: () => void;
   onOpenPersonalQuestionBank?: () => void;
 }
 
 type CityRepositoryTab = 'exams' | 'questions';
 type AdminExamStatusFilter = 'all' | 'pending_review' | 'city_public';
+type AdminQuestionStatusFilter = 'all' | QuestionCityStatus;
+
+function resolveQuestionCityStatus(q: Question): QuestionCityStatus {
+  if (q.cityStatus === 'approved' || q.cityStatus === 'rejected' || q.cityStatus === 'pending') {
+    return q.cityStatus;
+  }
+  return 'pending';
+}
 
 const TOPIC_DISPLAY_LABELS: Record<string, string> = {
   hoa_dai_cuong: 'Hóa đại cương',
@@ -71,6 +86,7 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   onExamCloned,
   onQuestionCloned,
   onExamShareStatusChanged,
+  onQuestionCityStatusChanged,
   onOpenPersonalExams,
   onOpenPersonalQuestionBank,
 }) => {
@@ -79,6 +95,8 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
 
   const [activeTab, setActiveTab] = useState<CityRepositoryTab>('exams');
   const [adminStatusFilter, setAdminStatusFilter] = useState<AdminExamStatusFilter>('all');
+  const [adminQuestionStatusFilter, setAdminQuestionStatusFilter] =
+    useState<AdminQuestionStatusFilter>('pending');
 
   // City Exams state
   const [cityExams, setCityExams] = useState<Exam[]>([]);
@@ -110,9 +128,13 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   const [exportingWordId, setExportingWordId] = useState<string | null>(null);
   const [cloningQuestionId, setCloningQuestionId] = useState<string | null>(null);
   const [reviewingExamId, setReviewingExamId] = useState<string | null>(null);
+  const [reviewingQuestionId, setReviewingQuestionId] = useState<string | null>(null);
+  const [isBulkReviewingQuestions, setIsBulkReviewingQuestions] = useState(false);
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<Set<string>>(new Set());
   const [rejectTargetExam, setRejectTargetExam] = useState<Exam | null>(null);
   const [rejectReason, setRejectReason] = useState<string>('');
   const [expandedExplanationIds, setExpandedExplanationIds] = useState<Set<string>>(new Set());
+  const selectAllQuestionsRef = useRef<HTMLInputElement | null>(null);
 
   const showToast = (msg: string, action: 'exams' | 'questions' | null = null) => {
     setToastMsg(msg);
@@ -131,7 +153,7 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
 
     const [examsRes, questionsRes] = await Promise.allSettled([
       isSuperAdmin ? fetchCityExamsForSuperAdmin() : fetchCityPublicExams(),
-      fetchCitySharedQuestions(),
+      fetchCitySharedQuestions({ isSuperAdmin }),
     ]);
 
     if (examsRes.status === 'fulfilled') {
@@ -146,6 +168,7 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
 
     if (questionsRes.status === 'fulfilled') {
       setCityQuestions(questionsRes.value);
+      setSelectedQuestionIds(new Set());
     } else {
       errors.push(
         questionsRes.reason instanceof Error
@@ -174,6 +197,21 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   const approvedExamsCount = useMemo(
     () => cityExams.filter((ex) => ex.share_status === 'city_public').length,
     [cityExams]
+  );
+
+  const pendingQuestionsCount = useMemo(
+    () => cityQuestions.filter((q) => resolveQuestionCityStatus(q) === 'pending').length,
+    [cityQuestions]
+  );
+
+  const approvedQuestionsCount = useMemo(
+    () => cityQuestions.filter((q) => resolveQuestionCityStatus(q) === 'approved').length,
+    [cityQuestions]
+  );
+
+  const rejectedQuestionsCount = useMemo(
+    () => cityQuestions.filter((q) => resolveQuestionCityStatus(q) === 'rejected').length,
+    [cityQuestions]
   );
 
   const availableSchools = useMemo(() => {
@@ -230,6 +268,14 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   const filteredQuestions = useMemo(() => {
     const term = questionSearchTerm.trim().toLowerCase();
     return cityQuestions.filter((q) => {
+      const qStatus = resolveQuestionCityStatus(q);
+      if (isSuperAdmin) {
+        if (adminQuestionStatusFilter !== 'all' && qStatus !== adminQuestionStatusFilter) {
+          return false;
+        }
+      } else {
+        if (qStatus !== 'approved') return false;
+      }
       if (questionGradeFilter !== 'all' && q.grade !== questionGradeFilter) return false;
       if (questionTypeFilter !== 'all' && q.type !== questionTypeFilter) return false;
       if (questionLevelFilter !== 'all' && q.level !== questionLevelFilter) return false;
@@ -253,11 +299,29 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
     });
   }, [
     cityQuestions,
+    isSuperAdmin,
+    adminQuestionStatusFilter,
     questionGradeFilter,
     questionTypeFilter,
     questionLevelFilter,
     questionSearchTerm,
   ]);
+
+  const selectedInFilteredIds = useMemo(
+    () => filteredQuestions.filter((q) => selectedQuestionIds.has(q.id)).map((q) => q.id),
+    [filteredQuestions, selectedQuestionIds]
+  );
+
+  const allFilteredSelected =
+    filteredQuestions.length > 0 && selectedInFilteredIds.length === filteredQuestions.length;
+  const someFilteredSelected =
+    selectedInFilteredIds.length > 0 && selectedInFilteredIds.length < filteredQuestions.length;
+
+  useEffect(() => {
+    if (selectAllQuestionsRef.current) {
+      selectAllQuestionsRef.current.indeterminate = someFilteredSelected;
+    }
+  }, [someFilteredSelected]);
 
   const totalCityExamQuestions = useMemo(
     () => filteredExams.reduce((sum, ex) => sum + (ex.questions?.length || 0), 0),
@@ -391,6 +455,105 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
     }
   };
 
+  const handleToggleSelectQuestion = (questionId: string) => {
+    setSelectedQuestionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(questionId)) next.delete(questionId);
+      else next.add(questionId);
+      return next;
+    });
+  };
+
+  const handleToggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedQuestionIds((prev) => {
+        const next = new Set(prev);
+        filteredQuestions.forEach((q) => next.delete(q.id));
+        return next;
+      });
+    } else {
+      setSelectedQuestionIds((prev) => {
+        const next = new Set(prev);
+        filteredQuestions.forEach((q) => next.add(q.id));
+        return next;
+      });
+    }
+  };
+
+  const handleReviewSingleQuestion = async (
+    question: Question,
+    nextStatus: 'approved' | 'rejected'
+  ) => {
+    if (!isSuperAdmin || reviewingQuestionId === question.id || isBulkReviewingQuestions) return;
+    setReviewingQuestionId(question.id);
+    setErrorMsg(null);
+    const nowIso = new Date().toISOString();
+    try {
+      await reviewCityQuestionStatusByAdmin(question.id, nextStatus);
+      setCityQuestions((prev) =>
+        prev.map((item) =>
+          item.id === question.id
+            ? { ...item, cityStatus: nextStatus, updatedAt: nowIso }
+            : item
+        )
+      );
+      setSelectedQuestionIds((prev) => {
+        if (!prev.has(question.id)) return prev;
+        const next = new Set(prev);
+        next.delete(question.id);
+        return next;
+      });
+      onQuestionCityStatusChanged?.([question.id], nextStatus);
+      showToast(
+        nextStatus === 'approved'
+          ? `Đã duyệt câu hỏi "${question.code}" hiển thị công khai trên Kho Thành phố!`
+          : `Đã từ chối câu hỏi "${question.code}".`
+      );
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'Không thể cập nhật trạng thái kiểm duyệt câu hỏi. Vui lòng thử lại.'
+      );
+    } finally {
+      setReviewingQuestionId(null);
+    }
+  };
+
+  const handleBulkReviewQuestions = async (nextStatus: 'approved' | 'rejected') => {
+    if (!isSuperAdmin || isBulkReviewingQuestions || selectedInFilteredIds.length === 0) return;
+    const targetIds = [...selectedInFilteredIds];
+    const targetSet = new Set(targetIds);
+    setIsBulkReviewingQuestions(true);
+    setErrorMsg(null);
+    const nowIso = new Date().toISOString();
+    try {
+      await bulkReviewCityQuestionsStatusByAdmin(targetIds, nextStatus);
+      setCityQuestions((prev) =>
+        prev.map((item) =>
+          targetSet.has(item.id)
+            ? { ...item, cityStatus: nextStatus, updatedAt: nowIso }
+            : item
+        )
+      );
+      setSelectedQuestionIds(new Set());
+      onQuestionCityStatusChanged?.(targetIds, nextStatus);
+      showToast(
+        nextStatus === 'approved'
+          ? `Đã duyệt công khai ${targetIds.length} câu hỏi đã chọn lên Kho Thành phố!`
+          : `Đã từ chối ${targetIds.length} câu hỏi đã chọn.`
+      );
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'Không thể cập nhật hàng loạt trạng thái câu hỏi. Vui lòng thử lại.'
+      );
+    } finally {
+      setIsBulkReviewingQuestions(false);
+    }
+  };
+
   const toggleExplanation = (id: string) => {
     setExpandedExplanationIds((prev) => {
       const next = new Set(prev);
@@ -431,12 +594,18 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
           <div className="flex items-center gap-3 shrink-0">
             <div className="px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-right tabular-nums">
               <p className="text-[11px] font-semibold text-slate-500">
-                {isSuperAdmin ? 'Tổng đề & câu Kho TP' : 'Tổng học liệu Kho TP'}
+                {isSuperAdmin
+                  ? activeTab === 'questions'
+                    ? 'Câu hỏi đóng góp Kho TP'
+                    : 'Đề thi hoàn chỉnh Kho TP'
+                  : 'Tổng học liệu Kho TP'}
               </p>
               <p className="text-base sm:text-lg font-extrabold text-slate-900">
                 {isSuperAdmin
-                  ? `${approvedExamsCount} đã duyệt · ${pendingExamsCount} chờ duyệt`
-                  : `${approvedExamsCount} đề · ${cityQuestions.length} câu đóng góp`}
+                  ? activeTab === 'questions'
+                    ? `${approvedQuestionsCount} đã duyệt · ${pendingQuestionsCount} chờ duyệt`
+                    : `${approvedExamsCount} đã duyệt · ${pendingExamsCount} chờ duyệt`
+                  : `${approvedExamsCount} đề · ${approvedQuestionsCount} câu đóng góp`}
               </p>
             </div>
             <button
@@ -582,6 +751,123 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
                 }`}
               >
                 {approvedExamsCount}
+              </span>
+            </button>
+          </div>
+        )}
+
+        {/* Super Admin Sub-Tabs for Question Moderation (Only visible to Super Admin in Tab 2) */}
+        {activeTab === 'questions' && isSuperAdmin && (
+          <div
+            role="tablist"
+            aria-label="Bộ lọc trạng thái kiểm duyệt câu hỏi đóng góp"
+            className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100"
+          >
+            <span className="text-xs font-bold text-slate-500 mr-1">Trạng thái câu hỏi:</span>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminQuestionStatusFilter === 'all'}
+              onClick={() => {
+                setAdminQuestionStatusFilter('all');
+                setSelectedQuestionIds(new Set());
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                adminQuestionStatusFilter === 'all'
+                  ? 'bg-slate-900 border-slate-900 text-white'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <span>Tất cả</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums ${
+                  adminQuestionStatusFilter === 'all'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {cityQuestions.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminQuestionStatusFilter === 'pending'}
+              onClick={() => {
+                setAdminQuestionStatusFilter('pending');
+                setSelectedQuestionIds(new Set());
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                adminQuestionStatusFilter === 'pending'
+                  ? 'bg-amber-600 border-amber-600 text-white'
+                  : 'bg-amber-50/70 border-amber-200 text-amber-800 hover:bg-amber-100'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Chờ duyệt</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums ${
+                  adminQuestionStatusFilter === 'pending'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-amber-200/70 text-amber-900'
+                }`}
+              >
+                {pendingQuestionsCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminQuestionStatusFilter === 'approved'}
+              onClick={() => {
+                setAdminQuestionStatusFilter('approved');
+                setSelectedQuestionIds(new Set());
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                adminQuestionStatusFilter === 'approved'
+                  ? 'bg-emerald-600 border-emerald-600 text-white'
+                  : 'bg-emerald-50/70 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Đã duyệt</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums ${
+                  adminQuestionStatusFilter === 'approved'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-emerald-200/70 text-emerald-900'
+                }`}
+              >
+                {approvedQuestionsCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminQuestionStatusFilter === 'rejected'}
+              onClick={() => {
+                setAdminQuestionStatusFilter('rejected');
+                setSelectedQuestionIds(new Set());
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                adminQuestionStatusFilter === 'rejected'
+                  ? 'bg-rose-600 border-rose-600 text-white'
+                  : 'bg-rose-50/70 border-rose-200 text-rose-800 hover:bg-rose-100'
+              }`}
+            >
+              <XCircle className="w-3.5 h-3.5" />
+              <span>Đã từ chối</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums ${
+                  adminQuestionStatusFilter === 'rejected'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-rose-200/70 text-rose-900'
+                }`}
+              >
+                {rejectedQuestionsCount}
               </span>
             </button>
           </div>
@@ -920,17 +1206,74 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
             <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-2">
               <Database className="w-8 h-8 text-slate-300 mx-auto" />
               <p className="text-sm font-bold text-slate-700">
-                {cityQuestions.length === 0
-                  ? 'Chưa có câu hỏi nào được chia sẻ lên Ngân hàng câu hỏi đóng góp.'
+                {isSuperAdmin && adminQuestionStatusFilter === 'pending'
+                  ? 'Hiện không có câu hỏi đóng góp nào đang chờ duyệt.'
+                  : isSuperAdmin && adminQuestionStatusFilter === 'rejected'
+                  ? 'Hiện không có câu hỏi nào ở trạng thái đã từ chối.'
+                  : cityQuestions.length === 0
+                  ? 'Chưa có câu hỏi nào được duyệt công khai trong Ngân hàng câu hỏi đóng góp.'
                   : 'Không tìm thấy câu hỏi nào khớp với bộ lọc đang chọn.'}
               </p>
               <p className="text-xs text-slate-500 max-w-md mx-auto">
                 Thầy/Cô có thể mở mục <strong>Ngân hàng câu hỏi</strong> và bật nút gạt{' '}
-                <strong className="text-teal-700">&quot;Kho TP&quot;</strong> ở từng câu hỏi để đóng góp ngay vào kho dùng chung toàn thành phố.
+                <strong className="text-teal-700">&quot;Kho TP&quot;</strong> ở từng câu hỏi để gửi đóng góp vào kho dùng chung toàn thành phố.
               </p>
             </div>
           ) : (
             <div className="space-y-4">
+              {/* Bulk Action Bar — Super Admin ONLY */}
+              {isSuperAdmin && (
+                <div className="bg-white border border-slate-200 rounded-2xl px-4 py-3 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
+                      <input
+                        ref={selectAllQuestionsRef}
+                        type="checkbox"
+                        checked={allFilteredSelected}
+                        onChange={handleToggleSelectAllFiltered}
+                        disabled={isBulkReviewingQuestions}
+                        className="w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                      />
+                      <span className="text-xs font-bold text-slate-800">Chọn tất cả</span>
+                    </label>
+                    <span className="text-xs font-semibold text-slate-600 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-lg tabular-nums">
+                      Đã chọn{' '}
+                      <strong className="text-slate-900">{selectedInFilteredIds.length}</strong>/
+                      {filteredQuestions.length} câu
+                    </span>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={selectedInFilteredIds.length === 0 || isBulkReviewingQuestions}
+                      onClick={() => void handleBulkReviewQuestions('approved')}
+                      className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors"
+                    >
+                      <Check className="w-4 h-4 shrink-0" />
+                      <span>
+                        {isBulkReviewingQuestions
+                          ? 'Đang xử lý...'
+                          : 'Duyệt các câu đã chọn'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={selectedInFilteredIds.length === 0 || isBulkReviewingQuestions}
+                      onClick={() => void handleBulkReviewQuestions('rejected')}
+                      className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors"
+                    >
+                      <X className="w-4 h-4 shrink-0" />
+                      <span>
+                        {isBulkReviewingQuestions
+                          ? 'Đang xử lý...'
+                          : 'Từ chối các câu đã chọn'}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
+
               <div className="text-xs text-slate-500 font-medium tabular-nums">
                 Hiển thị <strong>{filteredQuestions.length}</strong> / {cityQuestions.length} câu hỏi đóng góp vào Kho Thành phố.
               </div>
@@ -938,6 +1281,9 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
               <div className="space-y-3">
                 {filteredQuestions.map((q) => {
                   const isCloningQ = cloningQuestionId === q.id;
+                  const isReviewingQ = reviewingQuestionId === q.id;
+                  const qStatus = resolveQuestionCityStatus(q);
+                  const isSelected = selectedQuestionIds.has(q.id);
                   const topicLabel = getQuestionTopicDisplay(q);
                   const isExplanationOpen = expandedExplanationIds.has(q.id);
                   const isOwnQuestion =
@@ -947,61 +1293,143 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
                   return (
                     <div
                       key={q.id}
-                      className="bg-white border border-slate-200 hover:border-teal-300 rounded-2xl p-5 shadow-xs transition-colors space-y-3"
+                      className={`bg-white border rounded-2xl p-5 shadow-xs transition-colors space-y-3 ${
+                        isSuperAdmin && isSelected
+                          ? 'border-teal-500 ring-2 ring-teal-500/20'
+                          : isSuperAdmin && qStatus === 'pending'
+                          ? 'border-amber-300 hover:border-amber-400 bg-amber-50/15'
+                          : isSuperAdmin && qStatus === 'rejected'
+                          ? 'border-rose-200 hover:border-rose-300 bg-rose-50/10'
+                          : 'border-slate-200 hover:border-teal-300'
+                      }`}
                     >
                       {/* Top Metadata Row */}
                       <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
-                        <div className="space-y-1.5 min-w-0">
-                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                            <span className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 font-bold text-[11px] inline-flex items-center gap-1">
-                              <Globe className="w-3 h-3" />
-                              Kho TP
-                            </span>
-                            <span className="font-mono font-bold text-slate-900">{q.code}</span>
-                            <span className="text-slate-300">·</span>
-                            <span className="font-semibold text-teal-700">
-                              {q.subjectName || 'Hóa học'}
-                            </span>
-                            <span className="text-slate-300">·</span>
-                            <span className="font-medium text-slate-700">
-                              {GRADE_LABELS[q.grade] || `Lớp ${q.grade}`}
-                            </span>
-                            {q.chapterName && (
-                              <>
-                                <span className="text-slate-300">·</span>
-                                <span className="text-slate-500">{q.chapterName}</span>
-                              </>
-                            )}
-                            <span className="text-slate-300">·</span>
-                            <span className="font-medium text-slate-800">{topicLabel}</span>
-                            <span className="text-slate-300">·</span>
-                            <span className="font-semibold text-indigo-700">
-                              {QUESTION_TYPE_SHORT_LABELS[q.type]}
-                            </span>
-                            <span className="text-slate-300">·</span>
-                            <span className="font-semibold text-slate-600">
-                              {COGNITIVE_LEVEL_SHORT_LABELS[q.level]}
-                            </span>
-                          </div>
+                        <div className="flex items-start gap-3 min-w-0">
+                          {isSuperAdmin && (
+                            <label className="pt-0.5 shrink-0 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                disabled={isBulkReviewingQuestions}
+                                onChange={() => handleToggleSelectQuestion(q.id)}
+                                aria-label={`Chọn câu hỏi ${q.code}`}
+                                className="w-4 h-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer"
+                              />
+                            </label>
+                          )}
 
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
-                            {(q.authorName || q.authorSchool) && (
-                              <span className="inline-flex items-center gap-1 text-slate-600 font-medium">
-                                <UserIcon className="w-3 h-3 text-teal-600" />
-                                {q.authorName || 'Giáo viên đóng góp'}
-                                {q.authorSchool ? ` · ${q.authorSchool}` : ''}
+                          <div className="space-y-1.5 min-w-0">
+                            <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                              {isSuperAdmin ? (
+                                qStatus === 'pending' ? (
+                                  <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[11px] inline-flex items-center gap-1">
+                                    <Clock className="w-3 h-3" />
+                                    Chờ duyệt
+                                  </span>
+                                ) : qStatus === 'approved' ? (
+                                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 font-bold text-[11px] inline-flex items-center gap-1">
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    Đã duyệt
+                                  </span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-800 border border-rose-200 font-bold text-[11px] inline-flex items-center gap-1">
+                                    <XCircle className="w-3 h-3" />
+                                    Đã từ chối
+                                  </span>
+                                )
+                              ) : (
+                                <span className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 font-bold text-[11px] inline-flex items-center gap-1">
+                                  <Globe className="w-3 h-3" />
+                                  Kho TP
+                                </span>
+                              )}
+                              <span className="font-mono font-bold text-slate-900">{q.code}</span>
+                              <span className="text-slate-300">·</span>
+                              <span className="font-semibold text-teal-700">
+                                {q.subjectName || 'Hóa học'}
                               </span>
-                            )}
-                            {q.source && <span>Nguồn: {q.source}</span>}
-                            {q.updatedAt && (
-                              <span>
-                                Cập nhật: {new Date(q.updatedAt).toLocaleDateString('vi-VN')}
+                              <span className="text-slate-300">·</span>
+                              <span className="font-medium text-slate-700">
+                                {GRADE_LABELS[q.grade] || `Lớp ${q.grade}`}
                               </span>
-                            )}
+                              {q.chapterName && (
+                                <>
+                                  <span className="text-slate-300">·</span>
+                                  <span className="text-slate-500">{q.chapterName}</span>
+                                </>
+                              )}
+                              <span className="text-slate-300">·</span>
+                              <span className="font-medium text-slate-800">{topicLabel}</span>
+                              <span className="text-slate-300">·</span>
+                              <span className="font-semibold text-indigo-700">
+                                {QUESTION_TYPE_SHORT_LABELS[q.type]}
+                              </span>
+                              <span className="text-slate-300">·</span>
+                              <span className="font-semibold text-slate-600">
+                                {COGNITIVE_LEVEL_SHORT_LABELS[q.level]}
+                              </span>
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                              {(q.authorName || q.authorSchool) && (
+                                <span className="inline-flex items-center gap-1 text-slate-600 font-medium">
+                                  <UserIcon className="w-3 h-3 text-teal-600" />
+                                  {q.authorName || 'Giáo viên đóng góp'}
+                                  {q.authorSchool ? ` · ${q.authorSchool}` : ''}
+                                </span>
+                              )}
+                              {q.source && <span>Nguồn: {q.source}</span>}
+                              {q.updatedAt && (
+                                <span>
+                                  Cập nhật: {new Date(q.updatedAt).toLocaleDateString('vi-VN')}
+                                </span>
+                              )}
+                            </div>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-2 shrink-0">
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {isSuperAdmin && (
+                            <>
+                              <button
+                                type="button"
+                                disabled={
+                                  isReviewingQ ||
+                                  isBulkReviewingQuestions ||
+                                  qStatus === 'approved'
+                                }
+                                onClick={() => void handleReviewSingleQuestion(q, 'approved')}
+                                className="min-h-[34px] px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-bold inline-flex items-center gap-1 shadow-xs transition-colors"
+                                title={
+                                  qStatus === 'approved'
+                                    ? 'Câu hỏi đã được duyệt'
+                                    : 'Duyệt câu hỏi lên Kho Thành phố'
+                                }
+                              >
+                                <Check className="w-3.5 h-3.5 shrink-0" />
+                                <span>Duyệt</span>
+                              </button>
+                              <button
+                                type="button"
+                                disabled={
+                                  isReviewingQ ||
+                                  isBulkReviewingQuestions ||
+                                  qStatus === 'rejected'
+                                }
+                                onClick={() => void handleReviewSingleQuestion(q, 'rejected')}
+                                className="min-h-[34px] px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 disabled:opacity-45 disabled:cursor-not-allowed text-white text-xs font-bold inline-flex items-center gap-1 shadow-xs transition-colors"
+                                title={
+                                  qStatus === 'rejected'
+                                    ? 'Câu hỏi đã bị từ chối'
+                                    : 'Từ chối câu hỏi đóng góp này'
+                                }
+                              >
+                                <X className="w-3.5 h-3.5 shrink-0" />
+                                <span>Từ chối</span>
+                              </button>
+                            </>
+                          )}
                           {q.explanation && (
                             <button
                               type="button"
