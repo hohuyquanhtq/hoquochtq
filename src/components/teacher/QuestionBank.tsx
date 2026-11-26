@@ -65,6 +65,7 @@ interface QuestionBankProps {
     questions: Question[]
   ) => Promise<{ savedCount: number; firestoreSynced: boolean; error?: string }>;
   onUpdateQuestion: (q: Question) => void;
+  onToggleQuestionCityShare?: (q: Question, isSharedCity: boolean) => Promise<void> | void;
   onDeleteQuestion: (id: string) => void;
   onBulkDeleteQuestions?: (ids: string[]) => void;
   onCreateExamFromSelected: (selectedQuestions: Question[]) => void;
@@ -78,6 +79,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   onAddQuestion,
   onAddQuestionsBatch,
   onUpdateQuestion,
+  onToggleQuestionCityShare,
   onDeleteQuestion,
   onBulkDeleteQuestions,
   onCreateExamFromSelected,
@@ -107,6 +109,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
   const [pageSize, setPageSize] = useState<number>(15);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [aiLoadingId, setAiLoadingId] = useState<string | null>(null);
+  const [togglingCityId, setTogglingCityId] = useState<string | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // States bóc tách Word sử dụng engine chuẩn của hệ thống
@@ -557,6 +560,34 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     } finally {
       setIsExtractingWord(false);
       if (wordInputRef.current) wordInputRef.current.value = '';
+    }
+  };
+
+  const handleToggleCityShare = async (q: Question) => {
+    if (togglingCityId === q.id) return;
+    const currentShared = Boolean(q.isSharedCity ?? q.isPublicCity);
+    const nextValue = !currentShared;
+    setTogglingCityId(q.id);
+    try {
+      if (onToggleQuestionCityShare) {
+        await onToggleQuestionCityShare(q, nextValue);
+      } else {
+        onUpdateQuestion({
+          ...q,
+          isSharedCity: nextValue,
+          updatedAt: new Date().toISOString(),
+        });
+      }
+      showToast(
+        nextValue
+          ? `Đã bật chia sẻ câu ${q.code} vào Kho TP.`
+          : `Đã tắt chia sẻ câu ${q.code} khỏi Kho TP.`
+      );
+    } catch (err: any) {
+      console.error(err);
+      showToast(err?.message || 'Không thể cập nhật trạng thái chia sẻ Kho TP.');
+    } finally {
+      setTogglingCityId(null);
     }
   };
 
@@ -1065,7 +1096,7 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-1 shrink-0">
+                  <div className="flex flex-wrap items-center justify-end gap-1.5 shrink-0">
                     <button
                       type="button"
                       onClick={() => setViewingQuestion(q)}
@@ -1074,6 +1105,44 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
                     >
                       <Eye className="w-4 h-4" />
                     </button>
+                    {(() => {
+                      const isShared = Boolean(q.isSharedCity ?? q.isPublicCity);
+                      const isToggling = togglingCityId === q.id;
+                      return (
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={isShared}
+                          aria-label={`Chia sẻ câu ${q.code} vào Kho TP`}
+                          disabled={isToggling}
+                          onClick={() => handleToggleCityShare(q)}
+                          title={
+                            isShared
+                              ? 'Đang bật chia sẻ Kho TP (nhấn để tắt)'
+                              : 'Bật chia sẻ câu hỏi vào Kho TP'
+                          }
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors disabled:opacity-60 ${
+                            isShared
+                              ? 'bg-teal-50 border-teal-300 text-teal-700 hover:bg-teal-100/80'
+                              : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                          }`}
+                        >
+                          <span className="whitespace-nowrap">Kho TP</span>
+                          <span
+                            aria-hidden="true"
+                            className={`relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors ${
+                              isShared ? 'bg-teal-600' : 'bg-slate-300'
+                            }`}
+                          >
+                            <span
+                              className={`inline-block h-3 w-3 rounded-full bg-white shadow-xs transition-transform ${
+                                isShared ? 'translate-x-3.5' : 'translate-x-0.5'
+                              }`}
+                            />
+                          </span>
+                        </button>
+                      );
+                    })()}
                     <button
                       type="button"
                       onClick={() => handleAiExplain(q)}

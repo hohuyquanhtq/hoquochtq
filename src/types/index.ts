@@ -237,6 +237,8 @@ export interface Question {
   equationWarnings?: string[];
   ommlSources?: string[];
   teacherVerified?: boolean;
+  isSharedCity?: boolean;     // Chia sẻ câu hỏi vào Kho Thành phố
+  isPublicCity?: boolean;     // Tương thích ngược trường chia sẻ Kho TP
   recognitionSource?: RecognitionSource;
   sectionId?: string;
   section?: string;

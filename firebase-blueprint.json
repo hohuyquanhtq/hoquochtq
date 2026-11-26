@@ -56,6 +56,8 @@
         "parseStatus": { "type": "string", "enum": ["verified", "needs_review", "error"] },
         "parseWarning": { "type": "string", "maxLength": 500 },
         "teacherVerified": { "type": "boolean" },
+        "isSharedCity": { "type": "boolean" },
+        "isPublicCity": { "type": "boolean" },
         "section": { "type": "string", "maxLength": 64 },
         "sectionTitle": { "type": "string", "maxLength": 300 },
         "createdAt": { "type": "string", "format": "date-time" },

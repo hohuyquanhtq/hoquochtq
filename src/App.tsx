@@ -56,6 +56,7 @@ import {
   fetchStudentWorkspaceFromFirestore,
   saveQuestionToFirestore,
   saveQuestionsBatchToFirestore,
+  updateQuestionCityShareInFirestore,
   deleteQuestionFromFirestore,
   deleteQuestionsBatchFromFirestore,
   saveFolderToFirestore,
@@ -760,6 +761,28 @@ export default function App() {
     void deleteQuestionsBatchFromFirestore(ids).catch((err) => {
       console.warn('[HQTest] Could not bulk delete questions from Firestore:', err);
     });
+  };
+
+  const handleToggleQuestionCityShare = async (q: Question, isSharedCity: boolean) => {
+    if (!activeUid) return;
+    const previousQuestions = questions;
+    const scoped: Question = {
+      ...q,
+      isSharedCity,
+      ownerId: activeUid,
+      authorId: q.authorId || activeUid,
+      updatedAt: new Date().toISOString(),
+    };
+    StorageService.updateQuestion(scoped, activeUid);
+    setQuestions(StorageService.getQuestions(activeUid));
+    try {
+      await updateQuestionCityShareInFirestore(scoped, isSharedCity, activeUid);
+    } catch (err) {
+      StorageService.saveQuestions(previousQuestions, activeUid);
+      setQuestions(previousQuestions);
+      console.warn('[HQTest] Could not update question isSharedCity in Firestore:', err);
+      throw err;
+    }
   };
 
   const handleCreateFolder = async (input: {
@@ -1504,6 +1527,7 @@ export default function App() {
                 onAddQuestion={handleAddQuestion}
                 onAddQuestionsBatch={handleAddQuestionsBatch}
                 onUpdateQuestion={handleUpdateQuestion}
+                onToggleQuestionCityShare={handleToggleQuestionCityShare}
                 onDeleteQuestion={handleDeleteQuestion}
                 onBulkDeleteQuestions={handleBulkDeleteQuestions}
                 onCreateExamFromSelected={handleCreateExamFromSelected}

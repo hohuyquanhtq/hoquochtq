@@ -121,7 +121,7 @@ service cloud.firestore {
           'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic', 'level',
           'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
           'imageUrl', 'explanation', 'source', 'authorId', 'parseStatus', 'parseWarning',
-          'teacherVerified', 'section', 'sectionTitle', 'createdAt', 'updatedAt',
+          'teacherVerified', 'isSharedCity', 'isPublicCity', 'section', 'sectionTitle', 'createdAt', 'updatedAt',
           'serverCreatedAt', 'serverUpdatedAt'
         ])
         && isValidId(data.id)
@@ -152,6 +152,8 @@ service cloud.firestore {
         && (!('parseStatus' in data) || data.parseStatus in ['verified', 'needs_review', 'error'])
         && (!('parseWarning' in data) || (data.parseWarning is string && data.parseWarning.size() <= 500))
         && (!('teacherVerified' in data) || data.teacherVerified is bool)
+        && (!('isSharedCity' in data) || data.isSharedCity is bool)
+        && (!('isPublicCity' in data) || data.isPublicCity is bool)
         && (!('section' in data) || (data.section is string && data.section.size() <= 64))
         && (!('sectionTitle' in data) || (data.sectionTitle is string && data.sectionTitle.size() <= 300))
         && data.createdAt is string && data.createdAt.size() <= 64
@@ -686,10 +688,10 @@ service cloud.firestore {
 
     match /questions/{questionId} {
       allow get: if isValidId(questionId) && (
-        (isActiveTeacher() && isOwner(existing().ownerId)) || isAdmin()
+        (isActiveTeacher() && (isOwner(existing().ownerId) || existing().isSharedCity == true || existing().isPublicCity == true)) || isAdmin()
       );
       allow list: if isSignedIn() && (
-        (isActiveTeacher() && existing().ownerId == request.auth.uid) || isAdmin()
+        (isActiveTeacher() && (existing().ownerId == request.auth.uid || existing().isSharedCity == true || existing().isPublicCity == true)) || isAdmin()
       );
       allow create: if isValidId(questionId)
         && isValidTeacherQuestion(incoming())
@@ -713,16 +715,16 @@ service cloud.firestore {
               'code', 'content', 'type', 'subjectId', 'subjectName', 'grade', 'topic',
               'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
               'level', 'folderId',
-              'options', 'correctOptionId', 'statements', 'shortAnswerConfig',
+              'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
               'imageUrl', 'explanation', 'source', 'parseStatus', 'parseWarning',
-              'teacherVerified', 'section', 'sectionTitle', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+              'teacherVerified', 'isSharedCity', 'isPublicCity', 'section', 'sectionTitle', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
             'ownerId', 'authorId', 'code', 'content', 'type', 'subjectId', 'subjectName',
             'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
-            'level', 'folderId', 'options', 'correctOptionId', 'statements',
+            'level', 'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements',
             'shortAnswerConfig', 'imageUrl', 'explanation', 'source', 'parseStatus',
-            'parseWarning', 'teacherVerified', 'section', 'sectionTitle',
+            'parseWarning', 'teacherVerified', 'isSharedCity', 'isPublicCity', 'section', 'sectionTitle',
             'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
           ]))
         );

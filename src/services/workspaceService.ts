@@ -243,6 +243,8 @@ export function buildQuestionDocPayload(q: Question, ownerId: string, existingCr
     ...(q.parseStatus ? { parseStatus: q.parseStatus } : {}),
     ...(q.parseWarning ? { parseWarning: q.parseWarning.slice(0, 500) } : {}),
     ...(q.teacherVerified !== undefined ? { teacherVerified: !!q.teacherVerified } : {}),
+    ...(q.isSharedCity !== undefined ? { isSharedCity: !!q.isSharedCity } : {}),
+    ...(q.isPublicCity !== undefined ? { isPublicCity: !!q.isPublicCity } : {}),
     ...(q.section ? { section: q.section.slice(0, 64) } : {}),
     ...(q.sectionTitle ? { sectionTitle: q.sectionTitle.slice(0, 300) } : {}),
     createdAt: q.createdAt || nowIso,
@@ -284,6 +286,71 @@ export async function saveQuestionsBatchToFirestore(
         batch.set(ref, buildQuestionDocPayload(q, ownerId));
       });
       await batch.commit();
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'questions');
+  }
+}
+
+export async function updateQuestionCityShareInFirestore(
+  q: Question,
+  isSharedCity: boolean,
+  explicitOwnerId?: string
+): Promise<void> {
+  if (firebaseInitError || !auth.currentUser) return;
+  const ownerId = explicitOwnerId || auth.currentUser.uid;
+  const safeId = safeDocId(q.id);
+  const ref = doc(db, 'questions', safeId);
+  const nowIso = new Date().toISOString();
+  try {
+    const existing = await getDoc(ref).catch(() => null);
+    if (existing?.exists() && existing.data()?.serverCreatedAt) {
+      await updateDoc(ref, {
+        isSharedCity: !!isSharedCity,
+        updatedAt: nowIso,
+        serverUpdatedAt: serverTimestamp(),
+      });
+      return;
+    }
+    const payload = buildQuestionDocPayload(
+      { ...q, isSharedCity: !!isSharedCity, updatedAt: nowIso },
+      ownerId,
+      existing?.exists() ? existing.data()?.serverCreatedAt : undefined
+    );
+    await setDoc(ref, payload);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `questions/${safeId}`);
+  }
+}
+
+export async function bulkShareQuestionsToCityInFirestore(
+  questions: Question[],
+  explicitOwnerId?: string
+): Promise<void> {
+  if (firebaseInitError || !auth.currentUser || questions.length === 0) return;
+  const ownerId = explicitOwnerId || auth.currentUser.uid;
+  const nowIso = new Date().toISOString();
+
+  try {
+    for (let i = 0; i < questions.length; i += 400) {
+      const chunk = questions.slice(i, i + 400);
+      try {
+        const batch = writeBatch(db);
+        chunk.forEach((q) => {
+          const ref = doc(db, 'questions', safeDocId(q.id));
+          batch.update(ref, {
+            isSharedCity: true,
+            updatedAt: nowIso,
+            serverUpdatedAt: serverTimestamp(),
+          });
+        });
+        await batch.commit();
+      } catch {
+        // Fallback for local-only or legacy docs missing serverCreatedAt
+        for (const q of chunk) {
+          await updateQuestionCityShareInFirestore(q, true, ownerId);
+        }
+      }
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, 'questions');
