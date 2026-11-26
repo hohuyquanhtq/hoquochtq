@@ -7,6 +7,7 @@ import {
   resolvePilotGroup,
 } from '../../constants/danangSchools';
 import { GRADE_LABELS } from '../../constants/subjects';
+import { isSuperAdminRole } from '../../constants/superAdmin';
 import {
   BarChart3,
   BookOpen,
@@ -43,14 +44,14 @@ export const SystemEvidenceDashboard: React.FC<SystemEvidenceDashboardProps> = (
   allSubmissions,
 }) => {
   const teacherAccounts = useMemo(
-    () => users.filter((u) => u.role === 'teacher' || u.role === 'admin'),
+    () => users.filter((u) => u.role === 'teacher' || isSuperAdminRole(u.role)),
     [users]
   );
 
   const approvedTeachers = useMemo(
     () =>
       teacherAccounts.filter(
-        (u) => u.role === 'admin' || resolveApprovalStatus(u) === 'approved'
+        (u) => isSuperAdminRole(u.role) || resolveApprovalStatus(u) === 'approved'
       ),
     [teacherAccounts]
   );
@@ -118,7 +119,7 @@ export const SystemEvidenceDashboard: React.FC<SystemEvidenceDashboardProps> = (
         existing.pilotGroup = candidateGroup;
       }
 
-      if (u.role === 'admin' || resolveApprovalStatus(u) === 'approved') {
+      if (isSuperAdminRole(u.role) || resolveApprovalStatus(u) === 'approved') {
         existing.approvedTeachers += 1;
       } else if (resolveApprovalStatus(u) === 'pending') {
         existing.pendingTeachers += 1;
@@ -280,9 +281,9 @@ export const SystemEvidenceDashboard: React.FC<SystemEvidenceDashboardProps> = (
       Email: u.email,
       'Trường THPT': u.school || '',
       'Tổ chuyên môn': u.department || 'Tổ Hóa học',
-      'Vai trò': u.role === 'admin' ? 'Super Admin' : 'Giáo viên',
+      'Vai trò': isSuperAdminRole(u.role) ? 'Super Admin' : 'Giáo viên',
       'Trạng thái duyệt':
-        u.role === 'admin'
+        isSuperAdminRole(u.role)
           ? 'Đã duyệt'
           : resolveApprovalStatus(u) === 'approved'
           ? 'Đã duyệt'

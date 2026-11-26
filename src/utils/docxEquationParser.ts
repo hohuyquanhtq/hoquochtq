@@ -6,6 +6,7 @@
  */
 
 import JSZip from 'jszip';
+import mammoth from 'mammoth';
 import { DOMParser as XmldomParser, XMLSerializer as XmldomSerializer } from '@xmldom/xmldom';
 import { RawDocumentTable } from './answerExtractionEngine/types';
 
@@ -23,6 +24,8 @@ export interface DocxParseResult {
   equationCount: number;
   warnings: DocxEquationWarning[];
   headersAndFooters?: string[];
+  tableCount?: number;
+  imageCount?: number;
 }
 
 interface OmmlContext {
@@ -249,8 +252,87 @@ function isTogglePropOn(rPr: Element | null, propLocalName: string): boolean {
   return norm !== '0' && norm !== 'false' && norm !== 'off' && norm !== 'none';
 }
 
+function getImageMimeTypeFromPath(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase() || 'png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'svg') return 'image/svg+xml';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'bmp') return 'image/bmp';
+  return 'image/png';
+}
+
+function escapeHtmlAttr(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+function buildSafeInlineImgTag(dataUrl: string, alt = 'Hình ảnh minh họa'): string {
+  const safeUrl = (dataUrl || '').trim();
+  if (!/^data:image\/(?:png|jpeg|jpg|gif|webp|bmp|svg\+xml);base64,[A-Za-z0-9+/=\s]+$/i.test(safeUrl)) {
+    return '';
+  }
+  const compactUrl = safeUrl.replace(/\s+/g, '');
+  return `<img src="${compactUrl}" alt="${escapeHtmlAttr(alt)}" class="hq-question-img" />`;
+}
+
 /**
- * Main function: Unzips DOCX, extracts relationships & media, parses document.xml + footnotes/headers/footers
+ * Extracts HTML and all embedded images as base64 Data URLs using mammoth.images.imgElement.
+ * Preserves <img> tags with data:image/... and HTML <table>, <tr>, <td> structure.
+ */
+export async function extractDocxHtmlWithMammoth(arrayBuffer: ArrayBuffer): Promise<{
+  html: string;
+  images: string[];
+}> {
+  const extractedImages: string[] = [];
+  const result = await mammoth.convertToHtml(
+    { arrayBuffer },
+    {
+      convertImage: mammoth.images.imgElement(async (image) => {
+        const base64 = await image.read('base64');
+        const rawMime = (image.contentType || 'image/png').toLowerCase();
+        const contentType = /^image\/(png|jpeg|jpg|gif|webp|bmp|svg\+xml)$/.test(rawMime)
+          ? rawMime
+          : 'image/png';
+        const dataUrl = `data:${contentType};base64,${base64}`;
+        extractedImages.push(dataUrl);
+        const altText = (image as { altText?: string }).altText || 'Hình ảnh minh họa';
+        return {
+          src: dataUrl,
+          alt: altText,
+          class: 'hq-question-img',
+        };
+      }),
+    }
+  );
+  return {
+    html: result.value || '',
+    images: extractedImages,
+  };
+}
+
+/**
+ * Resolves <mc:AlternateContent> cleanly: prefers <mc:Choice> (modern drawing/OMML),
+ * falling back to <mc:Fallback> (VML pict / legacy equation) when Choice yields no content.
+ */
+function resolveAlternateContentChildren(altEl: Element): Element[] {
+  const choice = getDirectChildByLocal(altEl, 'choice');
+  const fallback = getDirectChildByLocal(altEl, 'fallback');
+  const choiceChildren = choice ? getDirectElements(choice) : [];
+  if (choiceChildren.length > 0) {
+    return choiceChildren;
+  }
+  return fallback ? getDirectElements(fallback) : [];
+}
+
+/**
+ * Main function: Unzips DOCX with JSZip (and supplements with mammoth.images.imgElement),
+ * extracts relationships & media as base64, parses document.xml + footnotes/headers/footers
+ * while preserving OMML equations, HTML <table>/<tr>/<td>, and inline <img> tags.
  */
 export async function parseDocxWithEquations(arrayBuffer: ArrayBuffer): Promise<DocxParseResult> {
   const zip = await JSZip.loadAsync(arrayBuffer);
@@ -262,8 +344,31 @@ export async function parseDocxWithEquations(arrayBuffer: ArrayBuffer): Promise<
   }
   const documentXml = await docFile.async('string');
 
-  // 2. Load relationships (document + header/footer/footnotes rels if present)
-  const imageMap = new Map<string, string>(); // rId -> base64 Data URL
+  // 2. Load relationships (document + header/footer/footnotes/endnotes rels) & all media files via JSZip
+  const imageMap = new Map<string, string>(); // rId or media basename -> base64 Data URL
+  const mediaPathToDataUrl = new Map<string, string>();
+
+  // Pre-index all raster/svg media inside word/media/* so no embedded image is missed
+  const mediaFiles = Object.keys(zip.files).filter(
+    (name) => /^word\/media\/.+\.(?:png|jpe?g|gif|webp|bmp|svg)$/i.test(name) && !zip.files[name].dir
+  );
+  for (const mediaPath of mediaFiles) {
+    try {
+      const f = zip.file(mediaPath);
+      if (!f) continue;
+      const mimeType = getImageMimeTypeFromPath(mediaPath);
+      const base64Data = await f.async('base64');
+      const dataUrl = `data:${mimeType};base64,${base64Data}`;
+      mediaPathToDataUrl.set(mediaPath.toLowerCase(), dataUrl);
+      const baseName = mediaPath.split('/').pop()?.toLowerCase();
+      if (baseName && !imageMap.has(`media:${baseName}`)) {
+        imageMap.set(`media:${baseName}`, dataUrl);
+      }
+    } catch (e) {
+      console.warn(`Error reading media file (${mediaPath}):`, e);
+    }
+  }
+
   const relFiles = [
     'word/_rels/document.xml.rels',
     ...Object.keys(zip.files).filter(name => /^word\/_rels\/(header|footer|footnotes|endnotes).*\.rels$/i.test(name)),
@@ -284,7 +389,7 @@ export async function parseDocxWithEquations(arrayBuffer: ArrayBuffer): Promise<
         const type = getAttr(relEl, 'type') || '';
         const target = getAttr(relEl, 'target') || '';
 
-        if (rId && target && type.includes('/image') && !imageMap.has(rId)) {
+        if (rId && target && (type.includes('/image') || /^media\//i.test(target)) && !imageMap.has(rId)) {
           let targetPath = target.replace(/^\/+/, '');
           if (targetPath.startsWith('../')) {
             targetPath = targetPath.replace(/^(\.\.\/)+/, '');
@@ -293,28 +398,36 @@ export async function parseDocxWithEquations(arrayBuffer: ArrayBuffer): Promise<
             targetPath = 'word/' + targetPath;
           }
 
+          const cached = mediaPathToDataUrl.get(targetPath.toLowerCase());
+          if (cached) {
+            imageMap.set(rId, cached);
+            continue;
+          }
+
           const imgZipFile = zip.file(targetPath);
           if (imgZipFile) {
-            const ext = targetPath.split('.').pop()?.toLowerCase() || 'png';
-            const mimeType =
-              ext === 'jpg' || ext === 'jpeg'
-                ? 'image/jpeg'
-                : ext === 'png'
-                ? 'image/png'
-                : ext === 'gif'
-                ? 'image/gif'
-                : ext === 'svg'
-                ? 'image/svg+xml'
-                : ext === 'webp'
-                ? 'image/webp'
-                : 'image/png';
+            const mimeType = getImageMimeTypeFromPath(targetPath);
             const base64Data = await imgZipFile.async('base64');
-            imageMap.set(rId, `data:${mimeType};base64,${base64Data}`);
+            const dataUrl = `data:${mimeType};base64,${base64Data}`;
+            imageMap.set(rId, dataUrl);
+            mediaPathToDataUrl.set(targetPath.toLowerCase(), dataUrl);
           }
         }
       }
     } catch (e) {
       console.warn(`Error reading relationships (${relPath}):`, e);
+    }
+  }
+
+  // Supplement with mammoth.images.imgElement when JSZip rels yield no images but media/embeddings exist
+  if (imageMap.size === 0 && Object.keys(zip.files).some((name) => /^word\/(?:media|embeddings)\//i.test(name))) {
+    try {
+      const mammothRes = await extractDocxHtmlWithMammoth(arrayBuffer);
+      mammothRes.images.forEach((dataUrl, idx) => {
+        imageMap.set(`mammoth_img_${idx + 1}`, dataUrl);
+      });
+    } catch {
+      // Non-fatal supplement failure
     }
   }
 
@@ -397,7 +510,7 @@ function parsePartXmlBlocks(
         });
         if (t.trim()) blocks.push(t.trim());
       } else if (loc === 'tbl') {
-        const { mdTable, structuredRows, plainParagraphs } = parseTableElement(child, imageMap, {
+        const { htmlTable, structuredRows, plainParagraphs, isOptionLayoutTable } = parseTableElement(child, imageMap, {
           onEquationFound: () => {
             equationCount++;
           },
@@ -405,10 +518,10 @@ function parsePartXmlBlocks(
         });
         if (structuredRows.length > 0) {
           const maxCols = Math.max(...structuredRows.map(r => r.length));
-          if (maxCols === 1 && plainParagraphs.length > 0) {
-            blocks.push(plainParagraphs.join('\n\n'));
-          } else {
-            blocks.push(mdTable);
+          if ((maxCols === 1 || isOptionLayoutTable) && plainParagraphs.length > 0) {
+            blocks.push(plainParagraphs.join('\n'));
+          } else if (htmlTable) {
+            blocks.push(htmlTable);
           }
         }
       }
@@ -481,7 +594,7 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
           markdownBlocks.push(pText.trim());
         }
       } else if (loc === 'tbl') {
-        const { mdTable, structuredRows, plainParagraphs } = parseTableElement(el, imageMap, {
+        const { htmlTable, structuredRows, plainParagraphs, isOptionLayoutTable } = parseTableElement(el, imageMap, {
           onEquationFound: () => {
             equationCount++;
           },
@@ -489,11 +602,11 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
         });
         if (structuredRows.length > 0) {
           const maxCols = Math.max(...structuredRows.map(r => r.length));
-          if (maxCols === 1 && plainParagraphs.length > 0) {
+          if ((maxCols === 1 || isOptionLayoutTable) && plainParagraphs.length > 0) {
             plainParagraphs.forEach(p => updateSectionHeader(p));
-            markdownBlocks.push(plainParagraphs.join('\n\n'));
-          } else {
-            markdownBlocks.push(mdTable);
+            markdownBlocks.push(plainParagraphs.join('\n'));
+          } else if (htmlTable) {
+            markdownBlocks.push(htmlTable);
           }
           tables.push({
             id: `tbl_docx_${tables.length + 1}`,
@@ -511,6 +624,7 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
   }
 
   const fullMarkdownText = markdownBlocks.join('\n\n');
+  const imageCount = (fullMarkdownText.match(/<img\b/gi) || []).length;
 
   return {
     fullMarkdownText,
@@ -518,6 +632,8 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
     images: imageMap,
     equationCount,
     warnings,
+    tableCount: tables.length,
+    imageCount,
   };
 }
 
@@ -609,10 +725,24 @@ function parseParagraphElement(
         continue;
       }
 
+      // Office AlternateContent wrapper (modern Word equations, shapes, and embedded images)
+      if (loc === 'alternatecontent') {
+        for (const altChild of resolveAlternateContentChildren(child)) {
+          const altLoc = getLocalName(altChild);
+          if (altLoc === 'drawing' || altLoc === 'pict') {
+            const imgHtml = extractImageFromElement(altChild, imageMap);
+            if (imgHtml) tokens.push({ kind: 'raw', text: imgHtml });
+          } else {
+            visitInlineContainer(altChild);
+          }
+        }
+        continue;
+      }
+
       // Drawing directly inside paragraph
       if (loc === 'drawing' || loc === 'pict') {
-        const imgMd = extractImageFromElement(child, imageMap);
-        if (imgMd) tokens.push({ kind: 'raw', text: imgMd });
+        const imgHtml = extractImageFromElement(child, imageMap);
+        if (imgHtml) tokens.push({ kind: 'raw', text: imgHtml });
         continue;
       }
 
@@ -735,17 +865,31 @@ function parseRunElementIntoTokens(
       continue;
     }
 
+    if (loc === 'alternatecontent') {
+      for (const altChild of resolveAlternateContentChildren(child)) {
+        const altLoc = getLocalName(altChild);
+        if (altLoc === 'drawing' || altLoc === 'pict') {
+          const imgHtml = extractImageFromElement(altChild, imageMap);
+          if (imgHtml) tokens.push({ kind: 'raw', text: imgHtml });
+        } else {
+          const nestedImg = extractImageFromElement(altChild, imageMap);
+          if (nestedImg) tokens.push({ kind: 'raw', text: nestedImg });
+        }
+      }
+      continue;
+    }
+
     if (loc === 'drawing' || loc === 'pict') {
-      const imgMd = extractImageFromElement(child, imageMap);
-      if (imgMd) tokens.push({ kind: 'raw', text: imgMd });
+      const imgHtml = extractImageFromElement(child, imageMap);
+      if (imgHtml) tokens.push({ kind: 'raw', text: imgHtml });
       continue;
     }
 
     // Embedded legacy OLE Equation object (<w:object>)
     if (loc === 'object') {
-      const imgMd = extractImageFromElement(child, imageMap);
-      if (imgMd) {
-        tokens.push({ kind: 'raw', text: imgMd });
+      const imgHtml = extractImageFromElement(child, imageMap);
+      if (imgHtml) {
+        tokens.push({ kind: 'raw', text: imgHtml });
       }
       opts.warnings.push({
         tagName: 'w:object',
@@ -865,38 +1009,92 @@ function serializeParagraphTokens(tokens: ParagraphToken[]): string {
 }
 
 function extractImageFromElement(el: Element, imageMap: Map<string, string>): string {
+  const docPr = findDescendantByLocal(el, 'docpr');
+  const altText = (getAttr(docPr, 'descr') || getAttr(docPr, 'title') || getAttr(docPr, 'name') || 'Hình ảnh minh họa').trim();
+
   const blip = findDescendantByLocal(el, 'blip');
   if (blip) {
     const rId = getAttr(blip, 'embed') || getAttr(blip, 'link');
     if (rId && imageMap.has(rId)) {
-      return `\n\n![Hinh_anh_minh_hoa](${imageMap.get(rId)})\n\n`;
+      const tag = buildSafeInlineImgTag(imageMap.get(rId)!, altText || 'Hình ảnh minh họa');
+      if (tag) return ` ${tag} `;
     }
   }
   const imageData = findDescendantByLocal(el, 'imagedata');
   if (imageData) {
     const rId = getAttr(imageData, 'id') || getAttr(imageData, 'relid');
     if (rId && imageMap.has(rId)) {
-      return `\n\n![Hinh_anh_minh_hoa](${imageMap.get(rId)})\n\n`;
+      const tag = buildSafeInlineImgTag(imageMap.get(rId)!, altText || 'Hình ảnh minh họa');
+      if (tag) return ` ${tag} `;
     }
   }
   return '';
 }
 
+interface ParsedHtmlTableCell {
+  html: string;
+  plainText: string;
+  colSpan: number;
+  rowSpan: number;
+  isHeader: boolean;
+  skipMergeContinuation?: boolean;
+}
+
 /**
- * Parses a Word table (<w:tbl>), preserving nested tables, multi-paragraph cells, and OMML equations
+ * Checks whether a Word table is purely a 1x4 or 2x2 layout grid for Part I options (A., B., C., D.)
+ * so those cells flatten into option lines while preserving inline <img> and formulas!
+ */
+function detectOptionLayoutGrid(rows: string[][]): boolean {
+  const nonEmptyCells = rows.flat().map((c) => c.trim()).filter(Boolean);
+  if (nonEmptyCells.length < 2 || nonEmptyCells.length > 4) return false;
+  if (rows.length > 2) return false;
+  const matchedLetters = new Set<string>();
+  for (const cell of nonEmptyCells) {
+    const m = cell.match(/^(?:\*{0,3}|<\/?(?:b|u|strong|i|em)>)*([A-D])\s*[.):]/);
+    if (!m) return false;
+    matchedLetters.add(m[1].toUpperCase());
+  }
+  return matchedLetters.size === nonEmptyCells.length && matchedLetters.has('A') && matchedLetters.has('B');
+}
+
+/**
+ * Parses a Word table (<w:tbl>) into clean semantic HTML <table><tr><td> (supporting colspan/rowspan,
+ * nested equations, and inline <img>) alongside structuredRows for answer table recognition.
  */
 function parseTableElement(
   tblEl: Element,
   imageMap: Map<string, string>,
   opts: ParagraphParseOptions
-): { mdTable: string; structuredRows: string[][]; plainParagraphs: string[] } {
+): {
+  htmlTable: string;
+  mdTable: string;
+  structuredRows: string[][];
+  plainParagraphs: string[];
+  isOptionLayoutTable: boolean;
+} {
   const structuredRows: string[][] = [];
   const plainParagraphs: string[] = [];
+  const htmlGrid: ParsedHtmlTableCell[][] = [];
 
-  for (const trEl of getDirectChildrenByLocal(tblEl, 'tr')) {
-    const rowCells: string[] = [];
+  const trElements = getDirectChildrenByLocal(tblEl, 'tr');
+
+  for (let rIdx = 0; rIdx < trElements.length; rIdx++) {
+    const trEl = trElements[rIdx];
+    const trPr = getDirectChildByLocal(trEl, 'trpr');
+    const isTblHeaderRow = Boolean(trPr && getDirectChildByLocal(trPr, 'tblheader'));
+    const rowCellsPlain: string[] = [];
+    const htmlRow: ParsedHtmlTableCell[] = [];
 
     for (const tcEl of getDirectChildrenByLocal(trEl, 'tc')) {
+      const tcPr = getDirectChildByLocal(tcEl, 'tcpr');
+      const gridSpanEl = tcPr ? getDirectChildByLocal(tcPr, 'gridspan') : null;
+      const colSpanRaw = parseInt(getAttr(gridSpanEl, 'val') || '1', 10);
+      const colSpan = Number.isFinite(colSpanRaw) && colSpanRaw > 1 ? Math.min(20, colSpanRaw) : 1;
+
+      const vMergeEl = tcPr ? getDirectChildByLocal(tcPr, 'vmerge') : null;
+      const vMergeVal = vMergeEl ? (getAttr(vMergeEl, 'val') || 'continue').toLowerCase() : null;
+      const isVMergeContinue = Boolean(vMergeEl && vMergeVal !== 'restart');
+
       const cellLines: string[] = [];
 
       const collectCellContent = (container: Element) => {
@@ -906,7 +1104,6 @@ function parseTableElement(
             const line = parseParagraphElement(ch, imageMap, opts).trim();
             if (line) cellLines.push(line);
           } else if (loc === 'tbl') {
-            // Nested table inside cell: flatten cleanly preserving formulas
             const nested = parseTableElement(ch, imageMap, opts);
             if (nested.plainParagraphs.length > 0) {
               cellLines.push(nested.plainParagraphs.join('; '));
@@ -921,21 +1118,51 @@ function parseTableElement(
       };
 
       collectCellContent(tcEl);
-      plainParagraphs.push(...cellLines);
+      if (!isVMergeContinue && cellLines.length > 0) {
+        plainParagraphs.push(cellLines.join(' '));
+      }
 
-      let cellText = cellLines.join(' ').trim();
-      // Protect LaTeX/pipe symbols safely inside Markdown tables
-      cellText = cellText.replace(/\|/g, '/').replace(/\s+/g, ' ');
-      rowCells.push(cellText);
+      const cellHtml = cellLines.join('<br/>').trim();
+      const cellPlain = cellLines.join(' ').replace(/\|/g, '/').replace(/\s+/g, ' ').trim();
+
+      rowCellsPlain.push(cellPlain);
+      htmlRow.push({
+        html: cellHtml,
+        plainText: cellPlain,
+        colSpan,
+        rowSpan: 1,
+        isHeader: isTblHeaderRow || rIdx === 0,
+        skipMergeContinuation: isVMergeContinue,
+      });
     }
 
-    if (rowCells.length > 0 && rowCells.some(c => c.length > 0)) {
-      structuredRows.push(rowCells);
+    if (rowCellsPlain.length > 0 && (rowCellsPlain.some(c => c.length > 0) || htmlRow.some(c => c.skipMergeContinuation))) {
+      structuredRows.push(rowCellsPlain);
+      htmlGrid.push(htmlRow);
     }
   }
 
   if (structuredRows.length === 0) {
-    return { mdTable: '', structuredRows: [], plainParagraphs: [] };
+    return { htmlTable: '', mdTable: '', structuredRows: [], plainParagraphs: [], isOptionLayoutTable: false };
+  }
+
+  // Resolve vertical merges (rowspan) by column slot index
+  const activeAnchorByCol = new Map<number, ParsedHtmlTableCell>();
+  for (const row of htmlGrid) {
+    let colCursor = 0;
+    for (const cell of row) {
+      if (cell.skipMergeContinuation) {
+        const anchor = activeAnchorByCol.get(colCursor);
+        if (anchor) {
+          anchor.rowSpan += 1;
+        }
+      } else {
+        for (let k = 0; k < cell.colSpan; k++) {
+          activeAnchorByCol.set(colCursor + k, cell);
+        }
+      }
+      colCursor += cell.colSpan;
+    }
   }
 
   const maxCols = Math.max(...structuredRows.map(r => r.length));
@@ -945,6 +1172,34 @@ function parseTableElement(
     return copy;
   });
 
+  const isOptionLayoutTable = detectOptionLayoutGrid(structuredRows);
+
+  // Build clean single-line semantic HTML <table>...</table> so exam block splitter preserves the entire table intact
+  const renderRowHtml = (row: ParsedHtmlTableCell[], useTh: boolean): string => {
+    const cellsHtml = row
+      .filter((c) => !c.skipMergeContinuation)
+      .map((c) => {
+        const tag = useTh ? 'th' : 'td';
+        const colAttr = c.colSpan > 1 ? ` colspan="${c.colSpan}"` : '';
+        const rowAttr = c.rowSpan > 1 ? ` rowspan="${c.rowSpan}"` : '';
+        return `<${tag}${colAttr}${rowAttr}>${c.html}</${tag}>`;
+      })
+      .join('');
+    return `<tr>${cellsHtml}</tr>`;
+  };
+
+  let htmlTable = '';
+  if (htmlGrid.length === 1) {
+    htmlTable = `<table class="hq-exam-table"><tbody>${renderRowHtml(htmlGrid[0], false)}</tbody></table>`;
+  } else {
+    const headHtml = `<thead>${renderRowHtml(htmlGrid[0], true)}</thead>`;
+    const bodyHtml = `<tbody>${htmlGrid
+      .slice(1)
+      .map((r) => renderRowHtml(r, false))
+      .join('')}</tbody>`;
+    htmlTable = `<table class="hq-exam-table">${headHtml}${bodyHtml}</table>`;
+  }
+
   let mdTable = '\n\n';
   mdTable += '| ' + normalizedRows[0].join(' | ') + ' |\n';
   mdTable += '|' + Array(maxCols).fill('---').join('|') + '|\n';
@@ -953,7 +1208,7 @@ function parseTableElement(
   }
   mdTable += '\n';
 
-  return { mdTable, structuredRows: normalizedRows, plainParagraphs };
+  return { htmlTable, mdTable, structuredRows: normalizedRows, plainParagraphs, isOptionLayoutTable };
 }
 
 /**
@@ -1283,7 +1538,7 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
       return deg ? `\\sqrt[${deg}]{${base}}` : `\\sqrt{${base}}`;
     }
 
-    // 9. Delimiters / Brackets (<m:d>)
+    // 9. Delimiters / Brackets (<m:d>) — upgrades matrix & system-of-equations delimiters cleanly
     case 'd': {
       const dPr = getDirectChildByLocal(el, 'dpr');
       const begEl = dPr ? getDirectChildByLocal(dPr, 'begchr') : null;
@@ -1296,6 +1551,44 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
       const sepChr = sepEl ? getAttr(sepEl, 'val') ?? '|' : '|';
 
       const eChildren = getDirectChildrenByLocal(el, 'e');
+
+      // Detect Matrix or System of Equations (cases) directly inside <m:d><m:e>...</m:e></m:d>
+      if (eChildren.length === 1) {
+        const innerEls = getDirectElements(eChildren[0]).filter(
+          ch => !['ctrlpr', 'argpr'].includes(getLocalName(ch))
+        );
+        if (innerEls.length === 1) {
+          const innerLoc = getLocalName(innerEls[0]);
+          if (innerLoc === 'm') {
+            const rows = getDirectChildrenByLocal(innerEls[0], 'mr');
+            const rowLatexList = rows.map(row => {
+              const cells = getDirectChildrenByLocal(row, 'e');
+              return cells.map(c => convertOmmlSequence(c, ctx).trim()).join(' & ');
+            });
+            if (begChr === '{' && endChr === '') {
+              return `\\begin{cases} ${rowLatexList.join(' \\\\ ')} \\end{cases}`;
+            }
+            const envMap: Record<string, string> = {
+              '(|)': 'pmatrix',
+              '[|]': 'bmatrix',
+              '{|}': 'Bmatrix',
+              '|||': 'vmatrix',
+              '‖|‖': 'Vmatrix',
+            };
+            const env = envMap[`${begChr}|${endChr}`];
+            if (env) {
+              return `\\begin{${env}} ${rowLatexList.join(' \\\\ ')} \\end{${env}}`;
+            }
+          } else if (innerLoc === 'eqarr' && begChr === '{' && endChr === '') {
+            const rows = getDirectChildrenByLocal(innerEls[0], 'e');
+            const rowLatexList = rows.map(r => convertOmmlSequence(r, ctx).trim()).filter(Boolean);
+            if (rowLatexList.length > 0) {
+              return `\\begin{cases} ${rowLatexList.join(' \\\\ ')} \\end{cases}`;
+            }
+          }
+        }
+      }
+
       const parts = eChildren.map(eCh => convertOmmlSequence(eCh, ctx).trim());
       const sepLatex = sepChr === '|' ? ' \\middle| ' : sepChr ? `${sepChr} ` : ', ';
       const inner = parts.join(sepLatex);
@@ -1305,14 +1598,16 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
       return `${leftDelim}${inner}${rightDelim}`;
     }
 
-    // 10. N-ary operators (<m:nary>)
+    // 10. N-ary operators (<m:nary>) — ECMA-376 default when <m:chr> is omitted is INTEGRAL (∫)!
     case 'nary': {
       const naryPr = getDirectChildByLocal(el, 'narypr');
       const chrEl = naryPr ? getDirectChildByLocal(naryPr, 'chr') : null;
+      const limLocEl = naryPr ? getDirectChildByLocal(naryPr, 'limloc') : null;
       const subHideEl = naryPr ? getDirectChildByLocal(naryPr, 'subhide') : null;
       const supHideEl = naryPr ? getDirectChildByLocal(naryPr, 'suphide') : null;
 
-      const opChar = chrEl ? getAttr(chrEl, 'val') || '∑' : '∑';
+      const opChar = chrEl ? getAttr(chrEl, 'val') || '∫' : '∫';
+      const limLoc = (limLocEl ? getAttr(limLocEl, 'val') : '')?.toLowerCase() || '';
       const subHide = getAttr(subHideEl, 'val') === '1';
       const supHide = getAttr(supHideEl, 'val') === '1';
 
@@ -1324,12 +1619,15 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
         '∬': '\\iint',
         '∭': '\\iiint',
         '∮': '\\oint',
+        '∯': '\\oiint',
+        '∰': '\\oiiint',
         '⋃': '\\bigcup',
         '⋂': '\\bigcap',
         '⋁': '\\bigvee',
         '⋀': '\\bigwedge',
       };
-      const opLatex = opMap[opChar] || '\\sum';
+      const opLatex = opMap[opChar] || '\\int';
+      const limitsMod = limLoc === 'undovr' && /^\\(?:i*nt|oi*nt)$/.test(opLatex) ? '\\limits' : '';
 
       const subEl = getDirectChildByLocal(el, 'sub');
       const supEl = getDirectChildByLocal(el, 'sup');
@@ -1339,7 +1637,7 @@ function convertOmmlNode(el: Element, ctx: OmmlContext): string {
       const sup = !supHide && supEl ? convertOmmlSequence(supEl, ctx).trim() : '';
       const base = baseEl ? convertOmmlSequence(baseEl, ctx).trim() : '';
 
-      return `${opLatex}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''}${base ? `{${base}}` : ''}`;
+      return `${opLatex}${limitsMod}${sub ? `_{${sub}}` : ''}${sup ? `^{${sup}}` : ''}${base ? ` ${base}` : ''}`;
     }
 
     // 11. Functions (<m:func>) — supports plain names AND nested m:sSub / m:sSup / m:sSubSup / m:limLow inside m:fName
@@ -1903,4 +2201,120 @@ function cleanMathText(text: string): string {
         .replace(/‰/g, ' \\text{‰}');
     })
     .join('');
+}
+
+/**
+ * Converts an Office Math (OMML) XML fragment into standard Presentation MathML (<math>...</math>)
+ * for interoperability alongside LaTeX ($...$).
+ */
+export function convertOmmlToMathMl(ommlXml: string): string {
+  if (!ommlXml || !ommlXml.trim()) return '';
+  const trimmed = ommlXml.trim();
+  const hasOmmlWrapper = /^<(?:m:)?(?:oMath|oMathPara)\b/i.test(trimmed);
+  let xmlToParse = trimmed;
+  if (!hasOmmlWrapper) {
+    xmlToParse = `<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">${trimmed}</m:oMath>`;
+  } else if (!/xmlns:m=/i.test(trimmed)) {
+    xmlToParse = trimmed.replace(
+      /^<((?:m:)?(?:oMath|oMathPara))\b([^>]*)>/i,
+      '<$1 xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"$2>'
+    );
+  }
+  const doc = parseXmlDom(xmlToParse);
+  const root = doc.documentElement;
+  if (!root) return '';
+
+  const escapeXmlText = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  const nodeToMml = (el: Element): string => {
+    const loc = getLocalName(el);
+    if (loc.endsWith('pr')) return '';
+
+    switch (loc) {
+      case 'omath':
+      case 'omathpara':
+      case 'e':
+      case 'num':
+      case 'den':
+      case 'sub':
+      case 'sup':
+      case 'deg':
+      case 'lim':
+      case 'fname':
+      case 'box':
+        return `<mrow>${getDirectElements(el).map(nodeToMml).join('')}</mrow>`;
+      case 'r': {
+        const txt = extractAllDescendantMathText(el);
+        if (!txt) return '';
+        if (/^[0-9.,]+$/.test(txt.trim())) return `<mn>${escapeXmlText(txt)}</mn>`;
+        if (/^[+\-*/=<>≤≥≠≈±×÷→⇌()[\]{},;:|∫∑∏]$/.test(txt.trim())) return `<mo>${escapeXmlText(txt)}</mo>`;
+        return `<mi>${escapeXmlText(txt)}</mi>`;
+      }
+      case 't':
+        return `<mi>${escapeXmlText(el.textContent || '')}</mi>`;
+      case 'f': {
+        const num = getDirectChildByLocal(el, 'num');
+        const den = getDirectChildByLocal(el, 'den');
+        return `<mfrac>${num ? nodeToMml(num) : '<mrow/>'}${den ? nodeToMml(den) : '<mrow/>'}</mfrac>`;
+      }
+      case 'rad': {
+        const deg = getDirectChildByLocal(el, 'deg');
+        const base = getDirectChildByLocal(el, 'e');
+        const degTxt = deg ? extractAllDescendantMathText(deg).trim() : '';
+        return degTxt
+          ? `<mroot>${base ? nodeToMml(base) : '<mrow/>'}${nodeToMml(deg!)}</mroot>`
+          : `<msqrt>${base ? nodeToMml(base) : '<mrow/>'}</msqrt>`;
+      }
+      case 'ssub': {
+        const base = getDirectChildByLocal(el, 'e');
+        const sub = getDirectChildByLocal(el, 'sub');
+        return `<msub>${base ? nodeToMml(base) : '<mrow/>'}${sub ? nodeToMml(sub) : '<mrow/>'}</msub>`;
+      }
+      case 'ssup': {
+        const base = getDirectChildByLocal(el, 'e');
+        const sup = getDirectChildByLocal(el, 'sup');
+        return `<msup>${base ? nodeToMml(base) : '<mrow/>'}${sup ? nodeToMml(sup) : '<mrow/>'}</msup>`;
+      }
+      case 'ssubsup': {
+        const base = getDirectChildByLocal(el, 'e');
+        const sub = getDirectChildByLocal(el, 'sub');
+        const sup = getDirectChildByLocal(el, 'sup');
+        return `<msubsup>${base ? nodeToMml(base) : '<mrow/>'}${sub ? nodeToMml(sub) : '<mrow/>'}${sup ? nodeToMml(sup) : '<mrow/>'}</msubsup>`;
+      }
+      case 'nary': {
+        const naryPr = getDirectChildByLocal(el, 'narypr');
+        const chrEl = naryPr ? getDirectChildByLocal(naryPr, 'chr') : null;
+        const opChar = chrEl ? getAttr(chrEl, 'val') || '∫' : '∫';
+        const sub = getDirectChildByLocal(el, 'sub');
+        const sup = getDirectChildByLocal(el, 'sup');
+        const base = getDirectChildByLocal(el, 'e');
+        const opTag = sub && sup
+          ? `<msubsup><mo>${escapeXmlText(opChar)}</mo>${nodeToMml(sub)}${nodeToMml(sup)}</msubsup>`
+          : sub
+          ? `<msub><mo>${escapeXmlText(opChar)}</mo>${nodeToMml(sub)}</msub>`
+          : sup
+          ? `<msup><mo>${escapeXmlText(opChar)}</mo>${nodeToMml(sup)}</msup>`
+          : `<mo>${escapeXmlText(opChar)}</mo>`;
+        return `<mrow>${opTag}${base ? nodeToMml(base) : ''}</mrow>`;
+      }
+      case 'm': {
+        const rows = getDirectChildrenByLocal(el, 'mr')
+          .map((mr) => `<mtr>${getDirectChildrenByLocal(mr, 'e').map((c) => `<mtd>${nodeToMml(c)}</mtd>`).join('')}</mtr>`)
+          .join('');
+        return `<mtable>${rows}</mtable>`;
+      }
+      case 'd': {
+        const dPr = getDirectChildByLocal(el, 'dpr');
+        const beg = dPr ? getAttr(getDirectChildByLocal(dPr, 'begchr'), 'val') ?? '(' : '(';
+        const end = dPr ? getAttr(getDirectChildByLocal(dPr, 'endchr'), 'val') ?? ')' : ')';
+        const inner = getDirectChildrenByLocal(el, 'e').map(nodeToMml).join('<mo>,</mo>');
+        return `<mrow>${beg ? `<mo>${escapeXmlText(beg)}</mo>` : ''}${inner}${end ? `<mo>${escapeXmlText(end)}</mo>` : ''}</mrow>`;
+      }
+      default:
+        return `<mrow>${getDirectElements(el).map(nodeToMml).join('')}</mrow>`;
+    }
+  };
+
+  return `<math xmlns="http://www.w3.org/1998/Math/MathML">${nodeToMml(root)}</math>`;
 }

@@ -18,6 +18,7 @@ import {
   getQuestionTopicDisplay,
 } from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
+import { isSuperAdminUser } from '../../constants/superAdmin';
 import {
   AlertCircle,
   ArrowRight,
@@ -58,6 +59,7 @@ interface CityExamRepositoryProps {
   ) => void;
   onOpenPersonalExams?: () => void;
   onOpenPersonalQuestionBank?: () => void;
+  initialTab?: CityRepositoryTab;
 }
 
 type CityRepositoryTab = 'exams' | 'questions';
@@ -89,11 +91,12 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   onQuestionCityStatusChanged,
   onOpenPersonalExams,
   onOpenPersonalQuestionBank,
+  initialTab = 'exams',
 }) => {
-  const isSuperAdmin = currentUser.role === 'admin';
+  const isSuperAdmin = isSuperAdminUser(currentUser);
   const adminUid = currentUser.uid || currentUser.id;
 
-  const [activeTab, setActiveTab] = useState<CityRepositoryTab>('exams');
+  const [activeTab, setActiveTab] = useState<CityRepositoryTab>(initialTab);
   const [adminStatusFilter, setAdminStatusFilter] = useState<AdminExamStatusFilter>('all');
   const [adminQuestionStatusFilter, setAdminQuestionStatusFilter] =
     useState<AdminQuestionStatusFilter>('pending');

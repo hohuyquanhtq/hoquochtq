@@ -3,9 +3,9 @@
  * Hệ thống ngân hàng câu hỏi, tạo đề và thi trắc nghiệm online
  */
 
-export type UserRole = 'admin' | 'teacher' | 'student';
+export type UserRole = 'super_admin' | 'admin' | 'teacher' | 'student';
 
-export type AccountStatus = 'pending' | 'active' | 'locked' | 'rejected';
+export type AccountStatus = 'pending' | 'active' | 'approved' | 'locked' | 'rejected';
 
 export type TeacherApprovalStatus = 'pending' | 'approved' | 'rejected';
 

@@ -7,7 +7,15 @@ import {
   sanitizeSensitiveLogText,
 } from './firebaseAdmin.ts';
 
-export const ALLOWED_INITIAL_ADMIN_EMAIL = 'hohuyquanhtq@gmail.com';
+export const ALLOWED_SUPER_ADMIN_EMAILS = [
+  'hohuyquanhtq@gmail.com',
+  'hochivienhtq@gmail.com',
+] as const;
+export const ALLOWED_INITIAL_ADMIN_EMAIL = ALLOWED_SUPER_ADMIN_EMAILS[0];
+
+function isAllowedSuperAdminEmail(email: string): boolean {
+  return (ALLOWED_SUPER_ADMIN_EMAILS as readonly string[]).includes(email.trim().toLowerCase());
+}
 
 function extractBearerToken(headers: ApiRequest['headers']): string | null {
   const rawAuth = headers.authorization ?? headers.Authorization;
@@ -72,23 +80,6 @@ export async function handleSetAdminClaims(req: ApiRequest): Promise<ApiResponse
   }
 
   const initialAdminUid = (process.env.INITIAL_ADMIN_UID || '').trim();
-  if (!initialAdminUid) {
-    logFirebaseAdminEvent({
-      api: 'POST /api/admin/set-claims',
-      errorStage: 'env_check',
-      errorType: 'ConfigError',
-      errorCode: 'CONFIG_MISSING',
-      message: 'INITIAL_ADMIN_UID environment variable is missing.',
-    });
-    return {
-      status: 500,
-      body: {
-        ok: false,
-        code: 'ADMIN_ENV_MISSING',
-        error: 'Thiếu biến môi trường INITIAL_ADMIN_UID trên máy chủ Vercel.',
-      },
-    };
-  }
 
   const adminState = getFirebaseAdminState(true);
   if (!adminState.initialized || !adminState.auth || !adminState.db) {
@@ -130,10 +121,12 @@ export async function handleSetAdminClaims(req: ApiRequest): Promise<ApiResponse
 
   let decodedUid = '';
   let decodedEmail = '';
+  let decodedEmailVerified = false;
   try {
     const decoded = await adminState.auth.verifyIdToken(idToken);
     decodedUid = (decoded.uid || '').trim();
     decodedEmail = (decoded.email || '').trim().toLowerCase();
+    decodedEmailVerified = decoded.email_verified === true;
   } catch (err) {
     logFirebaseAdminEvent({
       api: 'POST /api/admin/set-claims',
@@ -148,17 +141,6 @@ export async function handleSetAdminClaims(req: ApiRequest): Promise<ApiResponse
         ok: false,
         code: 'INVALID_AUTH_TOKEN',
         error: 'Firebase ID Token không hợp lệ hoặc đã hết hạn. Vui lòng đăng nhập lại.',
-      },
-    };
-  }
-
-  if (!decodedUid || decodedUid !== initialAdminUid) {
-    return {
-      status: 403,
-      body: {
-        ok: false,
-        code: 'UID_NOT_AUTHORIZED',
-        error: 'UID tài khoản không khớp INITIAL_ADMIN_UID. Không được phép cấp quyền Admin.',
       },
     };
   }
@@ -185,94 +167,102 @@ export async function handleSetAdminClaims(req: ApiRequest): Promise<ApiResponse
   }
 
   const recordEmail = (authUserRecord.email || '').trim().toLowerCase();
-  if (
-    decodedEmail !== ALLOWED_INITIAL_ADMIN_EMAIL ||
-    recordEmail !== ALLOWED_INITIAL_ADMIN_EMAIL
-  ) {
+  const isVerifiedSuperAdminEmail =
+    decodedEmailVerified &&
+    authUserRecord.emailVerified === true &&
+    decodedEmail === recordEmail &&
+    isAllowedSuperAdminEmail(recordEmail);
+
+  const isMatchedInitialUid = Boolean(initialAdminUid && decodedUid === initialAdminUid);
+
+  if (!isVerifiedSuperAdminEmail && !isMatchedInitialUid) {
     return {
       status: 403,
       body: {
         ok: false,
         code: 'EMAIL_NOT_AUTHORIZED',
-        error: `Email tài khoản không hợp lệ. Chỉ cho phép ${ALLOWED_INITIAL_ADMIN_EMAIL}.`,
+        error: `Tài khoản không nằm trong danh sách Super Admin mặc định (${ALLOWED_SUPER_ADMIN_EMAILS.join(', ')}) hoặc chưa xác minh email.`,
       },
     };
   }
 
-  let adminDocSnap;
-  try {
-    adminDocSnap = await adminState.db.collection('admins').doc(decodedUid).get();
-  } catch (err) {
-    const dbErrCode = classifyFirestoreError(err);
-    logFirebaseAdminEvent({
-      api: 'POST /api/admin/set-claims',
-      errorStage: 'read_admin_doc',
-      errorType: err instanceof Error ? err.name : 'FirestoreError',
-      errorCode: dbErrCode,
-      message: err instanceof Error ? err.message : 'Failed reading admins/{uid}',
-      firestoreStatus: dbErrCode === 'DATABASE_PERMISSION_ERROR' ? 'permission_denied' : 'read_failed',
-    });
-    return {
-      status: 500,
-      body: {
-        ok: false,
-        code: dbErrCode,
-        error: 'Không thể kiểm tra document admins/{uid} trên Cloud Firestore.',
-      },
-    };
-  }
+  // For non-allowlisted UIDs, still require active admins/{uid} marker
+  if (!isVerifiedSuperAdminEmail) {
+    let adminDocSnap;
+    try {
+      adminDocSnap = await adminState.db.collection('admins').doc(decodedUid).get();
+    } catch (err) {
+      const dbErrCode = classifyFirestoreError(err);
+      logFirebaseAdminEvent({
+        api: 'POST /api/admin/set-claims',
+        errorStage: 'read_admin_doc',
+        errorType: err instanceof Error ? err.name : 'FirestoreError',
+        errorCode: dbErrCode,
+        message: err instanceof Error ? err.message : 'Failed reading admins/{uid}',
+        firestoreStatus: dbErrCode === 'DATABASE_PERMISSION_ERROR' ? 'permission_denied' : 'read_failed',
+      });
+      return {
+        status: 500,
+        body: {
+          ok: false,
+          code: dbErrCode,
+          error: 'Không thể kiểm tra document admins/{uid} trên Cloud Firestore.',
+        },
+      };
+    }
 
-  if (!adminDocSnap.exists) {
-    return {
-      status: 403,
-      body: {
-        ok: false,
-        code: 'ADMIN_DOC_NOT_FOUND',
-        error: `Không tìm thấy document admins/${decodedUid} trên Cloud Firestore.`,
-      },
-    };
-  }
+    if (!adminDocSnap.exists) {
+      return {
+        status: 403,
+        body: {
+          ok: false,
+          code: 'ADMIN_DOC_NOT_FOUND',
+          error: `Không tìm thấy document admins/${decodedUid} trên Cloud Firestore.`,
+        },
+      };
+    }
 
-  const adminData = (adminDocSnap.data() || {}) as Record<string, unknown>;
-  const docEmail =
-    typeof adminData.email === 'string' ? adminData.email.trim().toLowerCase() : '';
-  if (docEmail && docEmail !== ALLOWED_INITIAL_ADMIN_EMAIL) {
-    return {
-      status: 403,
-      body: {
-        ok: false,
-        code: 'ADMIN_DOC_EMAIL_MISMATCH',
-        error: 'Email trong document admins/{uid} không khớp quản trị viên hợp lệ.',
-      },
-    };
-  }
+    const adminData = (adminDocSnap.data() || {}) as Record<string, unknown>;
+    const docEmail =
+      typeof adminData.email === 'string' ? adminData.email.trim().toLowerCase() : '';
+    if (docEmail && !isAllowedSuperAdminEmail(docEmail)) {
+      return {
+        status: 403,
+        body: {
+          ok: false,
+          code: 'ADMIN_DOC_EMAIL_MISMATCH',
+          error: 'Email trong document admins/{uid} không khớp quản trị viên hợp lệ.',
+        },
+      };
+    }
 
-  if (adminData.role !== 'admin') {
-    return {
-      status: 403,
-      body: {
-        ok: false,
-        code: 'ADMIN_ROLE_INVALID',
-        error: 'Quyền không hợp lệ: trường role trong admins/{uid} không phải "admin".',
-      },
-    };
-  }
+    if (adminData.role !== 'admin' && adminData.role !== 'super_admin') {
+      return {
+        status: 403,
+        body: {
+          ok: false,
+          code: 'ADMIN_ROLE_INVALID',
+          error: 'Quyền không hợp lệ: trường role trong admins/{uid} không phải "super_admin" hoặc "admin".',
+        },
+      };
+    }
 
-  if (adminData.isActive !== true) {
-    return {
-      status: 403,
-      body: {
-        ok: false,
-        code: 'ADMIN_INACTIVE',
-        error: 'Tài khoản quản trị chưa được kích hoạt (isActive != true) trong admins/{uid}.',
-      },
-    };
+    if (adminData.isActive !== true) {
+      return {
+        status: 403,
+        body: {
+          ok: false,
+          code: 'ADMIN_INACTIVE',
+          error: 'Tài khoản quản trị chưa được kích hoạt (isActive != true) trong admins/{uid}.',
+        },
+      };
+    }
   }
 
   const nextClaims = {
     ...(authUserRecord.customClaims || {}),
     admin: true,
-    role: 'admin',
+    role: 'super_admin',
   };
 
   try {
@@ -293,7 +283,7 @@ export async function handleSetAdminClaims(req: ApiRequest): Promise<ApiResponse
       body: {
         ok: false,
         code: 'SET_CLAIMS_FAILED',
-        error: 'Không thể thiết lập Custom Claims Admin trên Firebase Authentication.',
+        error: 'Không thể thiết lập Custom Claims Super Admin trên Firebase Authentication.',
       },
     };
   }
@@ -304,12 +294,12 @@ export async function handleSetAdminClaims(req: ApiRequest): Promise<ApiResponse
       ok: true,
       success: true,
       uid: decodedUid,
-      email: ALLOWED_INITIAL_ADMIN_EMAIL,
+      email: recordEmail,
       claims: {
         admin: true,
-        role: 'admin',
+        role: 'super_admin',
       },
-      message: 'Đã thiết lập Firebase Custom Claims Admin thành công.',
+      message: 'Đã thiết lập Firebase Custom Claims Super Admin thành công.',
     },
   };
 }

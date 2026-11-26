@@ -16,6 +16,12 @@ import {
   SyncProfileByUidOptions,
 } from '../services/authService';
 import { StorageService } from '../services/storage';
+import {
+  isApprovedAccountStatus,
+  isDefaultSuperAdminEmail,
+  isSuperAdminRole,
+  isSuperAdminUser,
+} from '../constants/superAdmin';
 
 export type SessionAuthState =
   | 'initializing'
@@ -123,28 +129,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       let hasAdminClaim = false;
       try {
         const tokenRes = await fbUser.getIdTokenResult();
-        hasAdminClaim = tokenRes?.claims?.admin === true;
+        hasAdminClaim =
+          tokenRes?.claims?.admin === true ||
+          isSuperAdminRole(tokenRes?.claims?.role as string | undefined);
       } catch {
         hasAdminClaim = false;
       }
 
-      if (profile.role === 'admin' && !hasAdminClaim) {
+      const isAllowlistedSuperAdmin = isDefaultSuperAdminEmail(fbUser.email);
+      const isSuperAdminAccount = isSuperAdminUser(profile);
+
+      if (isSuperAdminAccount && !hasAdminClaim) {
         const claimCheck = await verifyCurrentUserAdminClaim();
         hasAdminClaim = claimCheck.isAdmin;
-        if (!hasAdminClaim) {
+        // Allow default Super Admin emails (synchronized with HTQ Chemistry Hub) to operate directly
+        // via verified Firestore email rules even when Admin SDK custom claims API is unavailable.
+        if (!hasAdminClaim && !isAllowlistedSuperAdmin) {
           StorageService.clearActiveWorkspaceMemory();
           setUserProfile(null);
           setIsAdminClaimVerified(false);
           setAuthError(
             claimCheck.errorMessage ||
-              'Tài khoản chưa được cấp Custom Claim Admin (token.claims.admin != true).'
+              'Tài khoản chưa được cấp quyền Super Admin hợp lệ.'
           );
           setAuthState('profile_read_error');
           return;
         }
       }
 
-      setIsAdminClaimVerified(hasAdminClaim);
+      setIsAdminClaimVerified(
+        hasAdminClaim || (isAllowlistedSuperAdmin && isSuperAdminAccount)
+      );
       setUserProfile(profile);
 
       if (profile.status === 'locked') {
@@ -159,7 +174,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      if (profile.role === 'teacher' && profile.status !== 'active') {
+      if (profile.role === 'teacher' && !isApprovedAccountStatus(profile.status)) {
         StorageService.clearActiveWorkspaceMemory();
         setAuthState('pending_approval');
         return;
@@ -326,6 +341,13 @@ export function useAuth(): AuthContextValue {
 
 export function canAccessRole(user: User | null, allowedRoles: UserRole[]): boolean {
   if (!user) return false;
-  if (user.status && user.status !== 'active') return false;
-  return allowedRoles.includes(user.role);
+  if (user.status && !isApprovedAccountStatus(user.status)) return false;
+  if (allowedRoles.includes(user.role)) return true;
+  if (
+    isSuperAdminRole(user.role) &&
+    (allowedRoles.includes('admin') || allowedRoles.includes('super_admin'))
+  ) {
+    return true;
+  }
+  return false;
 }

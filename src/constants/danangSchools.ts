@@ -141,7 +141,7 @@ export function resolveTeacherApprovalStatus(
   if (approvalStatus === 'approved' || approvalStatus === 'pending' || approvalStatus === 'rejected') {
     return approvalStatus;
   }
-  if (accountStatus === 'active') return 'approved';
+  if (accountStatus === 'active' || accountStatus === 'approved') return 'approved';
   if (accountStatus === 'rejected') return 'rejected';
   return 'pending';
 }

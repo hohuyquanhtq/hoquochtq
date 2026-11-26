@@ -722,7 +722,9 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                           </span>
                           <span className="text-[11px] font-semibold text-rose-700">Thất bại</span>
                         </div>
-                        <p className="text-slate-700 line-clamp-2">{item.question.content}</p>
+                        <div className="text-slate-700 line-clamp-2">
+                          <ChemRenderer text={item.question.content} inline />
+                        </div>
                         <p className="text-rose-800 font-semibold">Lỗi: {item.error}</p>
                       </div>
                     ))}
@@ -752,7 +754,9 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                             </span>
                           )}
                         </div>
-                        <p className="text-slate-700 line-clamp-2">{item.question.content}</p>
+                        <div className="text-slate-700 line-clamp-2">
+                          <ChemRenderer text={item.question.content} inline />
+                        </div>
                         <p className="text-amber-900">{item.reason}</p>
                       </div>
                     ))}
@@ -1211,7 +1215,9 @@ export const WordSaveToBankModal: React.FC<WordSaveToBankModalProps> = ({
                               </span>
                             )}
                           </div>
-                          <p className="text-slate-600 line-clamp-1">{q.content}</p>
+                          <div className="text-slate-600 line-clamp-1">
+                            <ChemRenderer text={q.content} inline />
+                          </div>
                         </div>
                       );
                     })}

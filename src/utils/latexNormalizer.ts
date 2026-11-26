@@ -98,6 +98,9 @@ const LATEX_COMMAND_NAMES = [
   'iint',
   'iiint',
   'oint',
+  'oiint',
+  'oiiint',
+  'limits',
   'bigcup',
   'bigcap',
   'log',
@@ -129,7 +132,7 @@ const DOUBLE_ESCAPED_CMD_REGEX = new RegExp(
 
 // Strong LaTeX commands that indicate an unwrapped math/chemistry expression when found outside delimiters
 const UNWRAPPED_LATEX_TRIGGER_REGEX =
-  /\\(?:frac|dfrac|tfrac|cfrac|sqrt|xrightarrow|xleftarrow|xleftrightarrow|xrightleftharpoons|xrightleftarrows|xlongequal|xRightarrow|xLeftarrow|xLeftrightarrow|rightarrow|leftarrow|leftrightarrow|rightleftharpoons|rightleftarrows|cdot|times|div|pm|quad|qquad|left|right|text|mathrm|mathbf|operatorname|overline|underline|sum|prod|int|lim|limsup|liminf|log|ln|lg|sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|coth|exp|ce|pu|begin)\b|[A-Za-z0-9\)\]]\s*(?:_\{[^}\n]+\}|\^\{[^}\n]+\})/;
+  /\\(?:frac|dfrac|tfrac|cfrac|sqrt|xrightarrow|xleftarrow|xleftrightarrow|xrightleftharpoons|xrightleftarrows|xlongequal|xRightarrow|xLeftarrow|xLeftrightarrow|rightarrow|leftarrow|leftrightarrow|rightleftharpoons|rightleftarrows|cdot|times|div|pm|quad|qquad|left|right|text|mathrm|mathbf|operatorname|overline|underline|sum|prod|int|iint|iiint|oint|lim|limsup|liminf|log|ln|lg|sin|cos|tan|cot|sec|csc|arcsin|arccos|arctan|sinh|cosh|tanh|coth|exp|ce|pu|begin)\b|[A-Za-z0-9\)\]]\s*(?:_\{[^}\n]+\}|\^\{[^}\n]+\})/;
 
 const KNOWN_TEXT_MACRO_PREFIXES = /^\\(?:text|mathrm|mathbf|operatorname)\{/;
 
@@ -185,7 +188,7 @@ export function normalizeLatexExpression(rawMath: string): string {
   let expr = rawMath.trim();
 
   // Normalize Windows newlines / accidental single-line line breaks inside math
-  if (!/\\begin\{(?:aligned|matrix|pmatrix|bmatrix|cases|array|gathered)\}/.test(expr)) {
+  if (!/\\begin\{(?:aligned|matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|cases|array|gathered)\}/.test(expr)) {
     expr = expr.replace(/[\r\n]+/g, ' ');
   }
 
@@ -586,8 +589,22 @@ export function tokenizeRichContent(rawText: string): ContentSegment[] {
       }
     }
 
-    // 6. HTML Image or Safe inline tags (<sub>, <sup>, <u>, <s>, <b>, <strong>, <i>, <em>, <br/>)
+    // 6. MathML (<math>...</math>), HTML Image, or Safe inline tags
     if (ch === '<') {
+      if (/^<math\b/i.test(text.slice(cursor))) {
+        const mathM = text.slice(cursor).match(/^<math\b([^>]*)>([\s\S]*?)<\/math>/i);
+        if (mathM) {
+          flushText();
+          const isBlock = /display=["']block["']/i.test(mathM[1] || '');
+          const latex = normalizeLatexExpression(convertMathMlToLatex(mathM[0]));
+          if (latex) {
+            primarySegments.push({ type: 'math', value: latex, displayMode: isBlock });
+          }
+          cursor += mathM[0].length;
+          continue;
+        }
+      }
+
       const imgTagMatch = text.slice(cursor).match(/^<img\b([^>]*?)\/?>/i);
       if (imgTagMatch) {
         const attrs = imgTagMatch[1];
@@ -685,5 +702,142 @@ function splitUnwrappedLatexSegments(plain: string, out: ContentSegment[]): void
       displayMode: false,
     });
     pos = absEnd;
+  }
+}
+
+/**
+ * Converts Presentation MathML (<math>...</math>) into KaTeX-compatible LaTeX.
+ * Used when content contains MathML from Word HTML paste, OMML-to-MathML conversion, or external banks.
+ */
+export function convertMathMlToLatex(mathMl: string): string {
+  if (!mathMl || !mathMl.trim()) return '';
+  if (typeof DOMParser === 'undefined') {
+    return mathMl.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(mathMl, 'application/xml');
+    const root = doc.documentElement;
+    if (!root || root.getElementsByTagName('parsererror').length > 0) {
+      return mathMl.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+    }
+
+    const opMap: Record<string, string> = {
+      '∫': '\\int',
+      '∬': '\\iint',
+      '∭': '\\iiint',
+      '∮': '\\oint',
+      '∑': '\\sum',
+      '∏': '\\prod',
+      '→': '\\rightarrow',
+      '←': '\\leftarrow',
+      '↔': '\\leftrightarrow',
+      '⇌': '\\rightleftharpoons',
+      '⇒': '\\Rightarrow',
+      '⇔': '\\Leftrightarrow',
+      '≤': '\\le',
+      '≥': '\\ge',
+      '≠': '\\ne',
+      '≈': '\\approx',
+      '±': '\\pm',
+      '×': '\\times',
+      '÷': '\\div',
+      '·': '\\cdot',
+      '∞': '\\infty',
+    };
+
+    const getChildEls = (el: Element): Element[] => {
+      const list: Element[] = [];
+      for (let i = 0; i < el.childNodes.length; i++) {
+        if (el.childNodes[i].nodeType === 1) list.push(el.childNodes[i] as Element);
+      }
+      return list;
+    };
+
+    const walk = (el: Element): string => {
+      const tag = (el.localName || el.nodeName || '').toLowerCase();
+      const children = getChildEls(el);
+      switch (tag) {
+        case 'math':
+        case 'mrow':
+        case 'mstyle':
+        case 'mpadded':
+        case 'semantics':
+          return children.map(walk).join(' ').replace(/\s+/g, ' ').trim();
+        case 'annotation':
+        case 'annotation-xml':
+          return '';
+        case 'mi':
+        case 'mn':
+          return (el.textContent || '').trim();
+        case 'mtext': {
+          const t = (el.textContent || '').trim();
+          return t ? `\\text{${t}}` : '';
+        }
+        case 'mo': {
+          const raw = (el.textContent || '').trim();
+          return opMap[raw] || raw;
+        }
+        case 'mfrac': {
+          const num = children[0] ? walk(children[0]) : '';
+          const den = children[1] ? walk(children[1]) : '';
+          return `\\frac{${num}}{${den}}`;
+        }
+        case 'msqrt':
+          return `\\sqrt{${children.map(walk).join(' ').trim()}}`;
+        case 'mroot': {
+          const base = children[0] ? walk(children[0]) : '';
+          const idx = children[1] ? walk(children[1]) : '';
+          return `\\sqrt[${idx}]{${base}}`;
+        }
+        case 'msub': {
+          const base = children[0] ? walk(children[0]) : '';
+          const sub = children[1] ? walk(children[1]) : '';
+          return `${base}_{${sub}}`;
+        }
+        case 'msup': {
+          const base = children[0] ? walk(children[0]) : '';
+          const sup = children[1] ? walk(children[1]) : '';
+          return `${base}^{${sup}}`;
+        }
+        case 'msubsup': {
+          const base = children[0] ? walk(children[0]) : '';
+          const sub = children[1] ? walk(children[1]) : '';
+          const sup = children[2] ? walk(children[2]) : '';
+          return `${base}_{${sub}}^{${sup}}`;
+        }
+        case 'mover': {
+          const base = children[0] ? walk(children[0]) : '';
+          const over = children[1] ? walk(children[1]) : '';
+          return `\\overset{${over}}{${base}}`;
+        }
+        case 'munder': {
+          const base = children[0] ? walk(children[0]) : '';
+          const under = children[1] ? walk(children[1]) : '';
+          return `\\underset{${under}}{${base}}`;
+        }
+        case 'mtable': {
+          const rows = children.map((tr) =>
+            getChildEls(tr)
+              .map((td) => walk(td))
+              .join(' & ')
+          );
+          return `\\begin{matrix} ${rows.join(' \\\\ ')} \\end{matrix}`;
+        }
+        case 'mfenced': {
+          const open = el.getAttribute('open') ?? '(';
+          const close = el.getAttribute('close') ?? ')';
+          const inner = children.map(walk).join(', ');
+          return `\\left${open}${inner}\\right${close}`;
+        }
+        default:
+          return children.length > 0 ? children.map(walk).join(' ') : (el.textContent || '').trim();
+      }
+    };
+
+    return walk(root).trim();
+  } catch {
+    return mathMl.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
 }

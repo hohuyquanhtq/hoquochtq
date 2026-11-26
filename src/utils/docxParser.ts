@@ -11,7 +11,11 @@ import {
 } from '../types';
 import { extractComprehensiveAnswerKeys, buildAnswerRecognitionItems } from './answerRecognizer';
 import { isolateAnswerBlock } from './answerExtractionEngine/documentTableReader';
-import { parseDocxWithEquations, DocxEquationWarning } from './docxEquationParser';
+import {
+  parseDocxWithEquations,
+  extractDocxHtmlWithMammoth,
+  DocxEquationWarning,
+} from './docxEquationParser';
 import { extractTextFromPdfDetailed, PdfExtractionResult } from './pdfExtractor';
 import {
   detectSectionHeader,
@@ -19,13 +23,81 @@ import {
   isSectionSubtitleLine,
   SectionDetectionCandidate,
 } from './sectionDetector';
+import { extractTablesFromHtml } from './answerExtractionEngine/documentTableReader';
 
 export { detectSectionHeader, detectSectionHeaderDetailed, extractTextFromPdfDetailed };
 export type { SectionDetectionCandidate, PdfExtractionResult };
 
 /**
- * Extracts rich markdown text from a DOCX ArrayBuffer,
- * preserving Office Math (OMML), chemical formulas, subscripts, equations, and tables.
+ * Converts mammoth HTML output into line-oriented rich exam text while strictly preserving
+ * HTML <table>/<tr>/<td>/<th>, inline <img src="data:image/...">, <math>, and sub/sup formatting.
+ */
+function convertMammothHtmlPreservingRichMedia(rawHtml: string): string {
+  if (!rawHtml) return '';
+
+  // 1. Protect <table>...</table> blocks as single-line blocks so question splitters never tear rows apart
+  const protectedTables: string[] = [];
+  let working = rawHtml.replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (tblHtml) => {
+    const cleanTbl = tblHtml
+      .replace(/\r?\n/g, ' ')
+      .replace(/<p[^>]*>/gi, '')
+      .replace(/<\/p>/gi, '<br/>')
+      .replace(/(<br\s*\/?>\s*)+(?=<\/t[dh]>)/gi, '')
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    const idx = protectedTables.length;
+    protectedTables.push(cleanTbl);
+    return `\n\n__HQ_TBL_${idx}__\n\n`;
+  });
+
+  // 2. Convert block tags to newlines while keeping <img>, <sub>, <sup>, <b>, <strong>, <i>, <em>, <u>, <s>, <math>
+  working = working
+    .replace(/<\/(?:p|div|li|h[1-6]|blockquote)>/gi, '\n')
+    .replace(/<(?:p|div|li|h[1-6]|blockquote)\b[^>]*>/gi, '')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/?(?!img\b|sub\b|sup\b|b\b|strong\b|i\b|em\b|u\b|s\b|math\b|mrow\b|mi\b|mn\b|mo\b|mfrac\b|msqrt\b|mroot\b|msub\b|msup\b|msubsup\b|mtable\b|mtr\b|mtd\b)[a-z][a-z0-9:_-]*\b[^>]*>/gi, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"');
+
+  // 3. Restore preserved HTML tables
+  working = working.replace(/__HQ_TBL_(\d+)__/g, (_m, idx) => protectedTables[Number(idx)] || '');
+
+  return working
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * Masks HTML <table>...</table>, <img .../>, Markdown images, and <math>...</math> blocks
+ * with inert placeholders before running regexes for Câu N / A. B. C. D. / a) b) c) d),
+ * guaranteeing images & tables stay in their exact original position without regex corruption.
+ */
+function maskRichBlocks(input: string): { masked: string; restore: (s: string) => string } {
+  const store: string[] = [];
+  const tokenOf = (raw: string) => {
+    const idx = store.length;
+    store.push(raw);
+    return `\uE000HQRICH_${idx}\uE001`;
+  };
+
+  const masked = input
+    .replace(/<table\b[^>]*>[\s\S]*?<\/table>/gi, (m) => tokenOf(m))
+    .replace(/<math\b[^>]*>[\s\S]*?<\/math>/gi, (m) => tokenOf(m))
+    .replace(/<img\b[^>]*\/?>/gi, (m) => tokenOf(m))
+    .replace(/!\[[^\]]*\]\((?:[^()\n]|\([^()\n]*\))+\)/g, (m) => tokenOf(m));
+
+  const restore = (s: string) =>
+    s.replace(/\uE000HQRICH_(\d+)\uE001/g, (_m, idx) => store[Number(idx)] ?? '');
+
+  return { masked, restore };
+}
+
+/**
+ * Extracts rich exam content from a DOCX ArrayBuffer,
+ * preserving Office Math (OMML -> LaTeX), chemical formulas, subscripts, HTML <table>, and base64 <img>.
  */
 export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<string> {
   try {
@@ -34,7 +106,17 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
       return res.fullMarkdownText;
     }
   } catch (err) {
-    console.warn('parseDocxWithEquations fallback to mammoth:', err);
+    console.warn('parseDocxWithEquations fallback to mammoth HTML:', err);
+  }
+
+  try {
+    const mammothHtml = await extractDocxHtmlWithMammoth(arrayBuffer);
+    const converted = convertMammothHtmlPreservingRichMedia(mammothHtml.html);
+    if (converted.trim().length > 0) {
+      return converted;
+    }
+  } catch (err) {
+    console.warn('Mammoth convertToHtml with imgElement fallback warning:', err);
   }
 
   try {
@@ -47,8 +129,9 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
 }
 
 /**
- * Extracts and parses a DOCX exam in one pass while preserving OMML conversion warnings,
- * extracted tables, and unsupported equation XML fragments.
+ * Extracts and parses a DOCX exam in one pass while preserving OMML equations,
+ * HTML <table>/<tr>/<td>, inline base64 <img> (via JSZip + mammoth.images.imgElement),
+ * and answer key tables.
  */
 export async function parseDocxExam(
   arrayBuffer: ArrayBuffer,
@@ -69,7 +152,28 @@ export async function parseDocxExam(
       return { text: res.fullMarkdownText, result };
     }
   } catch (err) {
-    console.warn('parseDocxExam fallback to mammoth:', err);
+    console.warn('parseDocxExam fallback to mammoth HTML + imgElement:', err);
+  }
+
+  try {
+    const mammothHtml = await extractDocxHtmlWithMammoth(arrayBuffer);
+    const converted = convertMammothHtmlPreservingRichMedia(mammothHtml.html);
+    if (converted.trim().length > 0) {
+      const extractedTables = extractTablesFromHtml(mammothHtml.html);
+      return {
+        text: converted,
+        result: parseExamContent(converted, defaultGrade, {
+          extractedTables: extractedTables.map(t => ({
+            id: t.id,
+            sourceType: t.sourceType,
+            surroundingHeader: t.surroundingHeader,
+            rows: t.rows,
+          })),
+        }),
+      };
+    }
+  } catch (err) {
+    console.warn('Mammoth HTML exam parse fallback error:', err);
   }
 
   const fallbackText = await extractTextFromDocx(arrayBuffer);
@@ -159,10 +263,12 @@ export function extractPart2Statements(fullText: string): {
   prompt: string;
   statements: TrueFalseStatement[];
 } {
+  const { masked, restore } = maskRichBlocks(fullText);
+
   // Marker regex for lowercase a, b, c, d (allows optional Word bold/HTML wrappers around markers)
   const markerRegex =
     /(?:^|\n|[\s;,])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:[Ýý]\s*)?(?:\(?([a-d])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:[\)\]]\s*|[\].:\/–—]\s+)|\(([a-d])\)\s+)(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*\s*/g;
-  const matches = [...fullText.matchAll(markerRegex)];
+  const matches = [...masked.matchAll(markerRegex)];
 
   const subMatches: { letter: 'a' | 'b' | 'c' | 'd'; index: number; fullMatchLength: number }[] = [];
   const expectedOrder: ('a' | 'b' | 'c' | 'd')[] = ['a', 'b', 'c', 'd'];
@@ -187,14 +293,14 @@ export function extractPart2Statements(fullText: string): {
   }
 
   const firstSub = subMatches[0];
-  const prompt = cleanStrayBoldEdge(fullText.slice(0, firstSub.index));
+  const prompt = restore(cleanStrayBoldEdge(masked.slice(0, firstSub.index)));
   const statements: TrueFalseStatement[] = [];
 
   for (let i = 0; i < subMatches.length; i++) {
     const curr = subMatches[i];
     const textStart = curr.index + curr.fullMatchLength;
-    const textEnd = i + 1 < subMatches.length ? subMatches[i + 1].index : fullText.length;
-    let stmtText = cleanStrayBoldEdge(fullText.slice(textStart, textEnd));
+    const textEnd = i + 1 < subMatches.length ? subMatches[i + 1].index : masked.length;
+    let stmtText = cleanStrayBoldEdge(masked.slice(textStart, textEnd));
 
     // Check for inline answer tag: "[Đúng]", "(Đ)", "- Đúng", ": Đúng", "[Sai]", "(S)", "- Sai", ": Sai"
     let inlineAnswer: boolean | undefined = undefined;
@@ -207,7 +313,7 @@ export function extractPart2Statements(fullText: string): {
 
     statements.push({
       id: curr.letter,
-      statement: stmtText,
+      statement: restore(stmtText),
       correctAnswer: inlineAnswer !== undefined ? inlineAnswer : false,
       explanation: inlineAnswer !== undefined ? (inlineAnswer ? 'Đúng' : 'Sai') : undefined,
     });
@@ -219,15 +325,18 @@ export function extractPart2Statements(fullText: string): {
 /**
  * Robust extractor for Part I options (A, B, C, D)
  * Handles multiline, inline, Word bold/underline formatting, single-asterisk (*), and tags
+ * while strictly preserving inline <img> and <table> blocks in both stems and options.
  */
 export function extractPart1Options(fullText: string): {
   prompt: string;
   options: MultipleChoiceOption[];
   correctOptionId?: string;
 } {
+  const { masked, restore } = maskRichBlocks(fullText);
+
   const markerRegex =
     /(?:^|\n|[\s;,])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:\(?([A-D])(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*(?:[\)\]]\s*|[\].:\/–—]\s+)|\(([A-D])\)\s+)(?:\*{2,3}|<\/?(?:b|u|strong|i|em)>)*\s*/g;
-  const matches = [...fullText.matchAll(markerRegex)];
+  const matches = [...masked.matchAll(markerRegex)];
 
   const optMatches: { letter: string; index: number; fullMatchLength: number }[] = [];
   const expectedOrder = ['A', 'B', 'C', 'D'];
@@ -251,15 +360,15 @@ export function extractPart1Options(fullText: string): {
   }
 
   const firstOpt = optMatches[0];
-  const prompt = cleanStrayBoldEdge(fullText.slice(0, firstOpt.index));
+  const prompt = restore(cleanStrayBoldEdge(masked.slice(0, firstOpt.index)));
   const options: MultipleChoiceOption[] = [];
   let correctOptionId: string | undefined = undefined;
 
   for (let i = 0; i < optMatches.length; i++) {
     const curr = optMatches[i];
     const textStart = curr.index + curr.fullMatchLength;
-    const textEnd = i + 1 < optMatches.length ? optMatches[i + 1].index : fullText.length;
-    let optText = cleanStrayBoldEdge(fullText.slice(textStart, textEnd));
+    const textEnd = i + 1 < optMatches.length ? optMatches[i + 1].index : masked.length;
+    let optText = cleanStrayBoldEdge(masked.slice(textStart, textEnd));
 
     // Only treat single '*' (not Word bold '**') or explicit [Đúng]/(Đúng) as inline answer marker
     const isCorrect =
@@ -276,7 +385,7 @@ export function extractPart1Options(fullText: string): {
 
     options.push({
       id: curr.letter,
-      text: optText,
+      text: restore(optText),
       isCorrect: isCorrect || undefined,
     });
   }
@@ -291,7 +400,8 @@ export function extractPart3Data(fullText: string): {
   prompt: string;
   inlineAnswer?: string;
 } {
-  let prompt = fullText.trim();
+  const { masked, restore } = maskRichBlocks(fullText);
+  let prompt = masked.trim();
   let inlineAnswer: string | undefined = undefined;
 
   const ansMatch = prompt.match(
@@ -302,7 +412,7 @@ export function extractPart3Data(fullText: string): {
     prompt = prompt.slice(0, ansMatch.index).trim();
   }
 
-  return { prompt, inlineAnswer };
+  return { prompt: restore(prompt), inlineAnswer };
 }
 
 interface InternalSectionTracker {
@@ -578,7 +688,8 @@ export function recalculateParsedExamResult(
  * without splitting references inside prose ("từ Câu 1 đến Câu 12").
  */
 function separateInlineQuestionStarts(text: string): string {
-  return text
+  const { masked, restore } = maskRichBlocks(text);
+  const split = masked
     .split(/\r?\n/)
     .map(rawLine => {
       const line = rawLine.trim();
@@ -591,6 +702,7 @@ function separateInlineQuestionStarts(text: string): string {
       );
     })
     .join('\n');
+  return restore(split);
 }
 
 /**

@@ -144,7 +144,8 @@ export function groupQuestionsByGdpt2018Part(questions: readonly Question[]): Gr
 
 /**
  * Deep clones and optionally shuffles a Part I question's options (A, B, C, D),
- * re-labeling option IDs strictly in A..D order and updating correctOptionId / correctOptionIds / isCorrect.
+ * re-labeling option IDs strictly in A..D order and updating correctOptionId / correctOptionIds / isCorrect,
+ * while strictly preserving embedded <img> tags, <table> blocks, and LaTeX/MathML at their exact positions.
  */
 function preparePart1Question(
   source: Question,
@@ -168,8 +169,10 @@ function preparePart1Question(
   const annotated = rawOptions.map((opt, idx) => {
     const normalizedId = (opt.id || OPTION_LETTERS[idx] || String(idx + 1)).trim().toUpperCase();
     const isCorrect = Boolean(opt.isCorrect) || existingCorrectSet.has(normalizedId);
+    // Preserve exact option payload including inline <img src="data:image/...">, <table>, and formulas
     return {
-      text: opt.text || '',
+      ...opt,
+      text: typeof opt.text === 'string' ? opt.text : '',
       isCorrect,
     };
   });
@@ -180,6 +183,7 @@ function preparePart1Question(
       : annotated;
 
   const nextOptions: MultipleChoiceOption[] = ordered.map((item, idx) => ({
+    ...item,
     id: OPTION_LETTERS[idx] || String.fromCharCode(65 + idx),
     text: item.text,
     isCorrect: item.isCorrect,
@@ -190,6 +194,7 @@ function preparePart1Question(
 
   const cloned: Question = {
     ...source,
+    content: typeof source.content === 'string' ? source.content : '',
     options: nextOptions,
     correctOptionId: nextCorrectId || undefined,
     ...(source.type === 'part1_multiple_choice' || nextCorrectIds.length > 1
@@ -429,4 +434,37 @@ export function formatPart2AnswerCompact(map?: Record<string, boolean>): string 
   const entries = Object.entries(map);
   if (entries.length === 0) return '—';
   return entries.map(([letter, val]) => `${letter}-${val ? 'Đ' : 'S'}`).join(', ');
+}
+
+/**
+ * Counts embedded images (<img> / markdown images / imageUrl), tables (<table> / markdown tables),
+ * and math/chemistry equations ($...$ / <math>) across a list of exam questions.
+ */
+export function countQuestionsRichMediaStats(questions: readonly Question[]): {
+  imageCount: number;
+  tableCount: number;
+  formulaCount: number;
+} {
+  let imageCount = 0;
+  let tableCount = 0;
+  let formulaCount = 0;
+
+  const scanText = (txt?: string) => {
+    if (!txt) return;
+    imageCount += (txt.match(/<img\b[^>]*>|!\[[^\]]*\]\([^)]+\)/gi) || []).length;
+    tableCount += (txt.match(/<table\b[^>]*>/gi) || []).length;
+    if (!/<table\b/i.test(txt) && /^\s*\|[^\n]+\|\r?\n\s*\|[\s\-:|]+\|/m.test(txt)) {
+      tableCount += 1;
+    }
+    formulaCount += (txt.match(/\$\$[\s\S]+?\$\$|\$[^$\n]+\$|<math\b[^>]*>[\s\S]*?<\/math>/gi) || []).length;
+  };
+
+  for (const q of questions) {
+    if (q.imageUrl) imageCount += 1;
+    scanText(q.content);
+    q.options?.forEach((o) => scanText(o.text));
+    q.statements?.forEach((s) => scanText(s.statement));
+  }
+
+  return { imageCount, tableCount, formulaCount };
 }

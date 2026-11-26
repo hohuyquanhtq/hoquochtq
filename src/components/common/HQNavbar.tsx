@@ -17,6 +17,7 @@ import {
   X,
 } from 'lucide-react';
 import { User } from '../../types';
+import { isSuperAdminUser } from '../../constants/superAdmin';
 
 export interface HQNavItem {
   id: string;
@@ -142,12 +143,14 @@ export const HQNavbar: React.FC<HQNavbarProps> = ({
     };
   }, [isMobileDrawerOpen]);
 
+  const isCurrentSuperAdmin = isSuperAdminUser(currentUser);
+
   const homeTab =
     isGuest || !currentUser
       ? 'exam_landing'
       : currentUser.role === 'student'
       ? 'student_home'
-      : currentUser.role === 'admin'
+      : isCurrentSuperAdmin
       ? 'admin_dashboard'
       : 'dashboard';
 
@@ -162,8 +165,8 @@ export const HQNavbar: React.FC<HQNavbarProps> = ({
   };
 
   const roleLabel =
-    currentUser?.role === 'admin'
-      ? 'Quản trị viên'
+    isCurrentSuperAdmin
+      ? 'Super Admin'
       : currentUser?.role === 'teacher'
       ? 'Giáo viên'
       : 'Học sinh';

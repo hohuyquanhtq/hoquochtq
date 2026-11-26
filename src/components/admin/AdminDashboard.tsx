@@ -5,7 +5,9 @@ import {
   AccountStatus,
   PilotGroup,
   Question,
+  QuestionCityStatus,
   Exam,
+  ExamShareStatus,
   StudentSubmission,
   Folder,
 } from '../../types';
@@ -45,6 +47,10 @@ import {
   resolvePilotGroup,
 } from '../../constants/danangSchools';
 import { GRADE_LABELS, QUESTION_TYPE_SHORT_LABELS } from '../../constants/subjects';
+import {
+  isApprovedAccountStatus,
+  isSuperAdminRole,
+} from '../../constants/superAdmin';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import {
   fetchAllUsersForAdmin,
@@ -54,6 +60,7 @@ import {
   reviewExamCityShareByAdmin,
 } from '../../services/workspaceService';
 import { SystemEvidenceDashboard } from './SystemEvidenceDashboard';
+import { CityExamRepository } from '../teacher/CityExamRepository';
 
 interface AdminDashboardProps {
   currentUser: User;
@@ -61,13 +68,28 @@ interface AdminDashboardProps {
   exams: Exam[];
   submissions: StudentSubmission[];
   folders: Folder[];
-  sectionFocus?: 'overview' | 'users';
+  sectionFocus?: 'overview' | 'users' | 'city_governance';
   onNavigate?: (tab: string) => void;
   onDataResetOrRestored: () => void;
+  onExamCloned?: (clonedExam: Exam) => void;
+  onQuestionCloned?: (clonedQuestion: Question) => void;
+  onExamShareStatusChanged?: (
+    examId: string,
+    nextStatus: ExamShareStatus,
+    reviewNote?: string
+  ) => void;
+  onQuestionCityStatusChanged?: (
+    questionIds: string[],
+    nextStatus: QuestionCityStatus
+  ) => void;
 }
 
 type UserFilterTab = 'all' | 'pending' | 'active' | 'locked' | 'rejected' | 'teacher' | 'student';
-type AdminSectionTab = 'teachers_schools' | 'exam_moderation' | 'evidence_stats';
+type AdminSectionTab =
+  | 'teachers_schools'
+  | 'exam_moderation'
+  | 'question_moderation'
+  | 'evidence_stats';
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   currentUser,
@@ -78,17 +100,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   sectionFocus = 'overview',
   onNavigate,
   onDataResetOrRestored,
+  onExamCloned,
+  onQuestionCloned,
+  onExamShareStatusChanged,
+  onQuestionCityStatusChanged,
 }) => {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [isLoadingUsers, setIsLoadingUsers] = useState(true);
   const [adminSection, setAdminSection] = useState<AdminSectionTab>('teachers_schools');
   const [filterTab, setFilterTab] = useState<UserFilterTab>(
-    sectionFocus === 'users' ? 'student' : 'all'
+    sectionFocus === 'users'
+      ? 'student'
+      : sectionFocus === 'city_governance'
+      ? 'teacher'
+      : 'all'
   );
   useEffect(() => {
-    setFilterTab(sectionFocus === 'users' ? 'student' : 'all');
     if (sectionFocus === 'users') {
+      setFilterTab('student');
       setAdminSection('teachers_schools');
+    } else if (sectionFocus === 'city_governance') {
+      setFilterTab('teacher');
+      setAdminSection('teachers_schools');
+    } else {
+      setFilterTab('all');
     }
   }, [sectionFocus]);
   const [searchTerm, setSearchTerm] = useState('');
@@ -125,7 +160,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       ]);
       setUsersList(users);
       setCloudAudit(audit);
-      const firstActiveTeacher = users.find((u) => u.role === 'teacher' && u.status === 'active');
+      const firstActiveTeacher = users.find(
+        (u) => u.role === 'teacher' && isApprovedAccountStatus(u.status)
+      );
       if (firstActiveTeacher && !selectedTeacherUidForLegacy) {
         setSelectedTeacherUidForLegacy(firstActiveTeacher.uid || firstActiveTeacher.id);
       }
@@ -145,9 +182,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const adminUid = currentUser.uid || currentUser.id;
   const pendingCount = usersList.filter((u) => u.status === 'pending').length;
-  const activeTeachers = usersList.filter((u) => u.role === 'teacher' && u.status === 'active');
+  const activeTeachers = usersList.filter(
+    (u) => u.role === 'teacher' && isApprovedAccountStatus(u.status)
+  );
 
-  const knownTeacherUids = new Set(usersList.filter((u) => u.role === 'teacher' || u.role === 'admin').map((u) => u.uid || u.id));
+  const knownTeacherUids = new Set(
+    usersList
+      .filter((u) => u.role === 'teacher' || isSuperAdminRole(u.role))
+      .map((u) => u.uid || u.id)
+  );
   const localLegacy = StorageService.getLegacyUnownedData();
 
   const cloudLegacyExams = cloudAudit.allExams.filter(
@@ -165,7 +208,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const filteredUsers = usersList.filter((u) => {
     if (filterTab === 'pending' && u.status !== 'pending') return false;
-    if (filterTab === 'active' && u.status !== 'active') return false;
+    if (filterTab === 'active' && !isApprovedAccountStatus(u.status)) return false;
     if (filterTab === 'locked' && u.status !== 'locked') return false;
     if (filterTab === 'rejected' && u.status !== 'rejected') return false;
     if (filterTab === 'teacher' && u.role !== 'teacher') return false;
@@ -185,13 +228,13 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleStatusChange = async (user: User, nextStatus: AccountStatus) => {
     const targetUid = user.uid || user.id;
-    if (targetUid === adminUid && nextStatus !== 'active') {
-      showStatus('Không thể tự khóa tài khoản Quản trị viên đang đăng nhập.', 'error');
+    if (targetUid === adminUid && !isApprovedAccountStatus(nextStatus)) {
+      showStatus('Không thể tự khóa tài khoản Super Admin đang đăng nhập.', 'error');
       return;
     }
 
     const nextApprovalStatus =
-      nextStatus === 'active'
+      isApprovedAccountStatus(nextStatus)
         ? 'approved'
         : nextStatus === 'pending'
         ? 'pending'
@@ -294,7 +337,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setBusyUid(targetUid);
     try {
       const nextApprovalStatus =
-        editingUser.status === 'active'
+        isApprovedAccountStatus(editingUser.status)
           ? 'approved'
           : editingUser.status === 'pending'
           ? 'pending'
@@ -407,7 +450,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     showStatus('Đã tải xuống bản sao lưu toàn hệ thống!');
   };
 
-  const activeCount = usersList.filter((u) => u.status === 'active').length;
+  const activeCount = usersList.filter((u) => isApprovedAccountStatus(u.status)).length;
   const lockedCount = usersList.filter((u) => u.status === 'locked').length;
   const rejectedCount = usersList.filter((u) => u.status === 'rejected').length;
   const teacherCount = usersList.filter((u) => u.role === 'teacher').length;
@@ -418,6 +461,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const cityPublicExams = cloudAudit.allExams.filter(
     (ex) => ex.share_status === 'city_public'
   );
+  const pendingCityQuestionsCount = cloudAudit.allQuestions.filter(
+    (q) =>
+      (q.isSharedCity === true || q.isPublicCity === true) &&
+      (!q.cityStatus || q.cityStatus === 'pending')
+  ).length;
+  const isCityGovernanceMode = sectionFocus === 'city_governance';
 
   const statCards = [
     {
@@ -485,13 +534,21 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           <div className="space-y-1.5 min-w-0">
             <div className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700">
               <ShieldCheck className="w-4 h-4 shrink-0" />
-              <span>Trung tâm Quản trị &amp; Phê duyệt Tài khoản</span>
+              <span>
+                {isCityGovernanceMode
+                  ? 'Điều hành & Kiểm duyệt Học liệu Cấp Thành phố · HTQ Chemistry Hub'
+                  : 'Trung tâm Quản trị & Phê duyệt Tài khoản'}
+              </span>
             </div>
             <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-              Quản Trị Hệ Thống {APP_CONFIG.APP_NAME}
+              {isCityGovernanceMode
+                ? 'Quản trị Cấp Thành phố'
+                : `Quản Trị Hệ Thống ${APP_CONFIG.APP_NAME}`}
             </h1>
             <p className="text-sm text-slate-500 max-w-2xl leading-relaxed">
-              Duyệt tài khoản Giáo viên mới, phân quyền, khóa/mở khóa người dùng và quản lý phân bổ dữ liệu hệ thống.
+              {isCityGovernanceMode
+                ? 'Phê duyệt tài khoản giáo viên các trường THPT, kiểm duyệt đề thi và ngân hàng câu hỏi chia sẻ cấp thành phố.'
+                : 'Duyệt tài khoản Giáo viên mới, phân quyền, khóa/mở khóa người dùng và quản lý phân bổ dữ liệu hệ thống.'}
             </p>
           </div>
 
@@ -615,6 +672,24 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
         <button
           type="button"
+          onClick={() => setAdminSection('question_moderation')}
+          className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
+            adminSection === 'question_moderation'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-700 hover:bg-slate-100'
+          }`}
+        >
+          <BookOpen className="w-4 h-4 shrink-0" />
+          <span>Kiểm duyệt Câu hỏi Kho TP</span>
+          {pendingCityQuestionsCount > 0 && (
+            <span className="px-2 py-0.5 rounded-md bg-teal-600 text-white text-xs font-bold tabular-nums">
+              {pendingCityQuestionsCount}
+            </span>
+          )}
+        </button>
+
+        <button
+          type="button"
           onClick={() => setAdminSection('evidence_stats')}
           className={`min-h-[42px] px-4 py-2 rounded-xl text-sm font-semibold inline-flex items-center gap-2 transition-colors ${
             adminSection === 'evidence_stats'
@@ -627,7 +702,30 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         </button>
       </nav>
 
-      {/* TAB 3: EVIDENCE STATISTICS DASHBOARD */}
+      {/* TAB 3: CITY SHARED QUESTION MODERATION */}
+      {adminSection === 'question_moderation' && (
+        <CityExamRepository
+          currentUser={currentUser}
+          initialTab="questions"
+          onExamCloned={(clonedExam) => onExamCloned?.(clonedExam)}
+          onQuestionCloned={onQuestionCloned}
+          onExamShareStatusChanged={onExamShareStatusChanged}
+          onQuestionCityStatusChanged={(questionIds, nextStatus) => {
+            onQuestionCityStatusChanged?.(questionIds, nextStatus);
+            const idSet = new Set(questionIds);
+            setCloudAudit((prev) => ({
+              ...prev,
+              allQuestions: prev.allQuestions.map((q) =>
+                idSet.has(q.id) ? { ...q, cityStatus: nextStatus } : q
+              ),
+            }));
+          }}
+          onOpenPersonalExams={onNavigate ? () => onNavigate('exam_manager') : undefined}
+          onOpenPersonalQuestionBank={onNavigate ? () => onNavigate('question_bank') : undefined}
+        />
+      )}
+
+      {/* TAB 4: EVIDENCE STATISTICS DASHBOARD */}
       {adminSection === 'evidence_stats' && (
         <SystemEvidenceDashboard
           users={usersList}
@@ -932,14 +1030,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <td className="py-3.5 px-5">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold ${
-                            u.role === 'admin'
+                            isSuperAdminRole(u.role)
                               ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/70'
                               : u.role === 'teacher'
                               ? 'bg-sky-50 text-sky-700 border border-sky-200/70'
                               : 'bg-slate-100 text-slate-700 border border-slate-200/70'
                           }`}
                         >
-                          {u.role === 'admin' ? 'Admin' : u.role === 'teacher' ? 'Giáo viên' : 'Học sinh'}
+                          {isSuperAdminRole(u.role)
+                            ? 'Super Admin'
+                            : u.role === 'teacher'
+                            ? 'Giáo viên'
+                            : 'Học sinh'}
                         </span>
                       </td>
                       <td className="py-3.5 px-5 text-slate-700">
@@ -951,7 +1053,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                         )}
                       </td>
                       <td className="py-3.5 px-5">
-                        {u.role === 'teacher' || u.role === 'admin' ? (
+                        {u.role === 'teacher' || isSuperAdminRole(u.role) ? (
                           <select
                             aria-label={`Nhóm thử nghiệm của ${u.name}`}
                             disabled={isBusy}
@@ -972,7 +1074,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       <td className="py-3.5 px-5 text-center">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-md text-xs font-semibold ${
-                            u.status === 'active'
+                            isApprovedAccountStatus(u.status)
                               ? 'bg-emerald-50 text-emerald-700'
                               : u.status === 'pending'
                               ? 'bg-amber-50 text-amber-700'
@@ -981,8 +1083,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                               : 'bg-slate-100 text-slate-600'
                           }`}
                         >
-                          {u.status === 'active'
-                            ? 'Hoạt động'
+                          {isApprovedAccountStatus(u.status)
+                            ? 'Đã duyệt'
                             : u.status === 'pending'
                             ? 'Chờ duyệt'
                             : u.status === 'locked'
@@ -1015,7 +1117,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                             </>
                           )}
 
-                          {u.status === 'active' && !isSelf && (
+                          {isApprovedAccountStatus(u.status) && !isSelf && (
                             <button
                               type="button"
                               disabled={isBusy}
@@ -1313,7 +1415,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                   >
                     <option value="teacher">Giáo viên</option>
                     <option value="student">Học sinh</option>
-                    <option value="admin">Quản trị viên</option>
+                    <option value="super_admin">Super Admin</option>
+                    <option value="admin">Quản trị viên (Admin)</option>
                   </select>
                 </div>
                 <div>
@@ -1326,7 +1429,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     }
                     className="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/25 focus:border-emerald-500"
                   >
-                    <option value="active">Hoạt động (Đã duyệt)</option>
+                    <option value="approved">Đã phê duyệt (Approved)</option>
+                    <option value="active">Hoạt động (Active)</option>
                     <option value="pending">Chờ duyệt</option>
                     <option value="locked">Khóa</option>
                     <option value="rejected">Từ chối</option>

@@ -13,7 +13,7 @@ export const APP_CONFIG = {
 
 export interface GreetingUserLike {
   name?: string;
-  role?: 'teacher' | 'student' | 'admin' | string;
+  role?: 'teacher' | 'student' | 'admin' | 'super_admin' | string;
 }
 
 /**

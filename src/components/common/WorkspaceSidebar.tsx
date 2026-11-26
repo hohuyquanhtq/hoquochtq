@@ -17,8 +17,10 @@ import {
   PanelLeftOpen,
   Shuffle,
   Library,
+  ShieldCheck,
 } from 'lucide-react';
 import { APP_CONFIG } from '../../constants/brand';
+import { isSuperAdminRole } from '../../constants/superAdmin';
 import { UserRole } from '../../types';
 
 export interface WorkspaceSidebarProps {
@@ -54,14 +56,16 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   isMobileOpen,
   onCloseMobile,
 }) => {
+  const isSuperAdmin = isSuperAdminRole(userRole);
+
   const navGroups: SidebarNavGroup[] = [
     {
       title: 'Tổng quan & Soạn đề',
       items: [
         {
-          id: userRole === 'admin' ? 'admin_dashboard' : 'dashboard',
+          id: isSuperAdmin ? 'admin_dashboard' : 'dashboard',
           label: 'Tổng quan',
-          matchTabs: userRole === 'admin' ? ['admin_dashboard', 'dashboard'] : ['dashboard'],
+          matchTabs: isSuperAdmin ? ['admin_dashboard', 'dashboard'] : ['dashboard'],
           icon: LayoutDashboard,
         },
         {
@@ -105,8 +109,14 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
           matchTabs: ['city_exam_bank'],
           icon: Library,
         },
-        ...(userRole === 'admin'
+        ...(isSuperAdmin
           ? [
+              {
+                id: 'city_admin_panel',
+                label: 'Quản trị Cấp Thành phố',
+                matchTabs: ['city_admin_panel'],
+                icon: ShieldCheck,
+              },
               {
                 id: 'admin_curriculum',
                 label: 'Danh mục bài học',
@@ -128,9 +138,9 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
           icon: BarChart3,
         },
         {
-          id: userRole === 'admin' ? 'admin_users' : 'class_manager',
-          label: userRole === 'admin' ? 'Quản lý tài khoản' : 'Lớp học & Học sinh',
-          matchTabs: userRole === 'admin' ? ['admin_users'] : ['class_manager'],
+          id: isSuperAdmin ? 'admin_users' : 'class_manager',
+          label: isSuperAdmin ? 'Quản lý tài khoản' : 'Lớp học & Học sinh',
+          matchTabs: isSuperAdmin ? ['admin_users'] : ['class_manager'],
           icon: Users,
         },
       ],
@@ -169,7 +179,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
       >
         <button
           type="button"
-          onClick={() => handleNavClick(userRole === 'admin' ? 'admin_dashboard' : 'dashboard')}
+          onClick={() => handleNavClick(isSuperAdmin ? 'admin_dashboard' : 'dashboard')}
           title="QUIZ PRO - Trang tổng quan"
           className={`flex items-center gap-3 text-left min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 rounded-xl ${
             collapsedMode ? 'justify-center p-1' : 'flex-1'

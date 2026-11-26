@@ -1,6 +1,7 @@
 import type { Question } from '../types';
 
 const INLINE_DATA_IMAGE_REGEX = /!\[([^\]]*)\]\((data:image\/[^)]+)\)/gi;
+const INLINE_HTML_IMG_REGEX = /<img\b[^>]*\bsrc=["'](data:image\/[^"']+)["'][^>]*\/?>/gi;
 const IMAGE_OPTIMIZE_THRESHOLD_CHARS = 110_000;
 const MAX_RASTER_WIDTH = 1280;
 const MAX_RASTER_HEIGHT = 1280;
@@ -33,9 +34,14 @@ export function extractQuestionImageUrls(question: Question): string[] {
   const urls: string[] = [];
   const collectFromText = (text?: string) => {
     if (!text) return;
-    const regex = /!\[[^\]]*\]\(([^)]+)\)/gi;
+    const mdRegex = /!\[[^\]]*\]\(([^)]+)\)/gi;
     let m: RegExpExecArray | null;
-    while ((m = regex.exec(text)) !== null) {
+    while ((m = mdRegex.exec(text)) !== null) {
+      const candidate = (m[1] || '').trim();
+      if (candidate) urls.push(candidate);
+    }
+    const htmlRegex = /<img\b[^>]*\bsrc=["']([^"']+)["'][^>]*\/?>/gi;
+    while ((m = htmlRegex.exec(text)) !== null) {
       const candidate = (m[1] || '').trim();
       if (candidate) urls.push(candidate);
     }
@@ -118,20 +124,35 @@ export async function optimizeDataImageUrlIfNeeded(
 async function optimizeRichTextImages(text?: string): Promise<string | undefined> {
   if (!text || !text.includes('data:image/')) return text;
 
-  const matches: { full: string; alt: string; url: string }[] = [];
-  const regex = new RegExp(INLINE_DATA_IMAGE_REGEX.source, 'gi');
+  const mdMatches: { full: string; alt: string; url: string }[] = [];
+  const mdRegex = new RegExp(INLINE_DATA_IMAGE_REGEX.source, 'gi');
   let m: RegExpExecArray | null;
-  while ((m = regex.exec(text)) !== null) {
-    matches.push({ full: m[0], alt: m[1] || 'Hinh_anh_minh_hoa', url: m[2] });
+  while ((m = mdRegex.exec(text)) !== null) {
+    mdMatches.push({ full: m[0], alt: m[1] || 'Hinh_anh_minh_hoa', url: m[2] });
   }
-  if (matches.length === 0) return text;
+
+  const htmlMatches: { full: string; url: string }[] = [];
+  const htmlRegex = new RegExp(INLINE_HTML_IMG_REGEX.source, 'gi');
+  while ((m = htmlRegex.exec(text)) !== null) {
+    htmlMatches.push({ full: m[0], url: m[1] });
+  }
+
+  if (mdMatches.length === 0 && htmlMatches.length === 0) return text;
 
   let result = text;
-  for (const item of matches) {
+  for (const item of mdMatches) {
     if (item.url.length > IMAGE_OPTIMIZE_THRESHOLD_CHARS) {
       const optimized = await optimizeDataImageUrlIfNeeded(item.url);
       if (optimized !== item.url) {
         result = result.replace(item.full, `![${item.alt}](${optimized})`);
+      }
+    }
+  }
+  for (const item of htmlMatches) {
+    if (item.url.length > IMAGE_OPTIMIZE_THRESHOLD_CHARS) {
+      const optimized = await optimizeDataImageUrlIfNeeded(item.url);
+      if (optimized !== item.url) {
+        result = result.replace(item.full, item.full.replace(item.url, optimized));
       }
     }
   }

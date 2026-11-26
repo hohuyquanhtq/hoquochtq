@@ -15,11 +15,13 @@ interface PositionedTextItem {
   x: number;
   y: number;
   width: number;
+  height: number;
 }
 
 /**
  * Reconstructs cleanly ordered text lines for a single PDF page from PDF.js text items.
- * Groups spans by Y-coordinate tolerance and sorts each line strictly left-to-right by X.
+ * Groups spans by Y-coordinate tolerance, detects chemical/math subscripts & superscripts
+ * from vertical baseline offsets + smaller font height, and sorts each line strictly left-to-right.
  */
 function reconstructPageLines(items: any[]): string {
   const positioned: PositionedTextItem[] = [];
@@ -32,26 +34,26 @@ function reconstructPageLines(items: any[]): string {
     const x = Number(transform[4]) || 0;
     const y = Number(transform[5]) || 0;
     const width = Number(raw.width) || 0;
+    const height = Math.abs(Number(raw.height) || Number(transform[3]) || Number(transform[0]) || 10);
 
     if (str.trim().length === 0) {
-      // Keep non-empty whitespace span only if useful; skip pure zero-width spacing noise
       continue;
     }
 
-    positioned.push({ str, x, y, width });
+    positioned.push({ str, x, y, width, height });
   }
 
   if (positioned.length === 0) return '';
 
   // Sort top-to-bottom (higher Y first in PDF coordinate space), then left-to-right (lower X first)
   positioned.sort((a, b) => {
-    if (Math.abs(a.y - b.y) > 4.2) {
+    if (Math.abs(a.y - b.y) > 4.5) {
       return b.y - a.y;
     }
     return a.x - b.x;
   });
 
-  // Group into horizontal line buckets within Y tolerance
+  // Group into horizontal line buckets within Y tolerance (allowing attached sub/superscripts)
   const lines: PositionedTextItem[][] = [];
   for (const item of positioned) {
     const currentLine = lines[lines.length - 1];
@@ -59,32 +61,54 @@ function reconstructPageLines(items: any[]): string {
       lines.push([item]);
       continue;
     }
-    const avgY = currentLine.reduce((sum, it) => sum + it.y, 0) / currentLine.length;
-    if (Math.abs(item.y - avgY) <= 4.5) {
+    const baseY = currentLine[0].y;
+    const baseH = currentLine[0].height || 10;
+    const tol = Math.max(4.5, baseH * 0.48);
+    if (Math.abs(item.y - baseY) <= tol) {
       currentLine.push(item);
     } else {
       lines.push([item]);
     }
   }
 
-  // Sort spans inside each line left-to-right and join with column-aware spacing
+  // Sort spans inside each line left-to-right and join with sub/sup & column-aware spacing
   const lineStrings = lines.map((lineItems) => {
     lineItems.sort((a, b) => a.x - b.x);
+    const heights = lineItems.map((it) => it.height).sort((a, b) => a - b);
+    const medianH = heights[Math.floor(heights.length / 2)] || 10;
+    const normalItems = lineItems.filter((it) => it.height >= medianH * 0.85);
+    const baselineY =
+      normalItems.length > 0
+        ? normalItems.reduce((sum, it) => sum + it.y, 0) / normalItems.length
+        : lineItems[0].y;
+
     let out = '';
     let prevEnd = lineItems[0].x;
 
     for (let i = 0; i < lineItems.length; i++) {
       const it = lineItems[i];
+      const trimmed = it.str.trim();
+      const isSmaller = it.height > 0 && it.height < medianH * 0.82 && trimmed.length <= 6;
+      const dy = it.y - baselineY;
+      const isSub = isSmaller && dy < -1.5 && /^[0-9a-zA-Z+\-()]+$/.test(trimmed);
+      const isSup = isSmaller && dy > 2.0 && /^[0-9a-zA-Z+\-°*]+$/.test(trimmed);
+
       if (i > 0) {
         const gap = it.x - prevEnd;
         if (gap > 22) {
-          // Wide horizontal gap (e.g. table column separation) -> tab/double-space for table reader
           out += '  ';
-        } else if (gap > 2.2 && !out.endsWith(' ') && !it.str.startsWith(' ')) {
+        } else if (!isSub && !isSup && gap > 2.2 && !out.endsWith(' ') && !it.str.startsWith(' ')) {
           out += ' ';
         }
       }
-      out += it.str;
+
+      if (isSub) {
+        out += `<sub>${trimmed}</sub>`;
+      } else if (isSup) {
+        out += `<sup>${trimmed}</sup>`;
+      } else {
+        out += it.str;
+      }
       prevEnd = it.x + Math.max(it.width, it.str.length * 3.5);
     }
 

@@ -34,8 +34,20 @@ service cloud.firestore {
 
     function hasAdminCustomClaim() {
       return isSignedIn()
-        && request.auth.token.admin == true
-        && request.auth.token.role == 'admin';
+        && (
+          request.auth.token.admin == true
+          || request.auth.token.role in ['admin', 'super_admin']
+        );
+    }
+
+    function isDefaultSuperAdminEmail() {
+      return isSignedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email is string
+        && request.auth.token.email.lower() in [
+          'hohuyquanhtq@gmail.com',
+          'hochivienhtq@gmail.com'
+        ];
     }
 
     function hasActiveAdminMarker() {
@@ -47,24 +59,29 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email is string
         && request.auth.token.email is string
         && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.email.lower() == request.auth.token.email.lower()
-        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role == 'admin'
+        && get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role in ['admin', 'super_admin']
         && (get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.isActive == true
           || get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true);
     }
 
     function isAdmin() {
-      return hasAdminCustomClaim() || hasActiveAdminMarker();
+      return hasAdminCustomClaim() || hasActiveAdminMarker() || isDefaultSuperAdminEmail();
     }
 
     function isActiveTeacher() {
       return isSignedIn() && (
         isAdmin() ||
-        (userProfileExists() && currentUserData().role == 'teacher' && currentUserData().status == 'active')
+        (userProfileExists()
+          && currentUserData().role in ['teacher', 'admin', 'super_admin']
+          && currentUserData().status in ['active', 'approved'])
       );
     }
 
     function isActiveStudent() {
-      return isSignedIn() && userProfileExists() && currentUserData().role == 'student' && currentUserData().status == 'active';
+      return isSignedIn()
+        && userProfileExists()
+        && currentUserData().role == 'student'
+        && currentUserData().status in ['active', 'approved'];
     }
 
     function isOwner(ownerId) {
@@ -95,14 +112,41 @@ service cloud.firestore {
         && isValidId(data.uid)
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
         && (!('name' in data) || (data.name is string && data.name.size() >= 1 && data.name.size() <= 150))
-        && data.role in ['teacher', 'student', 'admin']
-        && data.status in ['pending', 'active', 'locked', 'rejected']
+        && data.role in ['teacher', 'student', 'admin', 'super_admin']
+        && data.status in ['pending', 'active', 'approved', 'locked', 'rejected']
         && (!('approval_status' in data) || data.approval_status in ['pending', 'approved', 'rejected'])
         && (!('pilot_group' in data) || data.pilot_group in ['host_school', 'expanded_pilot', 'standard'])
         && (!('department' in data) || (data.department is string && data.department.size() <= 150))
         && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
         && (!('school' in data) || (data.school is string && data.school.size() <= 200))
         && (!('className' in data) || (data.className is string && data.className.size() <= 80))
+        && (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128))
+        && (!('approvedAt' in data) || (data.approvedAt is string && data.approvedAt.size() <= 64))
+        && ((data.createdAt is string && data.createdAt.size() <= 64) || data.createdAt is timestamp)
+        && ((data.updatedAt is string && data.updatedAt.size() <= 64) || data.updatedAt is timestamp)
+        && (!('serverCreatedAt' in data) || data.serverCreatedAt is timestamp)
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidTeacherRecord(data) {
+      return data.keys().hasAll([
+          'uid', 'email', 'role', 'status', 'createdAt', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uid', 'email', 'name', 'role', 'status', 'approval_status', 'pilot_group', 'department',
+          'phone', 'school', 'approvedBy', 'approvedAt', 'createdAt', 'updatedAt',
+          'serverCreatedAt', 'serverUpdatedAt'
+        ])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && (!('name' in data) || (data.name is string && data.name.size() >= 1 && data.name.size() <= 150))
+        && data.role in ['teacher', 'admin', 'super_admin']
+        && data.status in ['pending', 'active', 'approved', 'locked', 'rejected']
+        && (!('approval_status' in data) || data.approval_status in ['pending', 'approved', 'rejected'])
+        && (!('pilot_group' in data) || data.pilot_group in ['host_school', 'expanded_pilot', 'standard'])
+        && (!('department' in data) || (data.department is string && data.department.size() <= 150))
+        && (!('phone' in data) || (data.phone is string && data.phone.size() <= 32))
+        && (!('school' in data) || (data.school is string && data.school.size() <= 200))
         && (!('approvedBy' in data) || (data.approvedBy is string && data.approvedBy.size() <= 128))
         && (!('approvedAt' in data) || (data.approvedAt is string && data.approvedAt.size() <= 64))
         && ((data.createdAt is string && data.createdAt.size() <= 64) || data.createdAt is timestamp)
@@ -651,7 +695,9 @@ service cloud.firestore {
             && incoming().status == 'pending'
             && (!('approval_status' in incoming()) || incoming().approval_status == 'pending')
             && (!('pilot_group' in incoming()) || incoming().pilot_group == 'standard')) ||
-          (isAdmin() && incoming().role == 'admin' && incoming().status == 'active')
+          (isAdmin()
+            && incoming().role in ['admin', 'super_admin']
+            && incoming().status in ['active', 'approved'])
         );
       allow update: if isSignedIn()
         && isValidId(userId)
@@ -687,6 +733,60 @@ service cloud.firestore {
             ]))
         );
       allow delete: if isValidId(userId) && isAdmin() && userId != request.auth.uid;
+    }
+
+    match /teachers/{teacherId} {
+      allow get: if isValidId(teacherId) && (isOwner(teacherId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isSignedIn()
+        && isValidId(teacherId)
+        && isValidTeacherRecord(incoming())
+        && incoming().uid == teacherId
+        && incoming().serverCreatedAt == request.time
+        && incoming().serverUpdatedAt == request.time
+        && (
+          (isOwner(teacherId)
+            && (!('email' in request.auth.token) || (request.auth.token.email is string && incoming().email.lower() == request.auth.token.email.lower()))
+            && incoming().role == 'teacher'
+            && incoming().status == 'pending'
+            && (!('approval_status' in incoming()) || incoming().approval_status == 'pending')
+            && (!('pilot_group' in incoming()) || incoming().pilot_group == 'standard')) ||
+          isAdmin()
+        );
+      allow update: if isSignedIn()
+        && isValidId(teacherId)
+        && isValidTeacherRecord(incoming())
+        && incoming().uid == teacherId
+        && (!('uid' in existing()) || incoming().uid == existing().uid)
+        && (
+          ('email' in existing() && incoming().email == existing().email) ||
+          (!('email' in existing()) && (!('email' in request.auth.token) || incoming().email == request.auth.token.email))
+        )
+        && (!('createdAt' in existing()) || incoming().createdAt == existing().createdAt)
+        && (
+          ('serverCreatedAt' in existing() && incoming().serverCreatedAt == existing().serverCreatedAt) ||
+          (!('serverCreatedAt' in existing()) && (!('serverCreatedAt' in incoming()) || incoming().serverCreatedAt == request.time))
+        )
+        && incoming().serverUpdatedAt == request.time
+        && (
+          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
+            'uid', 'email', 'name', 'phone', 'school', 'department', 'role', 'status',
+            'approval_status', 'pilot_group',
+            'approvedBy', 'approvedAt', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+          ])) ||
+          (isOwner(teacherId)
+            && existing().status != 'locked'
+            && existing().status != 'rejected'
+            && incoming().role == existing().role
+            && incoming().status == existing().status
+            && (!('approval_status' in existing()) ? !('approval_status' in incoming()) : incoming().approval_status == existing().approval_status)
+            && (!('pilot_group' in existing()) ? !('pilot_group' in incoming()) : incoming().pilot_group == existing().pilot_group)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'uid', 'email', 'name', 'phone', 'school', 'department',
+              'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+            ]))
+        );
+      allow delete: if isValidId(teacherId) && isAdmin() && teacherId != request.auth.uid;
     }
 
     match /questions/{questionId} {

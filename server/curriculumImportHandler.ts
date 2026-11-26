@@ -133,7 +133,7 @@ export function createFirestoreCurriculumImportStore(): CurriculumImportStore {
         if (
           adminDoc &&
           (adminDoc.isActive === true || adminDoc.active === true) &&
-          adminDoc.role === 'admin'
+          (adminDoc.role === 'admin' || adminDoc.role === 'super_admin')
         ) {
           isAdmin = true;
           displayName = adminDoc.name || adminDoc.displayName;
@@ -152,7 +152,10 @@ export function createFirestoreCurriculumImportStore(): CurriculumImportStore {
           if (!displayName && userDoc.name) {
             displayName = userDoc.name;
           }
-          if (userDoc.role === 'admin' && userDoc.status === 'active') {
+          if (
+            (userDoc.role === 'admin' || userDoc.role === 'super_admin') &&
+            (userDoc.status === 'active' || userDoc.status === 'approved')
+          ) {
             isAdmin = true;
           }
         }

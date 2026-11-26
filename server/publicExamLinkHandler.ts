@@ -231,7 +231,7 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
       if (
         adminDoc &&
         (adminDoc.isActive === true || adminDoc.active === true) &&
-        adminDoc.role === 'admin'
+        (adminDoc.role === 'admin' || adminDoc.role === 'super_admin')
       ) {
         isAdmin = true;
       }
@@ -242,7 +242,10 @@ export function createFirestorePublicExamLinkStore(): PublicExamLinkStore {
       if (userDoc) {
         role = userDoc.role;
         status = userDoc.status;
-        if (role === 'admin' && status === 'active') {
+        if (
+          (role === 'admin' || role === 'super_admin') &&
+          (status === 'active' || status === 'approved')
+        ) {
           isAdmin = true;
         }
       }
@@ -866,7 +869,9 @@ export function createPublicExamLinkHandlers(
         const roleInfo = await store.getUserRoleInfo(caller.uid, bearer);
         const hasLoadedRoleProfile = roleInfo.isAdmin || Boolean(roleInfo.role);
         const canManage =
-          roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
+          roleInfo.isAdmin ||
+          (roleInfo.role === 'teacher' &&
+            (roleInfo.status === 'active' || roleInfo.status === 'approved'));
         if (hasLoadedRoleProfile && !canManage) {
           return {
             status: 403,
@@ -1024,7 +1029,9 @@ export function createPublicExamLinkHandlers(
         stage = 'role_check';
         const roleInfo = await store.getUserRoleInfo(caller.uid, bearer);
         const canManage =
-          roleInfo.isAdmin || (roleInfo.role === 'teacher' && roleInfo.status === 'active');
+          roleInfo.isAdmin ||
+          (roleInfo.role === 'teacher' &&
+            (roleInfo.status === 'active' || roleInfo.status === 'approved'));
         if (!canManage) {
           return {
             status: 403,

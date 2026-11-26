@@ -154,7 +154,7 @@ export function createFirestoreAdminQuestionBankStore(): AdminQuestionBankStore 
         if (
           adminDoc &&
           (adminDoc.isActive === true || adminDoc.active === true) &&
-          adminDoc.role === 'admin'
+          (adminDoc.role === 'admin' || adminDoc.role === 'super_admin')
         ) {
           isAdmin = true;
           displayName = adminDoc.name || adminDoc.displayName;
@@ -174,7 +174,10 @@ export function createFirestoreAdminQuestionBankStore(): AdminQuestionBankStore 
         if (userDoc) {
           if (!displayName && userDoc.name) displayName = userDoc.name;
           if (!email && userDoc.email) email = userDoc.email;
-          if (userDoc.role === 'admin' && userDoc.status === 'active') {
+          if (
+            (userDoc.role === 'admin' || userDoc.role === 'super_admin') &&
+            (userDoc.status === 'active' || userDoc.status === 'approved')
+          ) {
             isAdmin = true;
           }
         }

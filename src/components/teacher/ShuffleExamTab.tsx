@@ -16,6 +16,7 @@ import type { Exam, Question } from '../../types';
 import { parseDocxExam } from '../../utils/docxParser';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import {
+  countQuestionsRichMediaStats,
   formatPart2AnswerCompact,
   generateShuffledExamBundle,
   generateVariantCodes,
@@ -42,6 +43,20 @@ const PRESET_PREFIXES = ['101', '201', '301'] as const;
 
 function stripFileExtension(fileName: string): string {
   return fileName.replace(/\.docx$/i, '').replace(/[_-]+/g, ' ').trim();
+}
+
+function hasBlockRichMedia(text: string): boolean {
+  return /<table\b|<img\b|!\[[^\]]*\]\(|^\s*\|.+\|\s*\n\s*\|[\s:|-]+\|/im.test(text || '');
+}
+
+function isSafePreviewImageUrl(url?: string): url is string {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return (
+    /^data:image\/(png|jpeg|jpg|gif|webp|bmp|svg\+xml);base64,/i.test(trimmed) ||
+    /^https?:\/\//i.test(trimmed) ||
+    trimmed.startsWith('/')
+  );
 }
 
 function getDefaultSchoolYear(): string {
@@ -97,6 +112,11 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
 
   const groupedSource = useMemo(
     () => groupQuestionsByGdpt2018Part(sourceQuestions),
+    [sourceQuestions]
+  );
+
+  const richMediaStats = useMemo(
+    () => countQuestionsRichMediaStats(sourceQuestions),
     [sourceQuestions]
   );
 
@@ -424,6 +444,14 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                     Đã nhận {sourceQuestions.length} câu hỏi · Nhấn hoặc kéo thả file khác để thay
                     thế
                   </p>
+                  {(richMediaStats.imageCount > 0 ||
+                    richMediaStats.tableCount > 0 ||
+                    richMediaStats.formulaCount > 0) && (
+                    <p className="text-[11px] font-medium text-teal-700 tabular-nums">
+                      Bảo toàn: {richMediaStats.formulaCount} câu có công thức ·{' '}
+                      {richMediaStats.tableCount} bảng · {richMediaStats.imageCount} hình ảnh
+                    </p>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-1.5">
@@ -873,11 +901,22 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                         return (
                           <div key={q.id || idx} className="py-3 space-y-2">
                             <div className="flex items-start justify-between gap-3">
-                              <div className="text-sm text-slate-800 leading-relaxed">
+                              <div className="min-w-0 flex-1 text-sm text-slate-800 leading-relaxed">
                                 <span className="font-semibold text-slate-900 mr-1.5 tabular-nums">
                                   Câu {idx + 1}.
                                 </span>
-                                <ChemRenderer content={q.content} className="inline" />
+                                <ChemRenderer
+                                  content={q.content}
+                                  className={hasBlockRichMedia(q.content) ? 'block mt-1' : 'inline'}
+                                />
+                                {isSafePreviewImageUrl(q.imageUrl) && (
+                                  <img
+                                    src={q.imageUrl}
+                                    alt={`Hình câu ${idx + 1}`}
+                                    className="hq-question-img mt-2"
+                                    loading="lazy"
+                                  />
+                                )}
                               </div>
                               <span
                                 className={`text-xs font-mono font-semibold shrink-0 tabular-nums ${
@@ -888,7 +927,7 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                               </span>
                             </div>
                             {Array.isArray(q.options) && q.options.length > 0 && (
-                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 pl-4 text-xs text-slate-700">
+                              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 pl-4 text-xs text-slate-700">
                                 {q.options.map((opt) => {
                                   const isRight =
                                     Boolean(opt.isCorrect) ||
@@ -901,10 +940,13 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                                   return (
                                     <div
                                       key={opt.id}
-                                      className={isRight ? 'font-semibold text-teal-800' : ''}
+                                      className={`min-w-0 ${isRight ? 'font-semibold text-teal-800' : ''}`}
                                     >
                                       <span className="mr-1">{opt.id}.</span>
-                                      <ChemRenderer content={opt.text} className="inline" />
+                                      <ChemRenderer
+                                        content={opt.text}
+                                        className={hasBlockRichMedia(opt.text) ? 'block mt-1' : 'inline'}
+                                      />
                                     </div>
                                   );
                                 })}
@@ -935,7 +977,18 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                             <span className="font-semibold text-slate-900 mr-1.5 tabular-nums">
                               Câu {idx + 1}.
                             </span>
-                            <ChemRenderer content={q.content} className="inline" />
+                            <ChemRenderer
+                              content={q.content}
+                              className={hasBlockRichMedia(q.content) ? 'block mt-1' : 'inline'}
+                            />
+                            {isSafePreviewImageUrl(q.imageUrl) && (
+                              <img
+                                src={q.imageUrl}
+                                alt={`Hình câu ${idx + 1}`}
+                                className="hq-question-img mt-2"
+                                loading="lazy"
+                              />
+                            )}
                           </div>
                           {Array.isArray(q.statements) && q.statements.length > 0 && (
                             <div className="space-y-1 pl-4 text-xs text-slate-700">
@@ -944,9 +997,12 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                                   key={st.id}
                                   className="flex items-start justify-between gap-3"
                                 >
-                                  <div>
+                                  <div className="min-w-0 flex-1">
                                     <span className="font-semibold mr-1">{st.id})</span>
-                                    <ChemRenderer content={st.statement} className="inline" />
+                                    <ChemRenderer
+                                      content={st.statement}
+                                      className={hasBlockRichMedia(st.statement) ? 'block mt-1' : 'inline'}
+                                    />
                                   </div>
                                   <span
                                     className={`font-mono font-semibold shrink-0 ${
@@ -988,11 +1044,22 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                             key={q.id || idx}
                             className="py-3 flex items-start justify-between gap-3"
                           >
-                            <div className="text-sm text-slate-800 leading-relaxed">
+                            <div className="min-w-0 flex-1 text-sm text-slate-800 leading-relaxed">
                               <span className="font-semibold text-slate-900 mr-1.5 tabular-nums">
                                 Câu {idx + 1}.
                               </span>
-                              <ChemRenderer content={q.content} className="inline" />
+                              <ChemRenderer
+                                content={q.content}
+                                className={hasBlockRichMedia(q.content) ? 'block mt-1' : 'inline'}
+                              />
+                              {isSafePreviewImageUrl(q.imageUrl) && (
+                                <img
+                                  src={q.imageUrl}
+                                  alt={`Hình câu ${idx + 1}`}
+                                  className="hq-question-img mt-2"
+                                  loading="lazy"
+                                />
+                              )}
                             </div>
                             <span
                               className={`text-xs font-mono font-semibold shrink-0 tabular-nums ${
@@ -1206,11 +1273,24 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                       {activeVariant.part1.map((item) => (
                         <div key={item.newNumber} className="py-2.5 space-y-1.5">
                           <div className="flex items-start justify-between gap-3">
-                            <div className="text-sm text-slate-800">
+                            <div className="min-w-0 flex-1 text-sm text-slate-800">
                               <span className="font-semibold text-slate-900 mr-1.5 tabular-nums">
                                 Câu {item.newNumber}.
                               </span>
-                              <ChemRenderer content={item.question.content} className="inline" />
+                              <ChemRenderer
+                                content={item.question.content}
+                                className={
+                                  hasBlockRichMedia(item.question.content) ? 'block mt-1' : 'inline'
+                                }
+                              />
+                              {isSafePreviewImageUrl(item.question.imageUrl) && (
+                                <img
+                                  src={item.question.imageUrl}
+                                  alt={`Hình câu ${item.newNumber}`}
+                                  className="hq-question-img mt-2"
+                                  loading="lazy"
+                                />
+                              )}
                             </div>
                             <span className="text-xs font-mono text-slate-500 shrink-0 tabular-nums">
                               Gốc #{item.originalPartIndex} · ĐA:{' '}
@@ -1220,14 +1300,17 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                             </span>
                           </div>
                           {item.question.options && (
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 pl-4 text-xs text-slate-700">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5 pl-4 text-xs text-slate-700">
                               {item.question.options.map((opt) => (
                                 <div
                                   key={opt.id}
-                                  className={opt.isCorrect ? 'font-semibold text-teal-800' : ''}
+                                  className={`min-w-0 ${opt.isCorrect ? 'font-semibold text-teal-800' : ''}`}
                                 >
                                   <span className="mr-1">{opt.id}.</span>
-                                  <ChemRenderer content={opt.text} className="inline" />
+                                  <ChemRenderer
+                                    content={opt.text}
+                                    className={hasBlockRichMedia(opt.text) ? 'block mt-1' : 'inline'}
+                                  />
                                 </div>
                               ))}
                             </div>
@@ -1248,11 +1331,24 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                       {activeVariant.part2.map((item) => (
                         <div key={item.newNumber} className="py-2.5 space-y-1.5">
                           <div className="flex items-start justify-between gap-3">
-                            <div className="text-sm text-slate-800">
+                            <div className="min-w-0 flex-1 text-sm text-slate-800">
                               <span className="font-semibold text-slate-900 mr-1.5 tabular-nums">
                                 Câu {item.newNumber}.
                               </span>
-                              <ChemRenderer content={item.question.content} className="inline" />
+                              <ChemRenderer
+                                content={item.question.content}
+                                className={
+                                  hasBlockRichMedia(item.question.content) ? 'block mt-1' : 'inline'
+                                }
+                              />
+                              {isSafePreviewImageUrl(item.question.imageUrl) && (
+                                <img
+                                  src={item.question.imageUrl}
+                                  alt={`Hình câu ${item.newNumber}`}
+                                  className="hq-question-img mt-2"
+                                  loading="lazy"
+                                />
+                              )}
                             </div>
                             <span className="text-xs font-mono text-slate-500 shrink-0 tabular-nums">
                               Gốc #{item.originalPartIndex}
@@ -1265,9 +1361,14 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                                   key={st.id}
                                   className="flex items-start justify-between gap-3"
                                 >
-                                  <div>
+                                  <div className="min-w-0 flex-1">
                                     <span className="font-semibold mr-1">{st.id})</span>
-                                    <ChemRenderer content={st.statement} className="inline" />
+                                    <ChemRenderer
+                                      content={st.statement}
+                                      className={
+                                        hasBlockRichMedia(st.statement) ? 'block mt-1' : 'inline'
+                                      }
+                                    />
                                   </div>
                                   <span
                                     className={`font-mono font-semibold shrink-0 ${
@@ -1298,11 +1399,24 @@ export const ShuffleExamTab: React.FC<ShuffleExamTabProps> = ({
                           key={item.newNumber}
                           className="py-2.5 flex items-start justify-between gap-3"
                         >
-                          <div className="text-sm text-slate-800">
+                          <div className="min-w-0 flex-1 text-sm text-slate-800">
                             <span className="font-semibold text-slate-900 mr-1.5 tabular-nums">
                               Câu {item.newNumber}.
                             </span>
-                            <ChemRenderer content={item.question.content} className="inline" />
+                            <ChemRenderer
+                              content={item.question.content}
+                              className={
+                                hasBlockRichMedia(item.question.content) ? 'block mt-1' : 'inline'
+                              }
+                            />
+                            {isSafePreviewImageUrl(item.question.imageUrl) && (
+                              <img
+                                src={item.question.imageUrl}
+                                alt={`Hình câu ${item.newNumber}`}
+                                className="hq-question-img mt-2"
+                                loading="lazy"
+                              />
+                            )}
                           </div>
                           <span className="text-xs font-mono text-slate-500 shrink-0 tabular-nums">
                             Gốc #{item.originalPartIndex} · ĐA:{' '}

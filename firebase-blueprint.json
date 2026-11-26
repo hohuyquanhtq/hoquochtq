@@ -8,8 +8,8 @@
         "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "email": { "type": "string", "maxLength": 200 },
         "name": { "type": "string", "minLength": 1, "maxLength": 150 },
-        "role": { "type": "string", "enum": ["teacher", "student", "admin"] },
-        "status": { "type": "string", "enum": ["pending", "active", "locked", "rejected"] },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "teacher", "student"] },
+        "status": { "type": "string", "enum": ["pending", "active", "approved", "locked", "rejected"] },
         "approval_status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
         "pilot_group": { "type": "string", "enum": ["host_school", "expanded_pilot", "standard"] },
         "department": { "type": "string", "maxLength": 150 },
@@ -22,6 +22,28 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["uid", "email", "name", "role", "status", "createdAt", "updatedAt"]
+    },
+    "TeacherRecord": {
+      "title": "TeacherRecord",
+      "description": "Synchronized teacher and Super Admin directory record aligned with HTQ Chemistry Hub.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "teacher"] },
+        "status": { "type": "string", "enum": ["pending", "active", "approved", "locked", "rejected"] },
+        "approval_status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "pilot_group": { "type": "string", "enum": ["host_school", "expanded_pilot", "standard"] },
+        "department": { "type": "string", "maxLength": 150 },
+        "phone": { "type": "string", "maxLength": 32 },
+        "school": { "type": "string", "maxLength": 200 },
+        "approvedBy": { "type": "string", "maxLength": 128 },
+        "approvedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role", "status", "createdAt", "updatedAt"]
     },
     "TeacherQuestion": {
       "title": "TeacherQuestion",
@@ -531,6 +553,10 @@
     "/users/{userId}": {
       "schema": { "$ref": "#/entities/UserProfile" },
       "description": "User profiles with admin-approved teacher status and non-escalatable role."
+    },
+    "/teachers/{teacherId}": {
+      "schema": { "$ref": "#/entities/TeacherRecord" },
+      "description": "Synchronized teacher and Super Admin directory records aligned with HTQ Chemistry Hub."
     },
     "/questions/{questionId}": {
       "schema": { "$ref": "#/entities/TeacherQuestion" },

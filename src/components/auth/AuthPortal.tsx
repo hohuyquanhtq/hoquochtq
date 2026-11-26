@@ -45,6 +45,7 @@ import {
   sendVerificationEmailToCurrentUser,
   inspectAccountSyncStatus,
   EXPECTED_PRIMARY_ADMIN_EMAIL,
+  isDefaultSuperAdminEmail,
   AccountSyncDiagnostic,
   ProfileDiagnosticError,
 } from '../../services/authService';
@@ -607,8 +608,7 @@ export const AuthPortal: React.FC<AuthPortalProps> = ({ onQuickExamCodeLookup })
   if (authState === 'missing_profile') {
     const isEmailVerified = Boolean(syncDiag?.emailVerified ?? firebaseUser?.emailVerified);
     const hasAdminAuthority = Boolean(syncDiag?.hasTrustedAdminAuthority);
-    const isExpectedPrimaryAdmin =
-      (firebaseUser?.email || '').trim().toLowerCase() === EXPECTED_PRIMARY_ADMIN_EMAIL;
+    const isExpectedPrimaryAdmin = isDefaultSuperAdminEmail(firebaseUser?.email);
 
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">

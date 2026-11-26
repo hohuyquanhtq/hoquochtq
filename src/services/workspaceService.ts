@@ -950,8 +950,8 @@ export async function fetchAllUsersForAdmin(): Promise<User[]> {
       const approval_status: TeacherApprovalStatus | undefined =
         rawApproval === 'pending' || rawApproval === 'approved' || rawApproval === 'rejected'
           ? rawApproval
-          : role === 'teacher'
-          ? status === 'active'
+          : role === 'teacher' || role === 'super_admin' || role === 'admin'
+          ? status === 'active' || status === 'approved'
             ? 'approved'
             : status === 'rejected'
             ? 'rejected'
@@ -1011,7 +1011,7 @@ export async function updateUserAccountByAdmin(
   let resolvedStatus = updates.status;
   let resolvedApproval = updates.approval_status;
   if (resolvedStatus && !resolvedApproval) {
-    if (resolvedStatus === 'active') resolvedApproval = 'approved';
+    if (resolvedStatus === 'active' || resolvedStatus === 'approved') resolvedApproval = 'approved';
     else if (resolvedStatus === 'pending') resolvedApproval = 'pending';
     else if (resolvedStatus === 'rejected') resolvedApproval = 'rejected';
   } else if (resolvedApproval && !resolvedStatus) {
@@ -1020,6 +1020,7 @@ export async function updateUserAccountByAdmin(
     else if (resolvedApproval === 'rejected') resolvedStatus = 'rejected';
   }
 
+  const isApproving = resolvedStatus === 'active' || resolvedStatus === 'approved';
   const payload = stripUndefinedDeep({
     ...(resolvedStatus ? { status: resolvedStatus } : {}),
     ...(resolvedApproval ? { approval_status: resolvedApproval } : {}),
@@ -1032,12 +1033,81 @@ export async function updateUserAccountByAdmin(
       : {}),
     ...(updates.className !== undefined ? { className: updates.className.trim().slice(0, 80) } : {}),
     ...(updates.phone !== undefined ? { phone: updates.phone.trim().slice(0, 32) } : {}),
-    ...(resolvedStatus === 'active' ? { approvedBy: adminUid, approvedAt: nowIso } : {}),
+    ...(isApproving ? { approvedBy: adminUid, approvedAt: nowIso } : {}),
     updatedAt: nowIso,
     serverUpdatedAt: serverTimestamp(),
   });
 
   await updateDoc(doc(db, 'users', targetUid), payload);
+
+  // Best-effort synchronization with `teachers/{targetUid}` so HTQ Chemistry Hub & HQTest stay aligned
+  try {
+    const teacherRef = doc(db, 'teachers', targetUid);
+    const [teacherSnap, userSnap] = await Promise.all([
+      getDoc(teacherRef).catch(() => null),
+      getDoc(doc(db, 'users', targetUid)).catch(() => null),
+    ]);
+    const userData = userSnap?.exists() ? (userSnap.data() as Record<string, unknown>) : null;
+    const effectiveRole = (updates.role || userData?.role) as UserRole | undefined;
+    if (
+      effectiveRole === 'teacher' ||
+      effectiveRole === 'admin' ||
+      effectiveRole === 'super_admin'
+    ) {
+      const teacherRole = effectiveRole;
+      if (teacherSnap?.exists()) {
+        await updateDoc(
+          teacherRef,
+          stripUndefinedDeep({
+            ...(resolvedStatus ? { status: resolvedStatus } : {}),
+            ...(resolvedApproval ? { approval_status: resolvedApproval } : {}),
+            ...(updates.pilot_group ? { pilot_group: updates.pilot_group } : {}),
+            role: teacherRole,
+            ...(updates.name !== undefined ? { name: updates.name.trim().slice(0, 150) } : {}),
+            ...(updates.school !== undefined ? { school: updates.school.trim().slice(0, 200) } : {}),
+            ...(updates.department !== undefined
+              ? { department: updates.department.trim().slice(0, 150) }
+              : {}),
+            ...(updates.phone !== undefined ? { phone: updates.phone.trim().slice(0, 32) } : {}),
+            ...(isApproving ? { approvedBy: adminUid, approvedAt: nowIso } : {}),
+            updatedAt: nowIso,
+            serverUpdatedAt: serverTimestamp(),
+          })
+        );
+      } else if (userData && typeof userData.email === 'string' && userData.email.trim()) {
+        await setDoc(
+          teacherRef,
+          stripUndefinedDeep({
+            uid: targetUid,
+            email: userData.email.trim().toLowerCase(),
+            name: String(updates.name ?? userData.name ?? '').trim().slice(0, 150) || undefined,
+            role: teacherRole,
+            status: (resolvedStatus || (userData.status as AccountStatus) || 'active'),
+            ...(resolvedApproval ? { approval_status: resolvedApproval } : {}),
+            ...(updates.pilot_group || userData.pilot_group
+              ? { pilot_group: updates.pilot_group || userData.pilot_group }
+              : {}),
+            ...(updates.school ?? userData.school
+              ? { school: String(updates.school ?? userData.school).trim().slice(0, 200) }
+              : {}),
+            ...(updates.department ?? userData.department
+              ? { department: String(updates.department ?? userData.department).trim().slice(0, 150) }
+              : {}),
+            ...(updates.phone ?? userData.phone
+              ? { phone: String(updates.phone ?? userData.phone).trim().slice(0, 32) }
+              : {}),
+            ...(isApproving ? { approvedBy: adminUid, approvedAt: nowIso } : {}),
+            createdAt: String(userData.createdAt || nowIso),
+            updatedAt: nowIso,
+            serverCreatedAt: serverTimestamp(),
+            serverUpdatedAt: serverTimestamp(),
+          })
+        );
+      }
+    }
+  } catch (err) {
+    console.warn('[HQTest Workspace] Could not mirror user update to teachers/{uid}:', err);
+  }
 }
 
 // ============================================================================

@@ -445,9 +445,19 @@ export const ExamTaker: React.FC<ExamTakerProps> = ({
   const currentPartType = currentSecMeta?.partType || currentQuestion.type;
   const currentSectionLabel = currentSecMeta?.title || SHORT_PART_BADGES[currentPartType];
 
-  // Auto-fit Part I options grid: 1 column if any option is long so text stays spacious and easy to read
+  // Auto-fit Part I options grid: 1 column if any option has a table or long visible text (ignoring base64 img payloads)
   const hasLongOption = Boolean(
-    currentQuestion.options?.some((opt) => (opt.text || '').replace(/\$[^$]*\$/g, '123456').length > 68)
+    currentQuestion.options?.some((opt) => {
+      const raw = opt.text || '';
+      if (/<table\b/i.test(raw) || /^\s*\|.*\|\s*\n\s*\|[\s:|-]+\|/m.test(raw)) return true;
+      const visibleLen = raw
+        .replace(/<img\b[^>]*\/?>/gi, ' [img] ')
+        .replace(/!\[[^\]]*\]\([^)]+\)/g, ' [img] ')
+        .replace(/\$[^$]*\$/g, '123456')
+        .replace(/<[^>]+>/g, '')
+        .trim().length;
+      return visibleLen > 68;
+    })
   );
 
   return (

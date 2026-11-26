@@ -101,10 +101,15 @@ import { ExamJoinLanding, ExamLandingStatus } from './components/student/ExamJoi
 // Admin Components
 import { AdminDashboard } from './components/admin/AdminDashboard';
 import { CurriculumCatalogManager } from './components/admin/CurriculumCatalogManager';
+import {
+  isSuperAdminRole,
+  isSuperAdminUser,
+  isTeacherOrAdminRole,
+} from './constants/superAdmin';
 
 function getDefaultTabForRole(role: UserRole): string {
   if (role === 'student') return 'student_home';
-  if (role === 'admin') return 'admin_dashboard';
+  if (isSuperAdminRole(role)) return 'admin_dashboard';
   return 'dashboard';
 }
 
@@ -232,7 +237,7 @@ export default function App() {
 
     setIsLoadingWorkspace(true);
     try {
-      if (user.role === 'teacher' || user.role === 'admin') {
+      if (isTeacherOrAdminRole(user.role)) {
         const ws = await fetchTeacherWorkspaceFromFirestore(uid);
         setQuestions(ws.questions);
         setFolders(ws.folders);
@@ -320,7 +325,7 @@ export default function App() {
     if (
       authState !== 'authenticated' ||
       !activeUid ||
-      (userProfile?.role !== 'teacher' && userProfile?.role !== 'admin')
+      !isTeacherOrAdminRole(userProfile?.role)
     ) {
       return;
     }
@@ -1253,7 +1258,7 @@ export default function App() {
 
   const isWorkspaceShell =
     isAuthenticatedSession &&
-    (userProfile?.role === 'teacher' || userProfile?.role === 'admin') &&
+    isTeacherOrAdminRole(userProfile?.role) &&
     !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab);
 
   const renderWorkspaceSubNav = () => {
@@ -1386,7 +1391,7 @@ export default function App() {
                 clearExamUrlParam();
                 setGuestExamMode(false);
                 setActiveTab(
-                  userProfile.role === 'teacher' || userProfile.role === 'admin'
+                  isTeacherOrAdminRole(userProfile.role)
                     ? 'exam_manager'
                     : 'student_home'
                 );
@@ -1425,7 +1430,7 @@ export default function App() {
                 clearExamUrlParam();
                 setGuestExamMode(false);
                 setActiveTab(
-                  userProfile.role === 'teacher' || userProfile.role === 'admin'
+                  isTeacherOrAdminRole(userProfile.role)
                     ? 'exam_manager'
                     : 'student_home'
                 );
@@ -1449,13 +1454,21 @@ export default function App() {
 
       {/* --- AUTHENTICATED TEACHER & ADMIN WORKSPACE VIEWS --- */}
       {isAuthenticatedSession &&
-        (userProfile?.role === 'teacher' || userProfile?.role === 'admin') &&
+        userProfile &&
+        isTeacherOrAdminRole(userProfile.role) &&
         !['exam_landing', 'take_exam', 'review_submission'].includes(activeTab) && (
-          <ProtectedRoute allowedRoles={['teacher', 'admin']} onBackHome={resetToRoleHome}>
+          <ProtectedRoute
+            allowedRoles={['teacher', 'admin', 'super_admin']}
+            onBackHome={resetToRoleHome}
+          >
             {renderWorkspaceSubNav()}
 
-            {userProfile.role === 'admin' && (activeTab === 'admin_dashboard' || activeTab === 'admin_users' || activeTab === 'admin_curriculum') && (
-              isAdminClaimVerified ? (
+            {isSuperAdminUser(userProfile) &&
+              (activeTab === 'admin_dashboard' ||
+                activeTab === 'admin_users' ||
+                activeTab === 'admin_curriculum' ||
+                activeTab === 'city_admin_panel') &&
+              (isAdminClaimVerified ? (
                 activeTab === 'admin_curriculum' ? (
                   <CurriculumCatalogManager
                     currentUser={userProfile}
@@ -1468,29 +1481,95 @@ export default function App() {
                     exams={exams}
                     submissions={submissions}
                     folders={folders}
-                    sectionFocus={activeTab === 'admin_users' ? 'users' : 'overview'}
+                    sectionFocus={
+                      activeTab === 'city_admin_panel'
+                        ? 'city_governance'
+                        : activeTab === 'admin_users'
+                        ? 'users'
+                        : 'overview'
+                    }
                     onNavigate={(tab) => setActiveTab(tab)}
                     onDataResetOrRestored={reloadDataFromStorage}
+                    onExamCloned={(clonedExam) => {
+                      setExams((prev) => {
+                        const updated = [
+                          clonedExam,
+                          ...prev.filter((e) => e.id !== clonedExam.id),
+                        ];
+                        if (activeUid) {
+                          StorageService.saveExams(updated, activeUid);
+                        }
+                        return updated;
+                      });
+                    }}
+                    onQuestionCloned={(clonedQuestion) => {
+                      if (activeUid) {
+                        StorageService.addQuestion(clonedQuestion, activeUid);
+                      }
+                      setQuestions((prev) => [
+                        clonedQuestion,
+                        ...prev.filter((item) => item.id !== clonedQuestion.id),
+                      ]);
+                    }}
+                    onExamShareStatusChanged={(examId, nextStatus, reviewNote) => {
+                      setExams((prev) => {
+                        const updated = prev.map((ex) =>
+                          ex.id === examId
+                            ? {
+                                ...ex,
+                                share_status: nextStatus,
+                                ...(nextStatus === 'city_public'
+                                  ? { cityApprovedAt: new Date().toISOString() }
+                                  : {}),
+                                ...(reviewNote ? { cityReviewNote: reviewNote } : {}),
+                                updatedAt: new Date().toISOString(),
+                              }
+                            : ex
+                        );
+                        if (activeUid) {
+                          StorageService.saveExams(updated, activeUid);
+                        }
+                        return updated;
+                      });
+                    }}
+                    onQuestionCityStatusChanged={(questionIds, nextStatus) => {
+                      const idSet = new Set(questionIds);
+                      setQuestions((prev) => {
+                        let changed = false;
+                        const updated = prev.map((item) => {
+                          if (!idSet.has(item.id)) return item;
+                          changed = true;
+                          return {
+                            ...item,
+                            cityStatus: nextStatus,
+                            updatedAt: new Date().toISOString(),
+                          };
+                        });
+                        if (changed && activeUid) {
+                          StorageService.saveQuestions(updated, activeUid);
+                        }
+                        return changed ? updated : prev;
+                      });
+                    }}
                   />
                 )
               ) : (
                 <div className="max-w-lg mx-auto my-10 bg-white border border-rose-200 rounded-3xl p-7 shadow-sm text-center space-y-4">
                   <h2 className="text-base font-extrabold text-slate-900">
-                    Chưa xác thực quyền Quản trị viên (token.claims.admin != true)
+                    Chưa xác thực quyền Super Admin
                   </h2>
                   <p className="text-xs text-slate-600 leading-relaxed">
-                    Phiên Firebase Authentication của bạn được giữ nguyên, nhưng ID Token hiện tại chưa có Custom Claim <code className="font-mono">admin: true</code>. Vui lòng kiểm tra cấu hình <code className="font-mono">INITIAL_ADMIN_UID</code>, <code className="font-mono">FIREBASE_SERVICE_ACCOUNT</code> và document <code className="font-mono">admins/{activeUid}</code> (<code className="font-mono">isActive: true</code>).
+                    Phiên Firebase Authentication của bạn được giữ nguyên, nhưng tài khoản chưa được xác nhận quyền Super Admin hợp lệ. Vui lòng nhấn làm mới phiên để đồng bộ lại quyền.
                   </p>
                   <button
                     type="button"
                     onClick={() => void refreshProfile()}
                     className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold"
                   >
-                    Làm mới ID Token &amp; Kiểm tra lại
+                    Làm mới phiên &amp; Kiểm tra lại
                   </button>
                 </div>
-              )
-            )}
+              ))}
 
             {activeTab === 'dashboard' && (
               <TeacherDashboard
@@ -1629,7 +1708,7 @@ export default function App() {
                 submissions={submissions}
                 currentUserId={activeUid}
                 currentUser={userProfile}
-                userRole={userProfile.role === 'admin' ? 'admin' : 'teacher'}
+                userRole={isSuperAdminUser(userProfile) ? 'admin' : 'teacher'}
                 mode={activeTab === 'online_exams' ? 'online' : 'all'}
                 activeFolderId={currentFolderId}
                 onActiveFolderChange={setCurrentFolderId}
@@ -1687,7 +1766,7 @@ export default function App() {
                   exams={exams}
                   submissions={examSubs}
                   currentUserId={activeUid}
-                  isAdmin={userProfile.role === 'admin'}
+                  isAdmin={isSuperAdminUser(userProfile)}
                   onSelectExam={(examId) => setSelectedExamIdForResults(examId)}
                   onInspectSubmission={(sub) => {
                     setReviewingSubmissionForTeacher(sub);
@@ -1738,7 +1817,7 @@ export default function App() {
                   submission={targetSub}
                   exam={matchedExam}
                   currentUserId={activeUid}
-                  isAdmin={userProfile.role === 'admin'}
+                  isAdmin={isSuperAdminUser(userProfile)}
                   onBackToStudentList={() => {
                     setReviewingSubmissionForTeacher(null);
                     setActiveTab('exam_results');
@@ -1760,7 +1839,7 @@ export default function App() {
                 onProfileUpdated={(updated) => setLocalUpdatedProfile(updated)}
                 onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
                 onOpenAdminLegacy={
-                  userProfile.role === 'admin' ? () => setActiveTab('admin_dashboard') : undefined
+                  isSuperAdminUser(userProfile) ? () => setActiveTab('admin_dashboard') : undefined
                 }
               />
             )}
@@ -1770,6 +1849,7 @@ export default function App() {
               'admin_dashboard',
               'admin_users',
               'admin_curriculum',
+              'city_admin_panel',
               'upload_exam',
               'shuffle_exam',
               'question_bank',
@@ -1784,13 +1864,14 @@ export default function App() {
               'user_guide',
               'system_settings',
             ].includes(activeTab) && (
-              userProfile.role === 'admin' ? (
+              isSuperAdminUser(userProfile) ? (
                 <AdminDashboard
                   currentUser={userProfile}
                   questions={questions}
                   exams={exams}
                   submissions={submissions}
                   folders={folders}
+                  onNavigate={(tab) => setActiveTab(tab)}
                   onDataResetOrRestored={reloadDataFromStorage}
                 />
               ) : (

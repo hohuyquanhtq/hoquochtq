@@ -3,6 +3,7 @@ import {
   BorderStyle,
   Document,
   Footer,
+  ImageRun,
   Packer,
   PageNumber,
   Paragraph,
@@ -297,6 +298,20 @@ function normalizeRichTextForWord(raw: string): string {
     .replace(/\\rightleftharpoons|\\leftrightarrow|\\longleftrightarrow/g, ' ⇌ ')
     .replace(/\\Rightarrow/g, ' ⇒ ')
     .replace(/\\Leftrightarrow/g, ' ⇔ ')
+    .replace(/\\int\\limits|\\int\b/g, '∫')
+    .replace(/\\iint\\limits|\\iint\b/g, '∬')
+    .replace(/\\iiint\\limits|\\iiint\b/g, '∭')
+    .replace(/\\oint\\limits|\\oint\b/g, '∮')
+    .replace(/\\sum\\limits|\\sum\b/g, '∑')
+    .replace(/\\prod\\limits|\\prod\b/g, '∏')
+    .replace(/\\infty\b/g, '∞')
+    .replace(/\\in\b/g, '∈')
+    .replace(/\\notin\b/g, '∉')
+    .replace(/\\forall\b/g, '∀')
+    .replace(/\\exists\b/g, '∃')
+    .replace(/\\begin\{(?:pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|matrix|cases|aligned)\}/g, '')
+    .replace(/\\end\{(?:pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|matrix|cases|aligned)\}/g, '')
+    .replace(/\\\\/g, '; ')
     .replace(/\\uparrow/g, '↑')
     .replace(/\\downarrow/g, '↓')
     .replace(/\\times/g, '×')
@@ -629,11 +644,191 @@ export function renderFormulaTextRuns(
 }
 
 /**
- * Computes visible printed text length (excluding LaTeX braces, HTML tags, and markdown markers)
- * so Part I option column layout (4-col / 2x2 / vertical) sizes accurately for chemical formulas.
+ * Decodes a data:image/...;base64,... URL into binary bytes, image type, and intrinsic pixel dimensions
+ * so Word exports embed crisp aspect-ratio-accurate ImageRuns in stems, options, and tables.
+ */
+function decodeDataImageForWord(
+  dataUrl: string,
+  maxWidthPx = 420,
+  maxHeightPx = 280
+): ImageRun | null {
+  const m = (dataUrl || '')
+    .trim()
+    .match(/^data:image\/(png|jpeg|jpg|gif|bmp);base64,([A-Za-z0-9+/=\s]+)$/i);
+  if (!m) return null;
+
+  const rawFmt = m[1].toLowerCase();
+  const imgType: 'png' | 'jpg' | 'gif' | 'bmp' =
+    rawFmt === 'jpeg' || rawFmt === 'jpg'
+      ? 'jpg'
+      : rawFmt === 'gif'
+      ? 'gif'
+      : rawFmt === 'bmp'
+      ? 'bmp'
+      : 'png';
+
+  try {
+    const cleanB64 = m[2].replace(/\s+/g, '');
+    const binaryStr =
+      typeof atob === 'function'
+        ? atob(cleanB64)
+        : Buffer.from(cleanB64, 'base64').toString('binary');
+    const bytes = new Uint8Array(binaryStr.length);
+    for (let i = 0; i < binaryStr.length; i++) {
+      bytes[i] = binaryStr.charCodeAt(i);
+    }
+
+    let origW = 320;
+    let origH = 180;
+
+    // Parse PNG IHDR width/height
+    if (imgType === 'png' && bytes.length >= 24 && bytes[0] === 0x89 && bytes[1] === 0x50) {
+      origW = (bytes[16] << 24) | (bytes[17] << 16) | (bytes[18] << 8) | bytes[19];
+      origH = (bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23];
+    } else if (imgType === 'gif' && bytes.length >= 10) {
+      origW = bytes[6] | (bytes[7] << 8);
+      origH = bytes[8] | (bytes[9] << 8);
+    } else if (imgType === 'jpg' && bytes.length > 4) {
+      let offset = 2;
+      while (offset + 9 < bytes.length) {
+        if (bytes[offset] !== 0xff) break;
+        const marker = bytes[offset + 1];
+        const segLen = (bytes[offset + 2] << 8) | bytes[offset + 3];
+        if (marker === 0xc0 || marker === 0xc1 || marker === 0xc2) {
+          origH = (bytes[offset + 5] << 8) | bytes[offset + 6];
+          origW = (bytes[offset + 7] << 8) | bytes[offset + 8];
+          break;
+        }
+        if (segLen < 2) break;
+        offset += 2 + segLen;
+      }
+    }
+
+    if (!Number.isFinite(origW) || origW <= 0) origW = 320;
+    if (!Number.isFinite(origH) || origH <= 0) origH = 180;
+
+    const scale = Math.min(1, maxWidthPx / origW, maxHeightPx / origH);
+    const width = Math.max(36, Math.round(origW * scale));
+    const height = Math.max(24, Math.round(origH * scale));
+
+    return new ImageRun({
+      data: bytes,
+      type: imgType,
+      transformation: { width, height },
+    });
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Renders mixed inline text + base64 <img> / ![alt](data:image/...) into native Word TextRun/ImageRun[]
+ * preserving exact placement of images inside question stems, options A/B/C/D, and table cells.
+ */
+function renderRichInlineRuns(
+  rawText: string,
+  base: InlineStyleFlags = {},
+  imgMaxWidth = 380,
+  imgMaxHeight = 240
+): (TextRun | ImageRun)[] {
+  if (!rawText) return [];
+  const runs: (TextRun | ImageRun)[] = [];
+  const imgRegex = /<img\b[^>]*\bsrc=["'](data:image\/[^"']+)["'][^>]*\/?>|!\[[^\]]*\]\((data:image\/[^)]+)\)/gi;
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = imgRegex.exec(rawText)) !== null) {
+    if (match.index > lastIdx) {
+      const textChunk = rawText.slice(lastIdx, match.index);
+      if (textChunk.trim()) {
+        runs.push(...renderFormulaTextRuns(textChunk, base));
+      }
+    }
+    const dataUrl = match[1] || match[2] || '';
+    const imgRun = decodeDataImageForWord(dataUrl, imgMaxWidth, imgMaxHeight);
+    if (imgRun) {
+      runs.push(imgRun);
+    }
+    lastIdx = match.index + match[0].length;
+  }
+
+  if (lastIdx < rawText.length) {
+    const tail = rawText.slice(lastIdx);
+    if (tail.trim() || runs.length === 0) {
+      runs.push(...renderFormulaTextRuns(tail, base));
+    }
+  }
+
+  return runs;
+}
+
+/**
+ * Builds a native Word Table from an HTML <table>...</table> string (preserving colspan/rowspan, formulas & images)
+ */
+function buildWordTableFromHtml(tableHtml: string): Table | null {
+  const rowMatches = [...tableHtml.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/gi)];
+  if (rowMatches.length === 0) return null;
+
+  const wordRows: TableRow[] = [];
+  rowMatches.forEach((rm, rIdx) => {
+    const cellMatches = [...rm[1].matchAll(/<(t[dh])\b([^>]*)>([\s\S]*?)<\/\1>/gi)];
+    if (cellMatches.length === 0) return;
+
+    const isHeaderRow = rIdx === 0 && cellMatches.every((cm) => cm[1].toLowerCase() === 'th');
+    const cells = cellMatches.map((cm) => {
+      const tag = cm[1].toLowerCase();
+      const attrs = cm[2] || '';
+      const inner = cm[3] || '';
+      const colSpanM = attrs.match(/colspan=["']?(\d+)["']?/i);
+      const colSpan = colSpanM ? Math.max(1, parseInt(colSpanM[1], 10)) : 1;
+
+      return new TableCell({
+        columnSpan: colSpan > 1 ? colSpan : undefined,
+        verticalAlign: VerticalAlign.CENTER,
+        shading:
+          tag === 'th' || isHeaderRow
+            ? { type: ShadingType.SOLID, color: 'F1F5F9', fill: 'F1F5F9' }
+            : undefined,
+        margins: { top: 60, bottom: 60, left: 80, right: 80 },
+        children: [
+          new Paragraph({
+            spacing: { after: 20, line: 250 },
+            children: renderRichInlineRuns(
+              inner.replace(/<br\s*\/?>/gi, ' '),
+              { size: FONT_SIZE_11PT, bold: tag === 'th' || isHeaderRow },
+              180,
+              120
+            ),
+          }),
+        ],
+      });
+    });
+
+    wordRows.push(
+      new TableRow({
+        tableHeader: isHeaderRow,
+        children: cells,
+      })
+    );
+  });
+
+  if (wordRows.length === 0) return null;
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: TABLE_BORDERS_ALL,
+    rows: wordRows,
+  });
+}
+
+/**
+ * Computes visible printed text length (excluding LaTeX braces, HTML tags, base64 images, and markdown markers)
+ * so Part I option column layout (4-col / 2x2 / vertical) sizes accurately for chemical formulas and images.
  */
 function getVisibleFormulaLength(text: string): number {
-  const normalized = normalizeRichTextForWord(text || '');
+  const withoutImgs = (text || '')
+    .replace(/<img\b[^>]*\/?>/gi, '')
+    .replace(/!\[[^\]]*\]\([^)]+\)/gi, '');
+  const normalized = normalizeRichTextForWord(withoutImgs);
   const specs: TextRunSpec[] = [];
   parseFormulaToRunSpecs(
     normalized,
@@ -647,6 +842,10 @@ function getVisibleFormulaLength(text: string): number {
     specs
   );
   return specs.reduce((acc, s) => acc + s.text.length, 0);
+}
+
+function hasEmbeddedImageOrTable(text: string): boolean {
+  return /<img\b|!\[[^\]]*\]\(data:image\/|<table\b/i.test(text || '');
 }
 
 /**
@@ -896,13 +1095,154 @@ function buildExamHeaderBlock(meta: ExamHeaderMeta, variantCode: string): (Parag
   ];
 }
 
-function buildQuestionParagraphs(label: string, rawContent: string): Paragraph[] {
-  const cleaned = stripLeadingQuestionPrefix(rawContent || '')
-    .replace(/\r\n/g, '\n')
-    .replace(/<br\s*\/?>/gi, '\n');
-  const lines = cleaned.split('\n').filter((l, idx) => idx === 0 || l.trim().length > 0);
-  if (lines.length === 0) {
-    return [
+/**
+ * Converts legacy Markdown pipe tables into clean HTML <table> blocks so both
+ * HTML tables (from Word import) and Markdown tables (from existing question bank)
+ * export as native Word Tables.
+ */
+function convertMarkdownTablesToHtml(text: string): string {
+  const lines = text.split('\n');
+  const result: string[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i].trim();
+    const nextLine = i + 1 < lines.length ? lines[i + 1].trim() : '';
+    if (
+      line.startsWith('|') &&
+      line.endsWith('|') &&
+      /^\|[\s:|-]+\|$/.test(nextLine) &&
+      nextLine.includes('-')
+    ) {
+      const parseRow = (rowStr: string) =>
+        rowStr
+          .replace(/^\|/, '')
+          .replace(/\|$/, '')
+          .split('|')
+          .map((c) => c.trim());
+
+      const headers = parseRow(line);
+      const bodyRows: string[][] = [];
+      let j = i + 2;
+      while (j < lines.length) {
+        const cur = lines[j].trim();
+        if (cur.startsWith('|') && cur.endsWith('|')) {
+          bodyRows.push(parseRow(cur));
+          j++;
+        } else {
+          break;
+        }
+      }
+
+      const thead = `<thead><tr>${headers.map((h) => `<th>${h}</th>`).join('')}</tr></thead>`;
+      const tbody =
+        bodyRows.length > 0
+          ? `<tbody>${bodyRows
+              .map((r) => `<tr>${r.map((c) => `<td>${c}</td>`).join('')}</tr>`)
+              .join('')}</tbody>`
+          : '';
+      result.push(`<table>${thead}${tbody}</table>`);
+      i = j;
+      continue;
+    }
+
+    result.push(lines[i]);
+    i++;
+  }
+
+  return result.join('\n');
+}
+
+function buildQuestionParagraphs(
+  label: string,
+  rawContent: string,
+  standaloneImageUrl?: string
+): (Paragraph | Table)[] {
+  const cleaned = convertMarkdownTablesToHtml(
+    stripLeadingQuestionPrefix(rawContent || '').replace(/\r\n/g, '\n')
+  );
+
+  // Split around HTML <table>...</table> blocks so tables export as real Word Tables in exact position
+  const blocks: { kind: 'text' | 'table'; value: string }[] = [];
+  const tableRegex = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
+  let lastIdx = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tableRegex.exec(cleaned)) !== null) {
+    if (match.index > lastIdx) {
+      blocks.push({ kind: 'text', value: cleaned.slice(lastIdx, match.index) });
+    }
+    blocks.push({ kind: 'table', value: match[0] });
+    lastIdx = match.index + match[0].length;
+  }
+  if (lastIdx < cleaned.length) {
+    blocks.push({ kind: 'text', value: cleaned.slice(lastIdx) });
+  }
+
+  const out: (Paragraph | Table)[] = [];
+  let labelEmitted = false;
+
+  for (const blk of blocks) {
+    if (blk.kind === 'table') {
+      if (!labelEmitted) {
+        out.push(
+          new Paragraph({
+            spacing: { before: 120, after: 40, line: 276 },
+            children: [
+              new TextRun({
+                text: `${label} `,
+                font: FONT_FAMILY,
+                size: FONT_SIZE_12PT,
+                bold: true,
+              }),
+            ],
+          })
+        );
+        labelEmitted = true;
+      }
+      const wordTbl = buildWordTableFromHtml(blk.value);
+      if (wordTbl) out.push(wordTbl);
+      continue;
+    }
+
+    const lines = blk.value
+      .replace(/<br\s*\/?>/gi, '\n')
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+
+    for (const line of lines) {
+      if (!labelEmitted) {
+        out.push(
+          new Paragraph({
+            spacing: { before: 120, after: 50, line: 276 },
+            alignment: AlignmentType.JUSTIFIED,
+            children: [
+              new TextRun({
+                text: `${label} `,
+                font: FONT_FAMILY,
+                size: FONT_SIZE_12PT,
+                bold: true,
+              }),
+              ...renderRichInlineRuns(line),
+            ],
+          })
+        );
+        labelEmitted = true;
+      } else {
+        out.push(
+          new Paragraph({
+            spacing: { before: 20, after: 50, line: 276 },
+            indent: { left: convertMillimetersToTwip(5) },
+            alignment: AlignmentType.JUSTIFIED,
+            children: renderRichInlineRuns(line),
+          })
+        );
+      }
+    }
+  }
+
+  if (!labelEmitted) {
+    out.push(
       new Paragraph({
         spacing: { before: 120, after: 60, line: 276 },
         children: [
@@ -913,33 +1253,24 @@ function buildQuestionParagraphs(label: string, rawContent: string): Paragraph[]
             bold: true,
           }),
         ],
-      }),
-    ];
+      })
+    );
   }
 
-  return lines.map((line, idx) => {
-    if (idx === 0) {
-      return new Paragraph({
-        spacing: { before: 120, after: 50, line: 276 },
-        alignment: AlignmentType.JUSTIFIED,
-        children: [
-          new TextRun({
-            text: `${label} `,
-            font: FONT_FAMILY,
-            size: FONT_SIZE_12PT,
-            bold: true,
-          }),
-          ...renderFormulaTextRuns(line),
-        ],
-      });
+  if (standaloneImageUrl) {
+    const imgRun = decodeDataImageForWord(standaloneImageUrl, 420, 280);
+    if (imgRun) {
+      out.push(
+        new Paragraph({
+          alignment: AlignmentType.CENTER,
+          spacing: { before: 60, after: 80 },
+          children: [imgRun],
+        })
+      );
     }
-    return new Paragraph({
-      spacing: { before: 20, after: 50, line: 276 },
-      indent: { left: convertMillimetersToTwip(5) },
-      alignment: AlignmentType.JUSTIFIED,
-      children: renderFormulaTextRuns(line),
-    });
-  });
+  }
+
+  return out;
 }
 
 function buildPart1OptionsElements(
@@ -955,14 +1286,18 @@ function buildPart1OptionsElements(
       id: opt.id,
       raw,
       visibleLength: getVisibleFormulaLength(raw),
+      hasRichMedia: hasEmbeddedImageOrTable(raw),
+      hasTable: /<table\b/i.test(raw),
     };
   });
 
   const maxLen = Math.max(...cleanedOpts.map((o) => o.visibleLength));
   const hasMultiline = cleanedOpts.some((o) => o.raw.includes('\n'));
+  const anyRichMedia = cleanedOpts.some((o) => o.hasRichMedia);
+  const anyTable = cleanedOpts.some((o) => o.hasTable);
 
-  // 4-column single row for short options (<= 16 visible chars)
-  if (!hasMultiline && cleanedOpts.length === 4 && maxLen <= 16) {
+  // 4-column single row for short plain/formula options (<= 16 visible chars, no images/tables)
+  if (!hasMultiline && !anyRichMedia && cleanedOpts.length === 4 && maxLen <= 16) {
     return [
       new Table({
         width: { size: 100, type: WidthType.PERCENTAGE },
@@ -984,7 +1319,7 @@ function buildPart1OptionsElements(
                           size: FONT_SIZE_12PT,
                           bold: true,
                         }),
-                        ...renderFormulaTextRuns(opt.raw),
+                        ...renderRichInlineRuns(opt.raw, {}, 140, 100),
                       ],
                     }),
                   ],
@@ -996,8 +1331,8 @@ function buildPart1OptionsElements(
     ];
   }
 
-  // 2x2 grid for medium options (<= 38 visible chars)
-  if (!hasMultiline && cleanedOpts.length === 4 && maxLen <= 38) {
+  // 2x2 grid for medium options OR options with compact images (no nested tables)
+  if (!hasMultiline && !anyTable && cleanedOpts.length === 4 && maxLen <= 38) {
     const buildRow = (pair: typeof cleanedOpts) =>
       new TableRow({
         children: pair.map(
@@ -1015,7 +1350,7 @@ function buildPart1OptionsElements(
                       size: FONT_SIZE_12PT,
                       bold: true,
                     }),
-                    ...renderFormulaTextRuns(opt.raw),
+                    ...renderRichInlineRuns(opt.raw, {}, 210, 150),
                   ],
                 }),
               ],
@@ -1032,24 +1367,31 @@ function buildPart1OptionsElements(
     ];
   }
 
-  // Vertical 1-per-line layout for longer options
-  return cleanedOpts.map(
-    (opt) =>
-      new Paragraph({
-        spacing: { before: 20, after: 40, line: 276 },
-        indent: { left: convertMillimetersToTwip(5) },
-        alignment: AlignmentType.JUSTIFIED,
-        children: [
-          new TextRun({
-            text: `${opt.id}. `,
-            font: FONT_FAMILY,
-            size: FONT_SIZE_12PT,
-            bold: true,
-          }),
-          ...renderFormulaTextRuns(opt.raw.replace(/\n/g, ' ')),
-        ],
-      })
-  );
+  // Vertical 1-per-line layout for longer options or options with tables/large images
+  const out: (Paragraph | Table)[] = [];
+  for (const opt of cleanedOpts) {
+    if (opt.hasTable) {
+      out.push(...buildQuestionParagraphs(`${opt.id}.`, opt.raw));
+    } else {
+      out.push(
+        new Paragraph({
+          spacing: { before: 20, after: 40, line: 276 },
+          indent: { left: convertMillimetersToTwip(5) },
+          alignment: AlignmentType.JUSTIFIED,
+          children: [
+            new TextRun({
+              text: `${opt.id}. `,
+              font: FONT_FAMILY,
+              size: FONT_SIZE_12PT,
+              bold: true,
+            }),
+            ...renderRichInlineRuns(opt.raw.replace(/\n/g, ' '), {}, 320, 200),
+          ],
+        })
+      );
+    }
+  }
+  return out;
 }
 
 /**
@@ -1086,7 +1428,13 @@ export function buildVariantExamDocument(
     );
 
     for (const item of variant.part1) {
-      children.push(...buildQuestionParagraphs(`Câu ${item.newNumber}.`, item.question.content));
+      children.push(
+        ...buildQuestionParagraphs(
+          `Câu ${item.newNumber}.`,
+          item.question.content,
+          item.question.imageUrl
+        )
+      );
       if (Array.isArray(item.question.options) && item.question.options.length > 0) {
         children.push(...buildPart1OptionsElements(item.question.options));
       }
@@ -1116,28 +1464,38 @@ export function buildVariantExamDocument(
     );
 
     for (const item of variant.part2) {
-      children.push(...buildQuestionParagraphs(`Câu ${item.newNumber}.`, item.question.content));
+      children.push(
+        ...buildQuestionParagraphs(
+          `Câu ${item.newNumber}.`,
+          item.question.content,
+          item.question.imageUrl
+        )
+      );
       const statements = Array.isArray(item.question.statements) ? item.question.statements : [];
       for (const st of statements) {
         const cleanSt = stripLeadingStatementPrefix(st.statement || '')
           .replace(/<br\s*\/?>/gi, ' ')
           .replace(/\r\n|\n/g, ' ');
-        children.push(
-          new Paragraph({
-            spacing: { before: 30, after: 40, line: 276 },
-            indent: { left: convertMillimetersToTwip(6) },
-            alignment: AlignmentType.JUSTIFIED,
-            children: [
-              new TextRun({
-                text: `${st.id}) `,
-                font: FONT_FAMILY,
-                size: FONT_SIZE_12PT,
-                bold: true,
-              }),
-              ...renderFormulaTextRuns(cleanSt),
-            ],
-          })
-        );
+        if (/<table\b/i.test(cleanSt)) {
+          children.push(...buildQuestionParagraphs(`${st.id})`, cleanSt));
+        } else {
+          children.push(
+            new Paragraph({
+              spacing: { before: 30, after: 40, line: 276 },
+              indent: { left: convertMillimetersToTwip(6) },
+              alignment: AlignmentType.JUSTIFIED,
+              children: [
+                new TextRun({
+                  text: `${st.id}) `,
+                  font: FONT_FAMILY,
+                  size: FONT_SIZE_12PT,
+                  bold: true,
+                }),
+                ...renderRichInlineRuns(cleanSt, {}, 300, 180),
+              ],
+            })
+          );
+        }
       }
     }
   }
@@ -1165,7 +1523,13 @@ export function buildVariantExamDocument(
     );
 
     for (const item of variant.part3) {
-      children.push(...buildQuestionParagraphs(`Câu ${item.newNumber}.`, item.question.content));
+      children.push(
+        ...buildQuestionParagraphs(
+          `Câu ${item.newNumber}.`,
+          item.question.content,
+          item.question.imageUrl
+        )
+      );
     }
   }
 

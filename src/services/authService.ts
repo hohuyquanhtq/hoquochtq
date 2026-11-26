@@ -36,8 +36,21 @@ import {
   ClassEnrollment,
 } from '../types';
 import { normalizeExamCode } from '../utils/urlHelper';
+import {
+  DEFAULT_SUPER_ADMIN_EMAILS,
+  EXPECTED_PRIMARY_ADMIN_EMAIL,
+  isApprovedAccountStatus,
+  isDefaultSuperAdminEmail,
+  isSuperAdminRole,
+} from '../constants/superAdmin';
 
-export const EXPECTED_PRIMARY_ADMIN_EMAIL = 'hohuyquanhtq@gmail.com';
+export {
+  DEFAULT_SUPER_ADMIN_EMAILS,
+  EXPECTED_PRIMARY_ADMIN_EMAIL,
+  isApprovedAccountStatus,
+  isDefaultSuperAdminEmail,
+  isSuperAdminRole,
+};
 const PENDING_PROFILE_STORAGE_KEY = 'hqtest_pending_profile_draft';
 
 export interface PendingProfileDraft {
@@ -138,7 +151,7 @@ export interface AccountSyncDiagnostic {
 }
 
 export interface SyncProfileByUidOptions {
-  intendedRole: 'admin' | 'teacher' | 'student';
+  intendedRole: 'super_admin' | 'admin' | 'teacher' | 'student';
   name?: string;
   phone?: string;
   school?: string;
@@ -378,14 +391,88 @@ async function enrollStudentByClassCodeInternal(
   }
 }
 
+async function syncTeacherRecordDoc(
+  uid: string,
+  payload: {
+    email: string;
+    name?: string;
+    role: 'super_admin' | 'admin' | 'teacher';
+    status: AccountStatus;
+    approval_status?: 'pending' | 'approved' | 'rejected';
+    pilot_group?: 'host_school' | 'expanded_pilot' | 'standard';
+    phone?: string;
+    school?: string;
+    department?: string;
+    createdAt?: unknown;
+  }
+): Promise<void> {
+  if (firebaseInitError || !uid) return;
+  const nowIso = new Date().toISOString();
+  const teacherRef = doc(db, 'teachers', uid);
+
+  try {
+    const existingSnap = await getDoc(teacherRef).catch(() => null);
+    if (existingSnap && existingSnap.exists()) {
+      const existingData = existingSnap.data() as Record<string, unknown>;
+      const updatePayload = stripUndefinedDeep({
+        uid: existingData.uid || uid,
+        email: existingData.email || payload.email,
+        ...(payload.name ? { name: payload.name.slice(0, 150) } : {}),
+        role: payload.role,
+        status: payload.status,
+        ...(payload.approval_status ? { approval_status: payload.approval_status } : {}),
+        ...(payload.pilot_group ? { pilot_group: payload.pilot_group } : {}),
+        ...(payload.phone ? { phone: payload.phone.slice(0, 32) } : {}),
+        ...(payload.school ? { school: payload.school.slice(0, 200) } : {}),
+        ...(payload.department ? { department: payload.department.slice(0, 150) } : {}),
+        createdAt: existingData.createdAt || payload.createdAt || nowIso,
+        updatedAt: nowIso,
+        serverUpdatedAt: serverTimestamp(),
+      });
+      await updateDoc(teacherRef, updatePayload);
+      return;
+    }
+
+    const createPayload = stripUndefinedDeep({
+      uid,
+      email: payload.email,
+      ...(payload.name ? { name: payload.name.slice(0, 150) } : {}),
+      role: payload.role,
+      status: payload.status,
+      ...(payload.approval_status ? { approval_status: payload.approval_status } : {}),
+      ...(payload.pilot_group ? { pilot_group: payload.pilot_group } : {}),
+      ...(payload.phone ? { phone: payload.phone.slice(0, 32) } : {}),
+      ...(payload.school ? { school: payload.school.slice(0, 200) } : {}),
+      ...(payload.department ? { department: payload.department.slice(0, 150) } : {}),
+      createdAt: payload.createdAt || nowIso,
+      updatedAt: nowIso,
+      serverCreatedAt: serverTimestamp(),
+      serverUpdatedAt: serverTimestamp(),
+    });
+    await setDoc(teacherRef, createPayload);
+  } catch (err) {
+    console.warn('[HQTest Auth] Could not sync teachers/{uid} record:', err);
+  }
+}
+
 export async function createOrSyncUserProfileDoc(
   fbUser: FirebaseUser,
   draft: Omit<PendingProfileDraft, 'uid' | 'email'>
 ): Promise<{ user: User; warningMessage?: string }> {
   const nowIso = new Date().toISOString();
-  const safeRole: 'teacher' | 'student' = draft.role === 'teacher' ? 'teacher' : 'student';
-  const initialStatus: AccountStatus = safeRole === 'teacher' ? 'pending' : 'active';
   const email = (fbUser.email || '').trim().toLowerCase();
+  const isDefaultSuperAdmin = isDefaultSuperAdminEmail(email);
+
+  const safeRole: UserRole = isDefaultSuperAdmin
+    ? 'super_admin'
+    : draft.role === 'teacher'
+    ? 'teacher'
+    : 'student';
+  const initialStatus: AccountStatus = isDefaultSuperAdmin
+    ? 'approved'
+    : safeRole === 'teacher'
+    ? 'pending'
+    : 'active';
 
   let resolvedClassName = (draft.className || '').trim();
   let warningMessage: string | undefined;
@@ -396,7 +483,12 @@ export async function createOrSyncUserProfileDoc(
     name: draft.name.trim().slice(0, 150) || email.split('@')[0] || 'Người dùng HQTest',
     role: safeRole,
     status: initialStatus,
-    ...(safeRole === 'teacher'
+    ...(isDefaultSuperAdmin
+      ? {
+          approval_status: 'approved' as const,
+          pilot_group: 'host_school' as const,
+        }
+      : safeRole === 'teacher'
       ? {
           approval_status: 'pending' as const,
           pilot_group: 'standard' as const,
@@ -413,6 +505,21 @@ export async function createOrSyncUserProfileDoc(
   });
 
   await setDoc(doc(db, 'users', fbUser.uid), userPayload);
+
+  if (isDefaultSuperAdmin || safeRole === 'teacher') {
+    await syncTeacherRecordDoc(fbUser.uid, {
+      email,
+      name: userPayload.name,
+      role: isDefaultSuperAdmin ? 'super_admin' : 'teacher',
+      status: initialStatus,
+      approval_status: isDefaultSuperAdmin ? 'approved' : 'pending',
+      pilot_group: isDefaultSuperAdmin ? 'host_school' : 'standard',
+      phone: draft.phone?.trim(),
+      school: draft.school?.trim(),
+      department: draft.department?.trim(),
+      createdAt: nowIso,
+    });
+  }
 
   if (safeRole === 'student' && draft.classCode?.trim()) {
     const enrollRes = await enrollStudentByClassCodeInternal(
@@ -443,7 +550,9 @@ export async function createOrSyncUserProfileDoc(
       email,
       role: safeRole,
       status: initialStatus,
-      ...(safeRole === 'teacher'
+      ...(isDefaultSuperAdmin
+        ? { approval_status: 'approved' as const, pilot_group: 'host_school' as const }
+        : safeRole === 'teacher'
         ? { approval_status: 'pending' as const, pilot_group: 'standard' as const }
         : {}),
       phone: userPayload.phone,
@@ -481,14 +590,18 @@ function parseUserDoc(
   raw: Record<string, unknown>,
   hasTrustedAdminAuthority: boolean
 ): User {
-  const role: UserRole = hasTrustedAdminAuthority
-    ? 'admin'
-    : ((raw.role as UserRole) || 'student');
-  const status: AccountStatus = hasTrustedAdminAuthority
-    ? 'active'
-    : ((raw.status as AccountStatus) || (role === 'teacher' ? 'pending' : 'active'));
-
   const cleanEmail = String(raw.email || fbUser.email || '').trim().toLowerCase();
+  const isAllowlistedSuperAdmin = isDefaultSuperAdminEmail(cleanEmail);
+
+  const role: UserRole =
+    hasTrustedAdminAuthority || isAllowlistedSuperAdmin
+      ? 'super_admin'
+      : ((raw.role as UserRole) || 'student');
+  const status: AccountStatus =
+    hasTrustedAdminAuthority || isAllowlistedSuperAdmin
+      ? 'approved'
+      : ((raw.status as AccountStatus) || (role === 'teacher' ? 'pending' : 'active'));
+
   const cleanName =
     String(raw.name || fbUser.displayName || '').trim() ||
     cleanEmail.split('@')[0] ||
@@ -496,10 +609,12 @@ function parseUserDoc(
 
   const rawApproval = raw.approval_status;
   const approval_status =
-    rawApproval === 'pending' || rawApproval === 'approved' || rawApproval === 'rejected'
+    hasTrustedAdminAuthority || isAllowlistedSuperAdmin
+      ? ('approved' as const)
+      : rawApproval === 'pending' || rawApproval === 'approved' || rawApproval === 'rejected'
       ? rawApproval
       : role === 'teacher'
-      ? status === 'active'
+      ? isApprovedAccountStatus(status)
         ? 'approved'
         : status === 'rejected'
         ? 'rejected'
@@ -512,6 +627,8 @@ function parseUserDoc(
     rawPilotGroup === 'expanded_pilot' ||
     rawPilotGroup === 'standard'
       ? rawPilotGroup
+      : isSuperAdminRole(role)
+      ? 'host_school'
       : role === 'teacher'
       ? 'standard'
       : undefined;
@@ -608,7 +725,9 @@ async function readTrustedAdminStatusInternal(
       await fbUser.getIdToken(true).catch(() => {});
     }
     const tokenResult = await fbUser.getIdTokenResult();
-    hasAdminClaim = tokenResult?.claims?.admin === true;
+    hasAdminClaim =
+      tokenResult?.claims?.admin === true ||
+      isSuperAdminRole(tokenResult?.claims?.role as string | undefined);
   } catch {
     hasAdminClaim = false;
   }
@@ -629,7 +748,7 @@ async function readTrustedAdminStatusInternal(
       const docEmail = typeof data.email === 'string' ? data.email.trim().toLowerCase() : '';
       const isUidOk = !docUid || docUid === fbUser.uid;
       const isEmailOk = !docEmail || (Boolean(authEmail) && docEmail === authEmail);
-      const isRoleOk = data.role === 'admin';
+      const isRoleOk = isSuperAdminRole(data.role as string | undefined);
       const isActiveOk = data.isActive === true || data.active === true;
 
       adminDocActive = isUidOk && isEmailOk && isRoleOk && isActiveOk;
@@ -638,7 +757,7 @@ async function readTrustedAdminStatusInternal(
         const mismatches: string[] = [];
         if (!isUidOk) mismatches.push('uid không khớp');
         if (!isEmailOk) mismatches.push('email không khớp Firebase Auth');
-        if (!isRoleOk) mismatches.push('role != "admin"');
+        if (!isRoleOk) mismatches.push('role != "super_admin" / "admin"');
         if (!isActiveOk) mismatches.push('isActive != true');
         adminDocError = `Document admins/${fbUser.uid} chưa hợp lệ (${mismatches.join(', ')}).`;
       }
@@ -653,7 +772,7 @@ async function readTrustedAdminStatusInternal(
     Boolean(
       options?.attemptClaimApi ||
         adminDocExists ||
-        authEmail === EXPECTED_PRIMARY_ADMIN_EMAIL
+        isDefaultSuperAdminEmail(authEmail)
     );
 
   if (shouldAttemptClaimSetup) {
@@ -662,7 +781,9 @@ async function readTrustedAdminStatusInternal(
       try {
         await fbUser.getIdToken(true);
         const refreshedTokenResult = await fbUser.getIdTokenResult();
-        hasAdminClaim = refreshedTokenResult?.claims?.admin === true;
+        hasAdminClaim =
+          refreshedTokenResult?.claims?.admin === true ||
+          isSuperAdminRole(refreshedTokenResult?.claims?.role as string | undefined);
         if (!hasAdminClaim) {
           claimApiError =
             'API đã phản hồi thành công nhưng token.claims.admin chưa bằng true sau khi làm mới ID Token.';
@@ -757,7 +878,7 @@ export async function inspectAccountSyncStatus(
   }
 
   const adminInfo = await readTrustedAdminStatus(fbUser, {
-    attemptClaimApi: raw?.role === 'admin' || forceTokenRefresh,
+    attemptClaimApi: isSuperAdminRole(raw?.role as string | undefined) || forceTokenRefresh,
     forceTokenRefresh,
   });
 
@@ -777,11 +898,15 @@ export async function inspectAccountSyncStatus(
   const existingStatus = typeof raw?.status === 'string' ? (raw.status as AccountStatus) : undefined;
   const existingName = typeof raw?.name === 'string' ? raw.name : undefined;
 
-  const hasTrustedAdminAuthority = adminInfo.hasAdminClaim;
+  const cleanAuthEmail = (fbUser.email || '').trim().toLowerCase();
+  const hasTrustedAdminAuthority =
+    adminInfo.hasAdminClaim ||
+    adminInfo.adminDocActive ||
+    isDefaultSuperAdminEmail(cleanAuthEmail);
 
   return {
     uid: fbUser.uid,
-    email: (fbUser.email || '').trim().toLowerCase(),
+    email: cleanAuthEmail,
     emailVerified: Boolean(fbUser.emailVerified),
     displayName: (fbUser.displayName || '').trim(),
     projectId: projectInfo.projectId,
@@ -820,61 +945,114 @@ export async function fetchUserProfileFromFirestore(
   }
 
   const raw = userSnap.exists() ? (userSnap.data() as Record<string, unknown>) : null;
-  const adminInfo = await readTrustedAdminStatus(fbUser, {
-    attemptClaimApi: raw?.role === 'admin',
-  });
-  const hasTrustedAdminAuthority = adminInfo.hasAdminClaim;
   const cleanEmail = (fbUser.email || '').trim().toLowerCase();
+  const isAllowlistedSuperAdmin = isDefaultSuperAdminEmail(cleanEmail);
 
-  // If Firebase ID Token already has verified Custom Claim admin === true,
-  // allow entry into Admin Dashboard directly and ensure users/{uid} stays synced cleanly.
+  const adminInfo = await readTrustedAdminStatus(fbUser, {
+    attemptClaimApi: isSuperAdminRole(raw?.role as string | undefined) || isAllowlistedSuperAdmin,
+  });
+  const hasTrustedAdminAuthority =
+    adminInfo.hasAdminClaim || adminInfo.adminDocActive || isAllowlistedSuperAdmin;
+
+  // Automatically elevate and synchronize Super Admin accounts on both `users` and `teachers` collections
   if (hasTrustedAdminAuthority) {
     const nowIso = new Date().toISOString();
+    const resolvedName =
+      (typeof raw?.name === 'string' && raw.name.trim()) ||
+      (fbUser.displayName || '').trim() ||
+      cleanEmail.split('@')[0] ||
+      'Super Admin HQTest';
+    const resolvedPilotGroup =
+      raw?.pilot_group === 'host_school' ||
+      raw?.pilot_group === 'expanded_pilot' ||
+      raw?.pilot_group === 'standard'
+        ? raw.pilot_group
+        : 'host_school';
+
     if (!userSnap.exists() || !raw) {
-      const displayName =
-        (fbUser.displayName || '').trim() ||
-        cleanEmail.split('@')[0] ||
-        'Quản trị viên HQTest';
-      const newAdminProfile = stripUndefinedDeep({
+      const newSuperAdminProfile = stripUndefinedDeep({
         uid: fbUser.uid,
         email: cleanEmail,
-        name: displayName.slice(0, 150),
-        role: 'admin' as const,
-        status: 'active' as const,
+        name: resolvedName.slice(0, 150),
+        role: 'super_admin' as const,
+        status: 'approved' as const,
+        approval_status: 'approved' as const,
+        pilot_group: resolvedPilotGroup,
         createdAt: nowIso,
         updatedAt: nowIso,
         serverCreatedAt: serverTimestamp(),
         serverUpdatedAt: serverTimestamp(),
       });
-      await setDoc(userRef, newAdminProfile).catch(() => {});
-      return parseUserDoc(fbUser.uid, fbUser, newAdminProfile, true);
+      await setDoc(userRef, newSuperAdminProfile).catch((err) => {
+        console.warn('[HQTest Auth] Could not create Super Admin users/{uid}:', err);
+      });
+      await syncTeacherRecordDoc(fbUser.uid, {
+        email: cleanEmail,
+        name: resolvedName,
+        role: 'super_admin',
+        status: 'approved',
+        approval_status: 'approved',
+        pilot_group: resolvedPilotGroup,
+        createdAt: nowIso,
+      });
+      return parseUserDoc(fbUser.uid, fbUser, newSuperAdminProfile, true);
     }
 
-    if (raw.role !== 'admin' || raw.status !== 'active') {
+    const needsElevation =
+      raw.role !== 'super_admin' ||
+      raw.status !== 'approved' ||
+      raw.approval_status !== 'approved';
+
+    if (needsElevation) {
       await updateDoc(
         userRef,
         stripUndefinedDeep({
           uid: raw.uid || fbUser.uid,
           email: raw.email || cleanEmail,
-          role: 'admin',
-          status: 'active',
+          ...(!raw.name ? { name: resolvedName.slice(0, 150) } : {}),
+          role: 'super_admin',
+          status: 'approved',
+          approval_status: 'approved',
+          ...(!raw.pilot_group ? { pilot_group: resolvedPilotGroup } : {}),
           createdAt: raw.createdAt || nowIso,
           updatedAt: nowIso,
           serverUpdatedAt: serverTimestamp(),
         })
-      ).catch(() => {});
+      ).catch((err) => {
+        console.warn('[HQTest Auth] Could not elevate users/{uid} to super_admin:', err);
+      });
     }
 
-    return parseUserDoc(fbUser.uid, fbUser, raw, true);
+    // Always keep `teachers/{uid}` synchronized for Super Admin accounts
+    await syncTeacherRecordDoc(fbUser.uid, {
+      email: typeof raw.email === 'string' && raw.email.trim() ? raw.email.trim().toLowerCase() : cleanEmail,
+      name: resolvedName,
+      role: 'super_admin',
+      status: 'approved',
+      approval_status: 'approved',
+      pilot_group: resolvedPilotGroup,
+      phone: typeof raw.phone === 'string' ? raw.phone : undefined,
+      school: typeof raw.school === 'string' ? raw.school : undefined,
+      department: typeof raw.department === 'string' ? raw.department : undefined,
+      createdAt: raw.createdAt || nowIso,
+    });
+
+    return parseUserDoc(
+      fbUser.uid,
+      fbUser,
+      {
+        ...raw,
+        role: 'super_admin',
+        status: 'approved',
+        approval_status: 'approved',
+      },
+      true
+    );
   }
 
-  // If this account is an Admin candidate (e.g. admins/{uid} exists, users/{uid}.role === 'admin',
-  // or primary admin email failed server claim validation), block Admin Dashboard entry with exact server message
-  // while preserving the Firebase Authentication session.
+  // Non-allowlisted admin candidates still require valid admin authority
   const isAdminCandidate =
-    adminInfo.adminDocExists ||
-    raw?.role === 'admin' ||
-    (cleanEmail === EXPECTED_PRIMARY_ADMIN_EMAIL && Boolean(adminInfo.claimApiError));
+    adminInfo.adminDocExists || isSuperAdminRole(raw?.role as string | undefined);
 
   if (isAdminCandidate) {
     const projectInfo = getFirebaseProjectInfo();
@@ -889,7 +1067,7 @@ export async function fetchUserProfileFromFirestore(
       userMessage:
         adminInfo.claimApiError ||
         adminInfo.adminDocError ||
-        `Tài khoản chưa được cấp Custom Claim Admin (token.claims.admin != true) tại admins/${fbUser.uid}.`,
+        `Tài khoản chưa được cấp quyền Super Admin hợp lệ tại admins/${fbUser.uid}.`,
     });
   }
 
@@ -957,20 +1135,23 @@ export async function syncUserProfileByUid(
     const [existingSnap, adminInfo] = await Promise.all([
       getDocFromServer(userRef),
       readTrustedAdminStatus(currentFbUser, {
-        attemptClaimApi: options.intendedRole === 'admin',
+        attemptClaimApi: isSuperAdminRole(options.intendedRole) || isDefaultSuperAdminEmail(cleanEmail),
         forceTokenRefresh: true,
       }),
     ]);
 
     const existingRaw = existingSnap.exists() ? (existingSnap.data() as Record<string, unknown>) : null;
-    const hasTrustedAdminAuthority = adminInfo.hasAdminClaim;
+    const isAllowlistedSuperAdmin = isDefaultSuperAdminEmail(cleanEmail);
+    const hasTrustedAdminAuthority =
+      adminInfo.hasAdminClaim || adminInfo.adminDocActive || isAllowlistedSuperAdmin;
+    const wantsAdminRole = isSuperAdminRole(options.intendedRole);
 
     const nowIso = new Date().toISOString();
     let warningMessage: string | undefined;
 
     if (existingSnap.exists() && existingRaw) {
       // 3A. Preserve all existing valid fields; only update missing/required fields via updateDoc (never overwrite whole doc)
-      if (options.intendedRole === 'admin' && !hasTrustedAdminAuthority) {
+      if (wantsAdminRole && !hasTrustedAdminAuthority) {
         const projectInfo = getFirebaseProjectInfo();
         const diag: ProfileDiagnosticError = {
           category: 'admin_not_initialized',
@@ -1013,8 +1194,10 @@ export async function syncUserProfileByUid(
       if (!existingRaw.serverCreatedAt) patchPayload.serverCreatedAt = serverTimestamp();
 
       if (hasTrustedAdminAuthority) {
-        if (existingRaw.role !== 'admin') patchPayload.role = 'admin';
-        if (existingRaw.status !== 'active') patchPayload.status = 'active';
+        if (existingRaw.role !== 'super_admin') patchPayload.role = 'super_admin';
+        if (existingRaw.status !== 'approved') patchPayload.status = 'approved';
+        if (existingRaw.approval_status !== 'approved') patchPayload.approval_status = 'approved';
+        if (!existingRaw.pilot_group) patchPayload.pilot_group = 'host_school';
       }
 
       if (!existingRaw.school && options.school?.trim()) {
@@ -1032,10 +1215,25 @@ export async function syncUserProfileByUid(
 
       currentOp = 'UPDATE';
       await updateDoc(userRef, stripUndefinedDeep(patchPayload));
+
+      if (hasTrustedAdminAuthority) {
+        await syncTeacherRecordDoc(currentFbUser.uid, {
+          email: cleanEmail,
+          name: candidateName || cleanEmail.split('@')[0] || 'Super Admin HQTest',
+          role: 'super_admin',
+          status: 'approved',
+          approval_status: 'approved',
+          pilot_group: 'host_school',
+          school: (existingRaw.school as string) || options.school?.trim(),
+          department: (existingRaw.department as string) || options.department?.trim(),
+          phone: (existingRaw.phone as string) || options.phone?.trim(),
+          createdAt: existingRaw.createdAt || nowIso,
+        });
+      }
     } else {
       // 3B. Document users/{uid} does not exist yet
-      if (options.intendedRole === 'admin' || hasTrustedAdminAuthority) {
-        // Security: NEVER create an admin profile from client without trusted server marker/claim!
+      if (wantsAdminRole || hasTrustedAdminAuthority) {
+        // Security: NEVER create an admin profile from client without trusted server marker/claim/verified allowlist!
         if (!hasTrustedAdminAuthority) {
           const projectInfo = getFirebaseProjectInfo();
           const diag: ProfileDiagnosticError = {
@@ -1061,8 +1259,10 @@ export async function syncUserProfileByUid(
           uid: currentFbUser.uid,
           email: cleanEmail,
           ...(confirmedName ? { name: confirmedName.slice(0, 150) } : {}),
-          role: 'admin' as const,
-          status: 'active' as const,
+          role: 'super_admin' as const,
+          status: 'approved' as const,
+          approval_status: 'approved' as const,
+          pilot_group: 'host_school' as const,
           ...(options.phone?.trim() ? { phone: options.phone.trim().slice(0, 32) } : {}),
           ...(options.school?.trim() ? { school: options.school.trim().slice(0, 200) } : {}),
           ...(options.department?.trim() ? { department: options.department.trim().slice(0, 150) } : {}),
@@ -1074,6 +1274,18 @@ export async function syncUserProfileByUid(
 
         currentOp = 'CREATE';
         await setDoc(userRef, adminProfilePayload);
+        await syncTeacherRecordDoc(currentFbUser.uid, {
+          email: cleanEmail,
+          name: confirmedName || cleanEmail.split('@')[0] || 'Super Admin HQTest',
+          role: 'super_admin',
+          status: 'approved',
+          approval_status: 'approved',
+          pilot_group: 'host_school',
+          phone: options.phone?.trim(),
+          school: options.school?.trim(),
+          department: options.department?.trim(),
+          createdAt: nowIso,
+        });
       } else {
         const cleanName = options.name?.trim() || currentFbUser.displayName?.trim() || '';
         if (cleanName.length < 2) {
@@ -1110,10 +1322,10 @@ export async function syncUserProfileByUid(
     const verifiedRaw = verifySnap.data() as Record<string, unknown>;
     const verifiedUser = parseUserDoc(currentFbUser.uid, currentFbUser, verifiedRaw, hasTrustedAdminAuthority);
 
-    if (options.intendedRole === 'admin' && (verifiedUser.role !== 'admin' || verifiedUser.status !== 'active')) {
+    if (wantsAdminRole && (!isSuperAdminRole(verifiedUser.role) || !isApprovedAccountStatus(verifiedUser.status))) {
       return {
         success: false,
-        errorMessage: 'Đồng bộ không đạt quyền Admin hợp lệ trên Firestore.',
+        errorMessage: 'Đồng bộ không đạt quyền Super Admin hợp lệ trên Firestore.',
       };
     }
 

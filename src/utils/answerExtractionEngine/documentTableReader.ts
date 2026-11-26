@@ -28,8 +28,25 @@ export async function readDocxStructure(arrayBuffer: ArrayBuffer): Promise<{
   }
 
   try {
-    // 2. Fallback to Mammoth HTML conversion
-    const htmlResult = await mammoth.convertToHtml({ arrayBuffer });
+    // 2. Fallback to Mammoth HTML conversion with base64 image extraction
+    const htmlResult = await mammoth.convertToHtml(
+      { arrayBuffer },
+      {
+        convertImage: mammoth.images.imgElement(async (image) => {
+          const base64 = await image.read('base64');
+          const rawMime = (image.contentType || 'image/png').toLowerCase();
+          const contentType = /^image\/(png|jpeg|jpg|gif|webp|bmp|svg\+xml)$/.test(rawMime)
+            ? rawMime
+            : 'image/png';
+          const altText = (image as { altText?: string }).altText || 'Hình ảnh minh họa';
+          return {
+            src: `data:${contentType};base64,${base64}`,
+            alt: altText,
+            class: 'hq-question-img',
+          };
+        }),
+      }
+    );
     const rawHtml = htmlResult.value || '';
 
     const tables = extractTablesFromHtml(rawHtml);

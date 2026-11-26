@@ -18,6 +18,7 @@ import {
   Code,
 } from 'lucide-react';
 import { APP_CONFIG, getUserGreeting } from '../../constants/brand';
+import { isSuperAdminUser } from '../../constants/superAdmin';
 import { updateOwnUserProfile, changeCurrentUserPassword } from '../../services/authService';
 import { HQNavbar } from './HQNavbar';
 
@@ -43,6 +44,7 @@ const TAB_TITLES: Record<string, string> = {
   exam_manager: 'Quản lý đề thi',
   question_bank: 'Ngân hàng câu hỏi',
   city_exam_bank: 'Kho đề Thành phố · Học liệu dùng chung',
+  city_admin_panel: 'Quản trị Cấp Thành phố · Duyệt giáo viên & Học liệu',
   folder_manager: 'Thư mục chuyên đề',
   online_exams: 'Danh sách bài thi trực tuyến',
   exam_results: 'Kết quả và thống kê',
@@ -161,18 +163,20 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
+  const isCurrentSuperAdmin = isSuperAdminUser(currentUser);
+
   const homeTab =
     isGuest || !currentUser
       ? 'exam_landing'
       : currentUser.role === 'student'
       ? 'student_home'
-      : currentUser.role === 'admin'
+      : isCurrentSuperAdmin
       ? 'admin_dashboard'
       : 'dashboard';
 
   const resolvedTitle = pageTitle || TAB_TITLES[activeTab] || 'QUIZ PRO';
   const roleBadgeLabel =
-    currentUser?.role === 'admin'
+    isCurrentSuperAdmin
       ? 'Super Admin'
       : currentUser?.role === 'teacher'
       ? 'Giáo viên'
@@ -231,7 +235,7 @@ export const Header: React.FC<HeaderProps> = ({
                         {currentUser.name || currentUser.email}
                       </span>
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200/80 dark:border-emerald-800 text-[11px] font-semibold whitespace-nowrap">
-                        {currentUser.role === 'admin' && <ShieldCheck className="w-3 h-3 shrink-0" />}
+                        {isCurrentSuperAdmin && <ShieldCheck className="w-3 h-3 shrink-0" />}
                         <span>{roleBadgeLabel}</span>
                       </span>
                     </div>

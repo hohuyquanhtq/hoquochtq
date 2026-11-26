@@ -34,14 +34,26 @@ export const ChemicalContentRenderer: React.FC<ChemicalContentRendererProps> = (
   const rawText = typeof rawCandidate === 'string' ? rawCandidate : '';
   if (!rawText) return null;
 
-  // 1. Check if text contains Markdown table (including multi-column tables |---|---|)
+  // 1. Check if text contains HTML <table>...</table> (from Word/Mammoth parser)
+  if (hasHtmlTable(rawText)) {
+    return <RenderContentWithHtmlTables text={rawText} className={className} inline={inline} />;
+  }
+
+  // 2. Check if text contains Markdown table (including multi-column tables |---|---|)
   if (!inline && hasMarkdownTable(rawText)) {
     return <RenderContentWithTables text={rawText} className={className} inline={inline} />;
   }
 
-  // 2. Standard rendering
+  // 3. Standard rendering
   return renderTextBlocks(rawText, className, inline);
 };
+
+/**
+ * Checks if text contains an HTML <table>...</table> element
+ */
+function hasHtmlTable(text: string): boolean {
+  return /<table\b[^>]*>[\s\S]*?<\/table>/i.test(text);
+}
 
 /**
  * Checks if text contains a single- or multi-column markdown table
@@ -49,6 +61,260 @@ export const ChemicalContentRenderer: React.FC<ChemicalContentRendererProps> = (
 function hasMarkdownTable(text: string): boolean {
   return /^\s*\|[^\n]+\|\r?\n\s*\|[\s\-:|]+\|\r?\n\s*\|[^\n]+\|/m.test(text);
 }
+
+interface SafeTableCellNode {
+  tag: 'th' | 'td';
+  colSpan: number;
+  rowSpan: number;
+  content: string;
+}
+
+interface SafeTableRowNode {
+  cells: SafeTableCellNode[];
+}
+
+interface SafeParsedHtmlTable {
+  headRows: SafeTableRowNode[];
+  bodyRows: SafeTableRowNode[];
+}
+
+/**
+ * Safely parses an HTML <table> string into structured React-renderable rows/cells via DOMParser
+ * (never injects raw HTML into the DOM — immune to XSS while keeping colspan, rowspan, KaTeX, and <img>).
+ */
+function parseSafeHtmlTable(tableHtml: string): SafeParsedHtmlTable | null {
+  if (typeof DOMParser === 'undefined') return null;
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(tableHtml, 'text/html');
+    const tableEl = doc.querySelector('table');
+    if (!tableEl) return null;
+
+    const serializeSafeCellInner = (cellEl: Element): string => {
+      const parts: string[] = [];
+      const walk = (node: Node) => {
+        if (node.nodeType === 3) {
+          parts.push(node.textContent || '');
+          return;
+        }
+        if (node.nodeType !== 1) return;
+        const el = node as Element;
+        const tag = el.tagName.toLowerCase();
+
+        if (tag === 'script' || tag === 'style' || tag === 'iframe' || tag === 'object' || tag === 'embed') {
+          return;
+        }
+        if (tag === 'br') {
+          parts.push('<br/>');
+          return;
+        }
+        if (tag === 'img') {
+          const src = el.getAttribute('src') || '';
+          const alt = el.getAttribute('alt') || 'Hình ảnh minh họa';
+          if (isSafeImageUrl(src)) {
+            const safeAlt = alt.replace(/"/g, '&quot;');
+            parts.push(`<img src="${src}" alt="${safeAlt}" />`);
+          }
+          return;
+        }
+        if (tag === 'math') {
+          parts.push(el.outerHTML);
+          return;
+        }
+        if (tag === 'sub' || tag === 'sup' || tag === 'u' || tag === 's' || tag === 'b' || tag === 'strong' || tag === 'i' || tag === 'em') {
+          const innerBuf: string[] = [];
+          for (let i = 0; i < el.childNodes.length; i++) {
+            const prevLen = parts.length;
+            walk(el.childNodes[i]);
+            innerBuf.push(...parts.splice(prevLen));
+          }
+          parts.push(`<${tag}>${innerBuf.join('')}</${tag}>`);
+          return;
+        }
+        if (tag === 'p' || tag === 'div' || tag === 'li') {
+          const before = parts.length;
+          for (let i = 0; i < el.childNodes.length; i++) {
+            walk(el.childNodes[i]);
+          }
+          if (parts.length > before) {
+            parts.push('<br/>');
+          }
+          return;
+        }
+        for (let i = 0; i < el.childNodes.length; i++) {
+          walk(el.childNodes[i]);
+        }
+      };
+
+      for (let i = 0; i < cellEl.childNodes.length; i++) {
+        walk(cellEl.childNodes[i]);
+      }
+
+      return parts
+        .join('')
+        .replace(/(?:<br\s*\/?>\s*)+$/gi, '')
+        .trim();
+    };
+
+    const parseRowEl = (trEl: Element): SafeTableRowNode => {
+      const cells: SafeTableCellNode[] = [];
+      for (let i = 0; i < trEl.children.length; i++) {
+        const child = trEl.children[i];
+        const tag = child.tagName.toLowerCase();
+        if (tag !== 'td' && tag !== 'th') continue;
+        const rawCol = parseInt(child.getAttribute('colspan') || '1', 10);
+        const rawRow = parseInt(child.getAttribute('rowspan') || '1', 10);
+        const colSpan = Number.isFinite(rawCol) && rawCol > 1 ? Math.min(20, rawCol) : 1;
+        const rowSpan = Number.isFinite(rawRow) && rawRow > 1 ? Math.min(20, rawRow) : 1;
+        cells.push({
+          tag,
+          colSpan,
+          rowSpan,
+          content: serializeSafeCellInner(child),
+        });
+      }
+      return { cells };
+    };
+
+    const headRows: SafeTableRowNode[] = [];
+    const bodyRows: SafeTableRowNode[] = [];
+
+    const theadEl = tableEl.querySelector(':scope > thead');
+    if (theadEl) {
+      Array.from(theadEl.querySelectorAll(':scope > tr')).forEach((tr) => {
+        const parsed = parseRowEl(tr);
+        if (parsed.cells.length > 0) headRows.push(parsed);
+      });
+    }
+
+    const tbodyEls = Array.from(tableEl.querySelectorAll(':scope > tbody'));
+    if (tbodyEls.length > 0) {
+      tbodyEls.forEach((tb) => {
+        Array.from(tb.querySelectorAll(':scope > tr')).forEach((tr) => {
+          const parsed = parseRowEl(tr);
+          if (parsed.cells.length > 0) bodyRows.push(parsed);
+        });
+      });
+    } else {
+      Array.from(tableEl.querySelectorAll(':scope > tr')).forEach((tr, idx) => {
+        const parsed = parseRowEl(tr);
+        if (parsed.cells.length === 0) return;
+        const allTh = parsed.cells.every((c) => c.tag === 'th');
+        if (idx === 0 && allTh && headRows.length === 0) {
+          headRows.push(parsed);
+        } else {
+          bodyRows.push(parsed);
+        }
+      });
+    }
+
+    const tfootEl = tableEl.querySelector(':scope > tfoot');
+    if (tfootEl) {
+      Array.from(tfootEl.querySelectorAll(':scope > tr')).forEach((tr) => {
+        const parsed = parseRowEl(tr);
+        if (parsed.cells.length > 0) bodyRows.push(parsed);
+      });
+    }
+
+    if (headRows.length === 0 && bodyRows.length === 0) return null;
+    return { headRows, bodyRows };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Renders mixed content containing one or more HTML <table> blocks cleanly with slate-300 responsive borders
+ */
+const RenderContentWithHtmlTables: React.FC<{ text: string; className?: string; inline?: boolean }> = ({
+  text,
+  className,
+  inline,
+}) => {
+  const parts: { type: 'text' | 'html_table'; value: string }[] = [];
+  const regex = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: 'text', value: text.slice(lastIndex, match.index) });
+    }
+    parts.push({ type: 'html_table', value: match[0] });
+    lastIndex = match.index + match[0].length;
+  }
+  if (lastIndex < text.length) {
+    parts.push({ type: 'text', value: text.slice(lastIndex) });
+  }
+
+  return (
+    <div className={`space-y-2.5 ${className}`}>
+      {parts.map((part, idx) => {
+        if (part.type === 'html_table') {
+          return <HtmlTableRenderer key={idx} tableHtml={part.value} />;
+        }
+        const trimmed = part.value.trim();
+        if (!trimmed) return null;
+        if (!inline && hasMarkdownTable(trimmed)) {
+          return <RenderContentWithTables key={idx} text={trimmed} className="" inline={false} />;
+        }
+        return <div key={idx}>{renderTextBlocks(trimmed, '', false)}</div>;
+      })}
+    </div>
+  );
+};
+
+const HtmlTableRenderer: React.FC<{ tableHtml: string }> = ({ tableHtml }) => {
+  const parsed = parseSafeHtmlTable(tableHtml);
+  if (!parsed) {
+    return <div>{renderTextBlocks(tableHtml.replace(/<[^>]+>/g, ' '), '', false)}</div>;
+  }
+
+  return (
+    <div className="hq-exam-table-wrap">
+      <table className="hq-exam-table">
+        {parsed.headRows.length > 0 && (
+          <thead>
+            {parsed.headRows.map((row, rIdx) => (
+              <tr key={rIdx}>
+                {row.cells.map((cell, cIdx) => (
+                  <th
+                    key={cIdx}
+                    colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
+                    rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
+                  >
+                    <ChemicalContentRenderer content={cell.content} inline />
+                  </th>
+                ))}
+              </tr>
+            ))}
+          </thead>
+        )}
+        {parsed.bodyRows.length > 0 && (
+          <tbody>
+            {parsed.bodyRows.map((row, rIdx) => (
+              <tr key={rIdx}>
+                {row.cells.map((cell, cIdx) => {
+                  const CellTag = cell.tag === 'th' ? 'th' : 'td';
+                  return (
+                    <CellTag
+                      key={cIdx}
+                      colSpan={cell.colSpan > 1 ? cell.colSpan : undefined}
+                      rowSpan={cell.rowSpan > 1 ? cell.rowSpan : undefined}
+                      className={cell.tag === 'th' ? 'bg-slate-100 font-semibold text-slate-900' : undefined}
+                    >
+                      <ChemicalContentRenderer content={cell.content} inline />
+                    </CellTag>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        )}
+      </table>
+    </div>
+  );
+};
 
 /**
  * Renders mixed text with Markdown tables cleanly formatted as HTML tables
@@ -130,22 +396,22 @@ const TableRenderer: React.FC<{ tableLines: string[] }> = ({ tableLines }) => {
   const dataRows = dataLines.map(parseRow);
 
   return (
-    <div className="overflow-x-auto my-2 border border-slate-200 rounded-xl shadow-2xs bg-white">
-      <table className="w-full text-xs text-left border-collapse">
+    <div className="hq-exam-table-wrap">
+      <table className="hq-exam-table">
         <thead>
-          <tr className="bg-slate-100 text-slate-800 font-bold border-b border-slate-200">
+          <tr>
             {headers.map((h, i) => (
-              <th key={i} className="py-2 px-3 border-r border-slate-200 last:border-r-0">
+              <th key={i}>
                 <ChemicalContentRenderer content={h} inline />
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-slate-200">
+        <tbody>
           {dataRows.map((row, rIdx) => (
-            <tr key={rIdx} className="hover:bg-slate-50 transition-colors">
+            <tr key={rIdx}>
               {row.map((cell, cIdx) => (
-                <td key={cIdx} className="py-2 px-3 border-r border-slate-200 last:border-r-0 text-slate-700">
+                <td key={cIdx}>
                   <ChemicalContentRenderer content={cell} inline />
                 </td>
               ))}
@@ -173,7 +439,7 @@ function isSafeImageUrl(url: string): boolean {
   const trimmed = (url || '').trim();
   if (!trimmed) return false;
   if (trimmed.startsWith('/')) return true;
-  if (/^data:image\/(?:png|jpeg|jpg|gif|webp|svg\+xml);base64,/i.test(trimmed)) return true;
+  if (/^data:image\/(?:png|jpeg|jpg|gif|webp|bmp|svg\+xml);base64,/i.test(trimmed)) return true;
   if (/^https?:\/\//i.test(trimmed)) return true;
   return false;
 }
@@ -256,11 +522,12 @@ function renderInlineTokens(text: string, depth: number): React.ReactNode {
         return <span key={index} className="text-slate-500 text-xs">[{seg.alt}]</span>;
       }
       return (
-        <span key={index} className="my-2 block text-center">
+        <span key={index} className="my-2 block">
           <img
             src={seg.src}
             alt={seg.alt || 'Hình ảnh minh họa'}
-            className="max-h-72 max-w-full rounded-xl border border-slate-200 shadow-xs inline-block bg-white p-1"
+            loading="lazy"
+            className="hq-question-img inline-block shadow-xs"
           />
         </span>
       );
