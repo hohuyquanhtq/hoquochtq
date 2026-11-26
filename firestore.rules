@@ -120,7 +120,7 @@ service cloud.firestore {
           'id', 'ownerId', 'code', 'content', 'type', 'subjectId', 'subjectName',
           'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic', 'level',
           'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
-          'imageUrl', 'explanation', 'source', 'authorId', 'parseStatus', 'parseWarning',
+          'imageUrl', 'explanation', 'source', 'authorId', 'authorName', 'authorSchool', 'parseStatus', 'parseWarning',
           'teacherVerified', 'isSharedCity', 'isPublicCity', 'section', 'sectionTitle', 'createdAt', 'updatedAt',
           'serverCreatedAt', 'serverUpdatedAt'
         ])
@@ -149,6 +149,8 @@ service cloud.firestore {
         && (!('explanation' in data) || (data.explanation is string && data.explanation.size() <= 20000))
         && (!('source' in data) || (data.source is string && data.source.size() <= 300))
         && (!('authorId' in data) || (data.authorId is string && data.authorId.size() <= 128))
+        && (!('authorName' in data) || (data.authorName is string && data.authorName.size() <= 150))
+        && (!('authorSchool' in data) || (data.authorSchool is string && data.authorSchool.size() <= 200))
         && (!('parseStatus' in data) || data.parseStatus in ['verified', 'needs_review', 'error'])
         && (!('parseWarning' in data) || (data.parseWarning is string && data.parseWarning.size() <= 500))
         && (!('teacherVerified' in data) || data.teacherVerified is bool)
@@ -716,11 +718,11 @@ service cloud.firestore {
               'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
               'level', 'folderId',
               'options', 'correctOptionId', 'correctOptionIds', 'statements', 'shortAnswerConfig',
-              'imageUrl', 'explanation', 'source', 'parseStatus', 'parseWarning',
+              'imageUrl', 'explanation', 'source', 'authorName', 'authorSchool', 'parseStatus', 'parseWarning',
               'teacherVerified', 'isSharedCity', 'isPublicCity', 'section', 'sectionTitle', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
             ])) ||
           (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'ownerId', 'authorId', 'code', 'content', 'type', 'subjectId', 'subjectName',
+            'ownerId', 'authorId', 'authorName', 'authorSchool', 'code', 'content', 'type', 'subjectId', 'subjectName',
             'grade', 'topic', 'chapterId', 'chapterName', 'lessonId', 'lessonName', 'lessonTopic',
             'level', 'folderId', 'options', 'correctOptionId', 'correctOptionIds', 'statements',
             'shortAnswerConfig', 'imageUrl', 'explanation', 'source', 'parseStatus',

@@ -1,11 +1,18 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Exam, User } from '../../types';
+import { Exam, Question, User } from '../../types';
 import {
   cloneCityExamToPersonalBank,
+  cloneCityQuestionToPersonalBank,
   fetchCityPublicExams,
+  fetchCitySharedQuestions,
 } from '../../services/workspaceService';
 import { exportPrintReadyExamWithAnswersDocx } from '../../services/sampleWordTemplateService';
-import { GRADE_LABELS, QUESTION_TYPE_SHORT_LABELS } from '../../constants/subjects';
+import {
+  COGNITIVE_LEVEL_SHORT_LABELS,
+  GRADE_LABELS,
+  QUESTION_TYPE_SHORT_LABELS,
+  getQuestionTopicDisplay,
+} from '../../constants/subjects';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import {
   AlertCircle,
@@ -15,72 +22,130 @@ import {
   CheckCircle2,
   Clock,
   CopyPlus,
+  Database,
   Download,
   Eye,
+  FileText,
   Filter,
   Globe,
   RefreshCw,
   School,
   Search,
   Sparkles,
+  User as UserIcon,
   X,
 } from 'lucide-react';
 
 interface CityExamRepositoryProps {
   currentUser: User;
   onExamCloned: (clonedExam: Exam) => void;
+  onQuestionCloned?: (clonedQuestion: Question) => void;
   onOpenPersonalExams?: () => void;
+  onOpenPersonalQuestionBank?: () => void;
 }
+
+type CityRepositoryTab = 'exams' | 'questions';
 
 const TOPIC_DISPLAY_LABELS: Record<string, string> = {
   hoa_dai_cuong: 'Hóa đại cương',
   hoa_vo_co: 'Hóa vô cơ',
   hoa_huu_co: 'Hóa hữu cơ',
   hoa_phan_tich: 'Hóa phân tích',
+  hoa_thuc_nghiem: 'Hóa thực nghiệm',
+  chuyen_sau_hsg: 'Chuyên sâu & HSG',
   chuyen_de_nang_cao: 'Chuyên đề nâng cao',
 };
 
 export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   currentUser,
   onExamCloned,
+  onQuestionCloned,
   onOpenPersonalExams,
+  onOpenPersonalQuestionBank,
 }) => {
+  const [activeTab, setActiveTab] = useState<CityRepositoryTab>('exams');
+
+  // City Exams state
   const [cityExams, setCityExams] = useState<Exam[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingExams, setIsLoadingExams] = useState(true);
+
+  // City Shared Questions state (isSharedCity == true)
+  const [cityQuestions, setCityQuestions] = useState<Question[]>([]);
+  const [isLoadingQuestions, setIsLoadingQuestions] = useState(true);
+
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
-  const [lastClonedTitle, setLastClonedTitle] = useState<string | null>(null);
+  const [toastAction, setToastAction] = useState<'exams' | 'questions' | null>(null);
 
-  // Filters
+  // Exam Filters
   const [searchTerm, setSearchTerm] = useState('');
   const [gradeFilter, setGradeFilter] = useState<string>('all');
   const [topicFilter, setTopicFilter] = useState<string>('all');
   const [schoolFilter, setSchoolFilter] = useState<string>('all');
 
+  // Question Filters
+  const [questionSearchTerm, setQuestionSearchTerm] = useState('');
+  const [questionGradeFilter, setQuestionGradeFilter] = useState<string>('all');
+  const [questionTypeFilter, setQuestionTypeFilter] = useState<string>('all');
+  const [questionLevelFilter, setQuestionLevelFilter] = useState<string>('all');
+
   // Action states
   const [previewExam, setPreviewExam] = useState<Exam | null>(null);
   const [cloningExamId, setCloningExamId] = useState<string | null>(null);
   const [exportingWordId, setExportingWordId] = useState<string | null>(null);
+  const [cloningQuestionId, setCloningQuestionId] = useState<string | null>(null);
+  const [expandedExplanationIds, setExpandedExplanationIds] = useState<Set<string>>(new Set());
 
-  const loadCityExams = async () => {
-    setIsLoading(true);
+  const showToast = (msg: string, action: 'exams' | 'questions' | null = null) => {
+    setToastMsg(msg);
+    setToastAction(action);
+    window.setTimeout(() => {
+      setToastMsg((prev) => (prev === msg ? null : prev));
+    }, 5000);
+  };
+
+  const loadRepositoryData = async () => {
+    setIsLoadingExams(true);
+    setIsLoadingQuestions(true);
     setErrorMsg(null);
-    try {
-      const list = await fetchCityPublicExams();
-      setCityExams(list);
-    } catch (err) {
-      setErrorMsg(
-        err instanceof Error
-          ? err.message
-          : 'Không thể tải danh sách Kho đề Thành phố. Vui lòng thử lại.'
+
+    const errors: string[] = [];
+
+    const [examsRes, questionsRes] = await Promise.allSettled([
+      fetchCityPublicExams(),
+      fetchCitySharedQuestions(),
+    ]);
+
+    if (examsRes.status === 'fulfilled') {
+      setCityExams(examsRes.value);
+    } else {
+      errors.push(
+        examsRes.reason instanceof Error
+          ? examsRes.reason.message
+          : 'Không thể tải danh sách Đề thi hoàn chỉnh.'
       );
-    } finally {
-      setIsLoading(false);
     }
+
+    if (questionsRes.status === 'fulfilled') {
+      setCityQuestions(questionsRes.value);
+    } else {
+      errors.push(
+        questionsRes.reason instanceof Error
+          ? questionsRes.reason.message
+          : 'Không thể tải Ngân hàng câu hỏi đóng góp.'
+      );
+    }
+
+    if (errors.length > 0) {
+      setErrorMsg(errors.join(' '));
+    }
+
+    setIsLoadingExams(false);
+    setIsLoadingQuestions(false);
   };
 
   useEffect(() => {
-    void loadCityExams();
+    void loadRepositoryData();
   }, []);
 
   const availableSchools = useMemo(() => {
@@ -121,7 +186,39 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
     });
   }, [cityExams, gradeFilter, topicFilter, schoolFilter, searchTerm]);
 
-  const totalCityQuestions = useMemo(
+  const filteredQuestions = useMemo(() => {
+    const term = questionSearchTerm.trim().toLowerCase();
+    return cityQuestions.filter((q) => {
+      if (questionGradeFilter !== 'all' && q.grade !== questionGradeFilter) return false;
+      if (questionTypeFilter !== 'all' && q.type !== questionTypeFilter) return false;
+      if (questionLevelFilter !== 'all' && q.level !== questionLevelFilter) return false;
+      if (term) {
+        const hay = [
+          q.code || '',
+          q.content || '',
+          q.subjectName || '',
+          q.chapterName || '',
+          q.lessonName || '',
+          q.lessonTopic || '',
+          q.authorName || '',
+          q.authorSchool || '',
+          q.source || '',
+        ]
+          .join(' ')
+          .toLowerCase();
+        if (!hay.includes(term)) return false;
+      }
+      return true;
+    });
+  }, [
+    cityQuestions,
+    questionGradeFilter,
+    questionTypeFilter,
+    questionLevelFilter,
+    questionSearchTerm,
+  ]);
+
+  const totalCityExamQuestions = useMemo(
     () => cityExams.reduce((sum, ex) => sum + (ex.questions?.length || 0), 0),
     [cityExams]
   );
@@ -132,9 +229,7 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
     try {
       const cloned = await cloneCityExamToPersonalBank(exam, currentUser);
       onExamCloned(cloned);
-      setLastClonedTitle(cloned.title);
-      setToastMsg(`Đã nhân bản "${exam.title}" về Kho đề cá nhân của bạn!`);
-      setTimeout(() => setToastMsg(null), 5000);
+      showToast(`Đã nhân bản "${exam.title}" về Kho đề cá nhân của bạn!`, 'exams');
     } catch (err) {
       setErrorMsg(
         err instanceof Error
@@ -150,8 +245,7 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
     setExportingWordId(exam.id);
     try {
       await exportPrintReadyExamWithAnswersDocx(exam, exam.authorSchool || currentUser.school);
-      setToastMsg(`Đã tải file Word (.docx) đề "${exam.title}" kèm bảng đáp án.`);
-      setTimeout(() => setToastMsg(null), 3500);
+      showToast(`Đã tải file Word (.docx) đề "${exam.title}" kèm bảng đáp án.`);
     } catch (err) {
       setErrorMsg(
         err instanceof Error ? err.message : 'Không thể xuất file Word cho đề thi này.'
@@ -161,94 +255,231 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
     }
   };
 
+  const handleCloneQuestion = async (question: Question) => {
+    setCloningQuestionId(question.id);
+    setErrorMsg(null);
+    try {
+      const cloned = await cloneCityQuestionToPersonalBank(question, currentUser);
+      onQuestionCloned?.(cloned);
+      showToast(
+        `Đã lưu câu hỏi "${question.code}" về Ngân hàng câu hỏi cá nhân của bạn!`,
+        'questions'
+      );
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'Không thể lưu câu hỏi về Ngân hàng cá nhân. Vui lòng thử lại.'
+      );
+    } finally {
+      setCloningQuestionId(null);
+    }
+  };
+
+  const toggleExplanation = (id: string) => {
+    setExpandedExplanationIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const isRefreshing = isLoadingExams || isLoadingQuestions;
+
   return (
     <div className="space-y-6">
       {/* Header Banner */}
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
-            <div className="flex items-center gap-2 text-emerald-700 font-bold text-xs uppercase tracking-wider">
+            <div className="flex items-center gap-2 text-teal-700 font-bold text-xs uppercase tracking-wider">
               <Globe className="w-4 h-4 shrink-0" />
-              <span>Kho học liệu dùng chung có kiểm duyệt · TP. Đà Nẵng</span>
+              <span>Kho học liệu dùng chung · TP. Đà Nẵng</span>
             </div>
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
-              Kho đề thi Hóa học Thành phố (GDPT 2018)
+              Kho đề &amp; Ngân hàng câu hỏi Thành phố (GDPT 2018)
             </h1>
             <p className="text-sm text-slate-600 max-w-3xl">
-              Tập hợp các đề kiểm tra 3 dạng thức đã được Super Admin kiểm duyệt chất lượng chuyên môn từ giáo viên các trường THPT. Thầy/Cô có thể xem trước, tải bản in Word (.docx) hoặc nhân bản về kho cá nhân để giao bài cho lớp mình.
+              Khai thác các đề kiểm tra hoàn chỉnh đã được kiểm duyệt và ngân hàng câu hỏi do giáo viên toàn thành phố đóng góp để tải bản in Word hoặc lưu về kho cá nhân.
             </p>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
             <div className="px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-right tabular-nums">
-              <p className="text-[11px] font-semibold text-slate-500">Đề đã kiểm duyệt</p>
-              <p className="text-lg font-extrabold text-slate-900">
-                {cityExams.length} đề · {totalCityQuestions} câu
+              <p className="text-[11px] font-semibold text-slate-500">Tổng học liệu Kho TP</p>
+              <p className="text-base sm:text-lg font-extrabold text-slate-900">
+                {cityExams.length} đề · {cityQuestions.length} câu đóng góp
               </p>
             </div>
             <button
               type="button"
-              onClick={() => void loadCityExams()}
-              disabled={isLoading}
+              onClick={() => void loadRepositoryData()}
+              disabled={isRefreshing}
               className="min-h-[44px] px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5"
             >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
               <span>Làm mới</span>
             </button>
           </div>
         </div>
 
-        {/* Filter Bar */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
-          <div className="relative">
-            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Tìm tên đề, tác giả, trường..."
-              className="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
-            />
-          </div>
-
-          <select
-            value={gradeFilter}
-            onChange={(e) => setGradeFilter(e.target.value)}
-            className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+        {/* 2-Tab Switcher */}
+        <div
+          role="tablist"
+          aria-label="Chuyển đổi danh mục Kho Thành phố"
+          className="flex flex-wrap items-center gap-2 pt-3 border-t border-slate-100"
+        >
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'exams'}
+            onClick={() => setActiveTab('exams')}
+            className={`min-h-[42px] px-4 py-2 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-colors ${
+              activeTab === 'exams'
+                ? 'bg-indigo-600 text-white shadow-xs'
+                : 'bg-slate-100 hover:bg-slate-200/80 text-slate-700'
+            }`}
           >
-            <option value="all">Tất cả khối lớp</option>
-            <option value="12">Lớp 12 THPT</option>
-            <option value="11">Lớp 11 THPT</option>
-            <option value="10">Lớp 10 THPT</option>
-            <option value="chuyen_hsg">Chuyên &amp; HSG</option>
-          </select>
+            <FileText className="w-4 h-4 shrink-0" />
+            <span>Đề thi hoàn chỉnh</span>
+            <span
+              className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold tabular-nums ${
+                activeTab === 'exams'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-white text-slate-700 border border-slate-200'
+              }`}
+            >
+              {cityExams.length}
+            </span>
+          </button>
 
-          <select
-            value={topicFilter}
-            onChange={(e) => setTopicFilter(e.target.value)}
-            className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === 'questions'}
+            onClick={() => setActiveTab('questions')}
+            className={`min-h-[42px] px-4 py-2 rounded-xl text-xs sm:text-sm font-bold inline-flex items-center gap-2 transition-colors ${
+              activeTab === 'questions'
+                ? 'bg-teal-600 text-white shadow-xs'
+                : 'bg-slate-100 hover:bg-slate-200/80 text-slate-700'
+            }`}
           >
-            <option value="all">Tất cả chuyên đề</option>
-            {availableTopics.map((tp) => (
-              <option key={tp} value={tp}>
-                {TOPIC_DISPLAY_LABELS[tp] || tp}
-              </option>
-            ))}
-          </select>
-
-          <select
-            value={schoolFilter}
-            onChange={(e) => setSchoolFilter(e.target.value)}
-            className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
-          >
-            <option value="all">Tất cả trường tác giả ({availableSchools.length})</option>
-            {availableSchools.map((sch) => (
-              <option key={sch} value={sch}>
-                {sch}
-              </option>
-            ))}
-          </select>
+            <Database className="w-4 h-4 shrink-0" />
+            <span>Ngân hàng câu hỏi đóng góp</span>
+            <span
+              className={`px-2 py-0.5 rounded-md text-[11px] font-extrabold tabular-nums ${
+                activeTab === 'questions'
+                  ? 'bg-white/20 text-white'
+                  : 'bg-white text-teal-700 border border-teal-200'
+              }`}
+            >
+              {cityQuestions.length}
+            </span>
+          </button>
         </div>
+
+        {/* Filter Bar per Active Tab */}
+        {activeTab === 'exams' ? (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Tìm tên đề, tác giả, trường..."
+                className="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs font-medium focus:outline-none focus:ring-2 focus:ring-indigo-500"
+              />
+            </div>
+
+            <select
+              value={gradeFilter}
+              onChange={(e) => setGradeFilter(e.target.value)}
+              className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+            >
+              <option value="all">Tất cả khối lớp</option>
+              <option value="12">Lớp 12 THPT</option>
+              <option value="11">Lớp 11 THPT</option>
+              <option value="10">Lớp 10 THPT</option>
+              <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+            </select>
+
+            <select
+              value={topicFilter}
+              onChange={(e) => setTopicFilter(e.target.value)}
+              className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+            >
+              <option value="all">Tất cả chuyên đề</option>
+              {availableTopics.map((tp) => (
+                <option key={tp} value={tp}>
+                  {TOPIC_DISPLAY_LABELS[tp] || tp}
+                </option>
+              ))}
+            </select>
+
+            <select
+              value={schoolFilter}
+              onChange={(e) => setSchoolFilter(e.target.value)}
+              className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+            >
+              <option value="all">Tất cả trường tác giả ({availableSchools.length})</option>
+              {availableSchools.map((sch) => (
+                <option key={sch} value={sch}>
+                  {sch}
+                </option>
+              ))}
+            </select>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2 border-t border-slate-100">
+            <div className="relative">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                value={questionSearchTerm}
+                onChange={(e) => setQuestionSearchTerm(e.target.value)}
+                placeholder="Tìm nội dung, mã câu, bài học, trường..."
+                className="w-full min-h-[40px] pl-9 pr-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-xs font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
+              />
+            </div>
+
+            <select
+              value={questionGradeFilter}
+              onChange={(e) => setQuestionGradeFilter(e.target.value)}
+              className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+            >
+              <option value="all">Tất cả khối lớp</option>
+              <option value="12">Lớp 12 THPT</option>
+              <option value="11">Lớp 11 THPT</option>
+              <option value="10">Lớp 10 THPT</option>
+              <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+            </select>
+
+            <select
+              value={questionTypeFilter}
+              onChange={(e) => setQuestionTypeFilter(e.target.value)}
+              className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+            >
+              <option value="all">Tất cả dạng câu hỏi</option>
+              <option value="part1_single_choice">Phần I · 4 lựa chọn</option>
+              <option value="part2_true_false">Phần II · Đúng / Sai</option>
+              <option value="part3_short_answer">Phần III · Trả lời ngắn</option>
+            </select>
+
+            <select
+              value={questionLevelFilter}
+              onChange={(e) => setQuestionLevelFilter(e.target.value)}
+              className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-slate-700"
+            >
+              <option value="all">Tất cả mức độ nhận thức</option>
+              <option value="nhan_biet">Nhận biết</option>
+              <option value="thong_hieu">Thông hiểu</option>
+              <option value="van_dung">Vận dụng</option>
+              <option value="van_dung_cao">Vận dụng cao</option>
+            </select>
+          </div>
+        )}
       </div>
 
       {/* Banners */}
@@ -265,7 +496,7 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
             <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
             <span>{toastMsg}</span>
           </div>
-          {lastClonedTitle && onOpenPersonalExams && (
+          {toastAction === 'exams' && onOpenPersonalExams && (
             <button
               type="button"
               onClick={onOpenPersonalExams}
@@ -275,130 +506,369 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           )}
+          {toastAction === 'questions' && onOpenPersonalQuestionBank && (
+            <button
+              type="button"
+              onClick={onOpenPersonalQuestionBank}
+              className="px-3 py-1.5 rounded-lg bg-teal-700 hover:bg-teal-800 text-white text-xs font-bold inline-flex items-center gap-1"
+            >
+              <span>Mở Ngân hàng cá nhân</span>
+              <ArrowRight className="w-3.5 h-3.5" />
+            </button>
+          )}
         </div>
       )}
 
-      {/* Exam Cards List */}
-      {isLoading ? (
-        <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-sm text-slate-500">
-          Đang tải danh sách Kho đề Thành phố...
-        </div>
-      ) : filteredExams.length === 0 ? (
-        <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-2">
-          <Filter className="w-8 h-8 text-slate-300 mx-auto" />
-          <p className="text-sm font-bold text-slate-700">
-            {cityExams.length === 0
-              ? 'Hiện chưa có đề thi nào được duyệt công khai lên Kho Thành phố.'
-              : 'Không tìm thấy đề thi nào khớp với bộ lọc đang chọn.'}
-          </p>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Giáo viên có thể chọn nút <strong>&quot;Đề xuất Kho TP&quot;</strong> ở từng đề trong mục <strong>Quản lý Đề thi</strong> để gửi Super Admin kiểm duyệt và chia sẻ toàn thành phố.
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {filteredExams.map((exam) => {
-            const p1 = exam.questions.filter((q) => q.type === 'part1_single_choice').length;
-            const p2 = exam.questions.filter((q) => q.type === 'part2_true_false').length;
-            const p3 = exam.questions.filter((q) => q.type === 'part3_short_answer').length;
-            const isCloning = cloningExamId === exam.id;
-            const isExporting = exportingWordId === exam.id;
+      {/* TAB 1: ĐỀ THI HOÀN CHỈNH */}
+      {activeTab === 'exams' && (
+        <>
+          {isLoadingExams ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-sm text-slate-500">
+              Đang tải danh sách Đề thi hoàn chỉnh...
+            </div>
+          ) : filteredExams.length === 0 ? (
+            <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-2">
+              <Filter className="w-8 h-8 text-slate-300 mx-auto" />
+              <p className="text-sm font-bold text-slate-700">
+                {cityExams.length === 0
+                  ? 'Hiện chưa có đề thi nào được duyệt công khai lên Kho Thành phố.'
+                  : 'Không tìm thấy đề thi nào khớp với bộ lọc đang chọn.'}
+              </p>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Giáo viên có thể chọn nút <strong>&quot;Đề xuất Kho TP&quot;</strong> ở từng đề trong mục <strong>Quản lý Đề thi</strong> để gửi Super Admin kiểm duyệt và chia sẻ toàn thành phố.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="text-xs text-slate-500 font-medium tabular-nums">
+                Hiển thị <strong>{filteredExams.length}</strong> / {cityExams.length} đề thi hoàn chỉnh ({totalCityExamQuestions} câu hỏi trong các đề).
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {filteredExams.map((exam) => {
+                  const p1 = exam.questions.filter((q) => q.type === 'part1_single_choice').length;
+                  const p2 = exam.questions.filter((q) => q.type === 'part2_true_false').length;
+                  const p3 = exam.questions.filter((q) => q.type === 'part3_short_answer').length;
+                  const isCloning = cloningExamId === exam.id;
+                  const isExporting = exportingWordId === exam.id;
 
-            return (
-              <div
-                key={exam.id}
-                className="bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl p-5 shadow-xs transition-colors flex flex-col justify-between gap-4"
-              >
-                <div className="space-y-2.5">
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
-                    <span className="px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
-                      <CheckCircle2 className="w-3 h-3" />
-                      Đã kiểm duyệt TP
-                    </span>
-                    <span className="px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200">
-                      {GRADE_LABELS[exam.grade] || `Lớp ${exam.grade}`}
-                    </span>
-                    <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700">
-                      {exam.topic ? TOPIC_DISPLAY_LABELS[exam.topic] || exam.topic : 'Hóa học'}
-                    </span>
-                  </div>
+                  return (
+                    <div
+                      key={exam.id}
+                      className="bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl p-5 shadow-xs transition-colors flex flex-col justify-between gap-4"
+                    >
+                      <div className="space-y-2.5">
+                        <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                          <span className="px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                            <CheckCircle2 className="w-3 h-3" />
+                            Đã kiểm duyệt TP
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200">
+                            {GRADE_LABELS[exam.grade] || `Lớp ${exam.grade}`}
+                          </span>
+                          <span className="px-2.5 py-0.5 rounded-md bg-slate-100 text-slate-700">
+                            {exam.topic ? TOPIC_DISPLAY_LABELS[exam.topic] || exam.topic : 'Hóa học'}
+                          </span>
+                        </div>
 
-                  <h3 className="text-base font-extrabold text-slate-900 leading-snug">
-                    {exam.title}
-                  </h3>
+                        <h3 className="text-base font-extrabold text-slate-900 leading-snug">
+                          {exam.title}
+                        </h3>
 
-                  {exam.description && (
-                    <p className="text-xs text-slate-600 line-clamp-2">{exam.description}</p>
-                  )}
+                        {exam.description && (
+                          <p className="text-xs text-slate-600 line-clamp-2">{exam.description}</p>
+                        )}
 
-                  {/* Author Attribution */}
-                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1">
-                    <div className="flex items-center gap-1.5 font-bold text-slate-800">
-                      <School className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                      <span>{exam.authorSchool || 'Trường THPT tham gia hệ thống'}</span>
+                        {/* Author Attribution */}
+                        <div className="p-3 rounded-xl bg-slate-50 border border-slate-200/80 text-xs space-y-1">
+                          <div className="flex items-center gap-1.5 font-bold text-slate-800">
+                            <School className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+                            <span>{exam.authorSchool || 'Trường THPT tham gia hệ thống'}</span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
+                            <span className="inline-flex items-center gap-1">
+                              <Building2 className="w-3 h-3 text-slate-400" />
+                              {exam.authorDepartment || 'Tổ Hóa học'}
+                            </span>
+                            <span>
+                              · Tác giả: <strong>{exam.authorName}</strong>
+                            </span>
+                            {exam.cityApprovedAt && (
+                              <span>
+                                · Duyệt: {new Date(exam.cityApprovedAt).toLocaleDateString('vi-VN')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Structure Metrics */}
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 tabular-nums">
+                          <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
+                            <Clock className="w-3.5 h-3.5 text-slate-400" />
+                            {exam.durationMinutes} phút
+                          </span>
+                          <span>· Tổng {exam.questions.length} câu</span>
+                          <span>· P.I: {p1}</span>
+                          <span>· P.II: {p2}</span>
+                          <span>· P.III: {p3}</span>
+                        </div>
+                      </div>
+
+                      <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => setPreviewExam(exam)}
+                            className="min-h-[36px] px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5"
+                          >
+                            <Eye className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Xem trước</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isExporting}
+                            onClick={() => void handleExportWord(exam)}
+                            className="min-h-[36px] px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 disabled:opacity-60 text-indigo-800 text-xs font-bold inline-flex items-center gap-1.5"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                            <span>{isExporting ? 'Đang xuất...' : 'Tải Word'}</span>
+                          </button>
+                        </div>
+
+                        <button
+                          type="button"
+                          disabled={isCloning}
+                          onClick={() => void handleCloneExam(exam)}
+                          className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs"
+                        >
+                          <CopyPlus className="w-3.5 h-3.5" />
+                          <span>{isCloning ? 'Đang nhân bản...' : 'Nhân bản về kho cá nhân'}</span>
+                        </button>
+                      </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-600">
-                      <span className="inline-flex items-center gap-1">
-                        <Building2 className="w-3 h-3 text-slate-400" />
-                        {exam.authorDepartment || 'Tổ Hóa học'}
-                      </span>
-                      <span>· Tác giả: <strong>{exam.authorName}</strong></span>
-                      {exam.cityApprovedAt && (
-                        <span>
-                          · Duyệt: {new Date(exam.cityApprovedAt).toLocaleDateString('vi-VN')}
-                        </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* TAB 2: NGÂN HÀNG CÂU HỎI ĐÓNG GÓP (isSharedCity == true) */}
+      {activeTab === 'questions' && (
+        <>
+          {isLoadingQuestions ? (
+            <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center text-sm text-slate-500">
+              Đang tải Ngân hàng câu hỏi đóng góp từ Kho Thành phố...
+            </div>
+          ) : filteredQuestions.length === 0 ? (
+            <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-2">
+              <Database className="w-8 h-8 text-slate-300 mx-auto" />
+              <p className="text-sm font-bold text-slate-700">
+                {cityQuestions.length === 0
+                  ? 'Chưa có câu hỏi nào được chia sẻ lên Ngân hàng câu hỏi đóng góp.'
+                  : 'Không tìm thấy câu hỏi nào khớp với bộ lọc đang chọn.'}
+              </p>
+              <p className="text-xs text-slate-500 max-w-md mx-auto">
+                Thầy/Cô có thể mở mục <strong>Ngân hàng câu hỏi</strong> và bật nút gạt{' '}
+                <strong className="text-teal-700">&quot;Kho TP&quot;</strong> ở từng câu hỏi để đóng góp ngay vào kho dùng chung toàn thành phố.
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <div className="text-xs text-slate-500 font-medium tabular-nums">
+                Hiển thị <strong>{filteredQuestions.length}</strong> / {cityQuestions.length} câu hỏi đóng góp vào Kho Thành phố.
+              </div>
+
+              <div className="space-y-3">
+                {filteredQuestions.map((q) => {
+                  const isCloningQ = cloningQuestionId === q.id;
+                  const topicLabel = getQuestionTopicDisplay(q);
+                  const isExplanationOpen = expandedExplanationIds.has(q.id);
+                  const isOwnQuestion =
+                    q.ownerId === (currentUser.uid || currentUser.id) ||
+                    q.authorId === (currentUser.uid || currentUser.id);
+
+                  return (
+                    <div
+                      key={q.id}
+                      className="bg-white border border-slate-200 hover:border-teal-300 rounded-2xl p-5 shadow-xs transition-colors space-y-3"
+                    >
+                      {/* Top Metadata Row */}
+                      <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                        <div className="space-y-1.5 min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                            <span className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-800 border border-teal-200 font-bold text-[11px] inline-flex items-center gap-1">
+                              <Globe className="w-3 h-3" />
+                              Kho TP
+                            </span>
+                            <span className="font-mono font-bold text-slate-900">{q.code}</span>
+                            <span className="text-slate-300">·</span>
+                            <span className="font-semibold text-teal-700">
+                              {q.subjectName || 'Hóa học'}
+                            </span>
+                            <span className="text-slate-300">·</span>
+                            <span className="font-medium text-slate-700">
+                              {GRADE_LABELS[q.grade] || `Lớp ${q.grade}`}
+                            </span>
+                            {q.chapterName && (
+                              <>
+                                <span className="text-slate-300">·</span>
+                                <span className="text-slate-500">{q.chapterName}</span>
+                              </>
+                            )}
+                            <span className="text-slate-300">·</span>
+                            <span className="font-medium text-slate-800">{topicLabel}</span>
+                            <span className="text-slate-300">·</span>
+                            <span className="font-semibold text-indigo-700">
+                              {QUESTION_TYPE_SHORT_LABELS[q.type]}
+                            </span>
+                            <span className="text-slate-300">·</span>
+                            <span className="font-semibold text-slate-600">
+                              {COGNITIVE_LEVEL_SHORT_LABELS[q.level]}
+                            </span>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-slate-500">
+                            {(q.authorName || q.authorSchool) && (
+                              <span className="inline-flex items-center gap-1 text-slate-600 font-medium">
+                                <UserIcon className="w-3 h-3 text-teal-600" />
+                                {q.authorName || 'Giáo viên đóng góp'}
+                                {q.authorSchool ? ` · ${q.authorSchool}` : ''}
+                              </span>
+                            )}
+                            {q.source && <span>Nguồn: {q.source}</span>}
+                            {q.updatedAt && (
+                              <span>
+                                Cập nhật: {new Date(q.updatedAt).toLocaleDateString('vi-VN')}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-2 shrink-0">
+                          {q.explanation && (
+                            <button
+                              type="button"
+                              onClick={() => toggleExplanation(q.id)}
+                              className="min-h-[34px] px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition-colors"
+                            >
+                              {isExplanationOpen ? 'Ẩn lời giải' : 'Xem lời giải'}
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isCloningQ}
+                            onClick={() => void handleCloneQuestion(q)}
+                            className="min-h-[34px] px-3 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs transition-colors"
+                          >
+                            <CopyPlus className="w-3.5 h-3.5" />
+                            <span>
+                              {isCloningQ
+                                ? 'Đang lưu...'
+                                : isOwnQuestion
+                                ? 'Tạo bản sao cá nhân'
+                                : 'Lưu về kho cá nhân'}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Question Content */}
+                      <div className="text-sm font-medium text-slate-900 leading-relaxed">
+                        <ChemRenderer text={q.content} />
+                      </div>
+
+                      {/* Options / Statements / Short Answer */}
+                      {(q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') &&
+                        q.options && (
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-2.5 border-t border-slate-100">
+                            {q.options.map((opt) => {
+                              const isCorrect =
+                                opt.id === q.correctOptionId ||
+                                (q.correctOptionIds || []).includes(opt.id);
+                              return (
+                                <div
+                                  key={opt.id}
+                                  className={`p-2.5 rounded-xl border text-xs flex items-start gap-2 ${
+                                    isCorrect
+                                      ? 'border-emerald-400 bg-emerald-50/70 font-semibold text-emerald-950'
+                                      : 'border-slate-200 bg-slate-50 text-slate-700'
+                                  }`}
+                                >
+                                  <span
+                                    className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 font-bold ${
+                                      isCorrect
+                                        ? 'bg-emerald-600 text-white'
+                                        : 'bg-slate-200 text-slate-700'
+                                    }`}
+                                  >
+                                    {opt.id}
+                                  </span>
+                                  <div className="flex-1 min-w-0 break-words">
+                                    <ChemRenderer text={opt.text} inline />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                      {q.type === 'part2_true_false' && q.statements && (
+                        <div className="space-y-1.5 pt-2.5 border-t border-slate-100">
+                          {q.statements.map((stmt) => (
+                            <div
+                              key={stmt.id}
+                              className="p-2 rounded-lg bg-slate-50 border border-slate-200 text-xs flex items-center justify-between gap-3"
+                            >
+                              <div className="flex items-start gap-2 min-w-0">
+                                <span className="font-bold text-indigo-700 shrink-0">
+                                  {stmt.id})
+                                </span>
+                                <span className="min-w-0 break-words">
+                                  <ChemRenderer text={stmt.statement} inline />
+                                </span>
+                              </div>
+                              <span
+                                className={`px-2 py-0.5 rounded text-[11px] font-bold shrink-0 ${
+                                  stmt.correctAnswer
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-rose-100 text-rose-800'
+                                }`}
+                              >
+                                {stmt.correctAnswer ? 'Đúng' : 'Sai'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {q.type === 'part3_short_answer' && q.shortAnswerConfig && (
+                        <div className="pt-2.5 border-t border-slate-100 text-xs flex flex-wrap items-center gap-2">
+                          <span className="font-semibold text-slate-700">Đáp án:</span>
+                          <span className="px-2.5 py-1 bg-emerald-50 border border-emerald-200 text-emerald-900 font-mono font-bold rounded-lg">
+                            {q.shortAnswerConfig.acceptableAnswers.join(' / ')}
+                          </span>
+                        </div>
+                      )}
+
+                      {isExplanationOpen && q.explanation && (
+                        <div className="p-3 rounded-xl bg-indigo-50/60 border border-indigo-200/80 text-xs text-slate-800 space-y-1">
+                          <div className="font-bold text-indigo-900 flex items-center gap-1.5">
+                            <Sparkles className="w-3.5 h-3.5 text-indigo-600" />
+                            <span>Lời giải / Hướng dẫn</span>
+                          </div>
+                          <div className="leading-relaxed">
+                            <ChemRenderer text={q.explanation} />
+                          </div>
+                        </div>
                       )}
                     </div>
-                  </div>
-
-                  {/* Structure Metrics */}
-                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600 tabular-nums">
-                    <span className="inline-flex items-center gap-1 font-semibold text-slate-800">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      {exam.durationMinutes} phút
-                    </span>
-                    <span>· Tổng {exam.questions.length} câu</span>
-                    <span>· P.I: {p1}</span>
-                    <span>· P.II: {p2}</span>
-                    <span>· P.III: {p3}</span>
-                  </div>
-                </div>
-
-                <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => setPreviewExam(exam)}
-                      className="min-h-[36px] px-3 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-bold inline-flex items-center gap-1.5"
-                    >
-                      <Eye className="w-3.5 h-3.5 text-indigo-600" />
-                      <span>Xem trước</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={isExporting}
-                      onClick={() => void handleExportWord(exam)}
-                      className="min-h-[36px] px-3 py-1.5 rounded-xl border border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 disabled:opacity-60 text-indigo-800 text-xs font-bold inline-flex items-center gap-1.5"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>{isExporting ? 'Đang xuất...' : 'Tải Word'}</span>
-                    </button>
-                  </div>
-
-                  <button
-                    type="button"
-                    disabled={isCloning}
-                    onClick={() => void handleCloneExam(exam)}
-                    className="min-h-[36px] px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-xs"
-                  >
-                    <CopyPlus className="w-3.5 h-3.5" />
-                    <span>{isCloning ? 'Đang nhân bản...' : 'Nhân bản về kho cá nhân'}</span>
-                  </button>
-                </div>
+                  );
+                })}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          )}
+        </>
       )}
 
       {/* Read-only Full Exam Preview Modal */}

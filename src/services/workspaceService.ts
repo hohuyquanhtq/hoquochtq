@@ -240,6 +240,8 @@ export function buildQuestionDocPayload(q: Question, ownerId: string, existingCr
     ...(q.explanation ? { explanation: q.explanation.slice(0, 20000) } : {}),
     ...(q.source ? { source: q.source.slice(0, 300) } : {}),
     authorId: q.authorId || ownerId,
+    ...(q.authorName && q.authorName.trim() ? { authorName: q.authorName.trim().slice(0, 150) } : {}),
+    ...(q.authorSchool && q.authorSchool.trim() ? { authorSchool: q.authorSchool.trim().slice(0, 200) } : {}),
     ...(q.parseStatus ? { parseStatus: q.parseStatus } : {}),
     ...(q.parseWarning ? { parseWarning: q.parseWarning.slice(0, 500) } : {}),
     ...(q.teacherVerified !== undefined ? { teacherVerified: !!q.teacherVerified } : {}),
@@ -295,31 +297,53 @@ export async function saveQuestionsBatchToFirestore(
 export async function updateQuestionCityShareInFirestore(
   q: Question,
   isSharedCity: boolean,
-  explicitOwnerId?: string
+  explicitOwnerId?: string,
+  authorMeta?: { authorName?: string; authorSchool?: string }
 ): Promise<void> {
   if (firebaseInitError || !auth.currentUser) return;
   const ownerId = explicitOwnerId || auth.currentUser.uid;
   const safeId = safeDocId(q.id);
   const ref = doc(db, 'questions', safeId);
   const nowIso = new Date().toISOString();
+  const cleanAuthorName = (authorMeta?.authorName || q.authorName || '').trim().slice(0, 150);
+  const cleanAuthorSchool = (authorMeta?.authorSchool || q.authorSchool || '').trim().slice(0, 200);
+  const sharePatch = stripUndefinedDeep({
+    isSharedCity: !!isSharedCity,
+    ...(isSharedCity && cleanAuthorName ? { authorName: cleanAuthorName } : {}),
+    ...(isSharedCity && cleanAuthorSchool ? { authorSchool: cleanAuthorSchool } : {}),
+    updatedAt: nowIso,
+    serverUpdatedAt: serverTimestamp(),
+  });
+
   try {
-    const existing = await getDoc(ref).catch(() => null);
-    if (existing?.exists() && existing.data()?.serverCreatedAt) {
-      await updateDoc(ref, {
-        isSharedCity: !!isSharedCity,
-        updatedAt: nowIso,
-        serverUpdatedAt: serverTimestamp(),
-      });
-      return;
+    // Immediately attempt updateDoc on the Firestore question document
+    await updateDoc(ref, sharePatch);
+  } catch (updateErr) {
+    // Fallback if doc does not exist yet or is a legacy doc missing serverCreatedAt
+    try {
+      const existing = await getDoc(ref).catch(() => null);
+      if (existing?.exists() && !existing.data()?.serverCreatedAt) {
+        await updateDoc(ref, {
+          ...sharePatch,
+          serverCreatedAt: serverTimestamp(),
+        });
+        return;
+      }
+      const payload = buildQuestionDocPayload(
+        {
+          ...q,
+          isSharedCity: !!isSharedCity,
+          ...(cleanAuthorName ? { authorName: cleanAuthorName } : {}),
+          ...(cleanAuthorSchool ? { authorSchool: cleanAuthorSchool } : {}),
+          updatedAt: nowIso,
+        },
+        ownerId,
+        existing?.exists() ? existing.data()?.serverCreatedAt : undefined
+      );
+      await setDoc(ref, payload);
+    } catch (fallbackErr) {
+      handleFirestoreError(fallbackErr || updateErr, OperationType.WRITE, `questions/${safeId}`);
     }
-    const payload = buildQuestionDocPayload(
-      { ...q, isSharedCity: !!isSharedCity, updatedAt: nowIso },
-      ownerId,
-      existing?.exists() ? existing.data()?.serverCreatedAt : undefined
-    );
-    await setDoc(ref, payload);
-  } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `questions/${safeId}`);
   }
 }
 
@@ -1103,6 +1127,67 @@ export async function reviewExamCityShareByAdmin(
       serverUpdatedAt: serverTimestamp(),
     })
   );
+}
+
+export async function fetchCitySharedQuestions(): Promise<Question[]> {
+  if (firebaseInitError || !auth.currentUser) return [];
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'questions'), where('isSharedCity', '==', true))
+    );
+    return snap.docs
+      .map((d) => {
+        const raw = d.data() as Question;
+        const normalizedGrade = normalizeQuestionGrade(raw.grade);
+        return {
+          ...raw,
+          id: raw.id || d.id,
+          grade: normalizedGrade || raw.grade,
+          isSharedCity: true,
+        } satisfies Question;
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.createdAt).getTime() -
+          new Date(a.updatedAt || a.createdAt).getTime()
+      );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'questions');
+    return [];
+  }
+}
+
+export async function cloneCityQuestionToPersonalBank(
+  sourceQuestion: Question,
+  targetTeacher: User
+): Promise<Question> {
+  if (firebaseInitError || !auth.currentUser) {
+    throw new Error('Bạn cần đăng nhập để lưu câu hỏi về ngân hàng cá nhân.');
+  }
+  const ownerId = targetTeacher.uid || targetTeacher.id || auth.currentUser.uid;
+  const nowIso = new Date().toISOString();
+  const newQuestionId = `q_city_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+
+  const cloned: Question = {
+    ...structuredClone(sourceQuestion),
+    id: newQuestionId,
+    ownerId,
+    authorId: ownerId,
+    authorName: targetTeacher.name || auth.currentUser.displayName || sourceQuestion.authorName,
+    authorSchool: targetTeacher.school || sourceQuestion.authorSchool,
+    isSharedCity: false,
+    isPublicCity: false,
+    source:
+      sourceQuestion.source ||
+      (sourceQuestion.authorSchool
+        ? `Kho TP (${sourceQuestion.authorSchool})`
+        : 'Kho câu hỏi Thành phố'),
+    createdAt: nowIso,
+    updatedAt: nowIso,
+  };
+
+  await saveQuestionToFirestore(cloned, ownerId);
+  return cloned;
 }
 
 export async function fetchCityPublicExams(): Promise<Exam[]> {

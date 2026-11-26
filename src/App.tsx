@@ -771,12 +771,17 @@ export default function App() {
       isSharedCity,
       ownerId: activeUid,
       authorId: q.authorId || activeUid,
+      authorName: q.authorName || userProfile?.name,
+      authorSchool: q.authorSchool || userProfile?.school,
       updatedAt: new Date().toISOString(),
     };
     StorageService.updateQuestion(scoped, activeUid);
     setQuestions(StorageService.getQuestions(activeUid));
     try {
-      await updateQuestionCityShareInFirestore(scoped, isSharedCity, activeUid);
+      await updateQuestionCityShareInFirestore(scoped, isSharedCity, activeUid, {
+        authorName: userProfile?.name,
+        authorSchool: userProfile?.school,
+      });
     } catch (err) {
       StorageService.saveQuestions(previousQuestions, activeUid);
       setQuestions(previousQuestions);
@@ -1543,7 +1548,17 @@ export default function App() {
                   }
                   setExams((prev) => [clonedExam, ...prev.filter((e) => e.id !== clonedExam.id)]);
                 }}
+                onQuestionCloned={(clonedQuestion) => {
+                  if (activeUid) {
+                    StorageService.addQuestion(clonedQuestion, activeUid);
+                  }
+                  setQuestions((prev) => [
+                    clonedQuestion,
+                    ...prev.filter((item) => item.id !== clonedQuestion.id),
+                  ]);
+                }}
                 onOpenPersonalExams={() => setActiveTab('exam_manager')}
+                onOpenPersonalQuestionBank={() => setActiveTab('question_bank')}
               />
             )}
 

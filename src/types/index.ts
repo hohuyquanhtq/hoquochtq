@@ -228,6 +228,8 @@ export interface Question {
   source?: string;            // Đề thi thử THPT Quốc gia 2024, Chuyên Sư Phạm...
   ownerId?: string;
   authorId: string;
+  authorName?: string;
+  authorSchool?: string;
   createdAt: string;
   updatedAt: string;
   
