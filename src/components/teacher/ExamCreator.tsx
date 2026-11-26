@@ -9,31 +9,38 @@ import {
   ArrowLeft,
   ArrowUp,
   ArrowDown,
+  GripVertical,
   Shuffle, 
-  Sliders, 
+  Sliders,
+  SlidersHorizontal,
   Percent, 
-  Plus, 
   ListOrdered,
   Lock,
   Unlock,
   Eye,
   EyeOff,
   Award,
-  BookOpen,
   RefreshCw
 } from 'lucide-react';
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { APP_CONFIG } from '../../constants/brand';
 import {
+  COGNITIVE_LEVEL_SHORT_LABELS,
   DEFAULT_GDPT_2018_SUBJECTS,
   DEFAULT_SUBJECT_ID,
   DEFAULT_SUBJECT_NAME,
   QUESTION_TYPE_SHORT_LABELS,
+  getQuestionTopicDisplay,
 } from '../../constants/subjects';
 import { flattenFolderTree, getFolderPathLabel, normalizeFolderId } from '../../utils/folderTree';
 import { StorageService } from '../../services/storage';
 import { ExamShareModal } from '../common/ExamShareModal';
-import { QuestionBankPickerModal, cloneQuestionsForExam } from './QuestionBankPickerModal';
+import {
+  ExamPickerTab,
+  QuestionBankPickerModal,
+  cloneQuestionsForExam,
+  shuffleQuestionsList,
+} from './QuestionBankPickerModal';
 import {
   generateExamCode6,
   generateFallbackExamCode6,
@@ -87,7 +94,9 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   const [durationMinutes, setDurationMinutes] = useState(45);
   const [selectedFolderId, setSelectedFolderId] = useState<string>(initialFolderId || '');
   const [isPickerOpen, setIsPickerOpen] = useState(false);
-  const [pickerInitialTab, setPickerInitialTab] = useState<'manual' | 'matrix'>('manual');
+  const [pickerInitialTab, setPickerInitialTab] = useState<ExamPickerTab>('matrix');
+  const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
+  const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
 
   const [questions, setQuestions] = useState<Question[]>(() =>
     cloneQuestionsForExam(initialQuestions)
@@ -124,9 +133,11 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
   const [isSavingExam, setIsSavingExam] = useState(false);
 
   // Question counts
-  const p1Count = questions.filter(q => q.type === 'part1_single_choice').length;
-  const p2Count = questions.filter(q => q.type === 'part2_true_false').length;
-  const p3Count = questions.filter(q => q.type === 'part3_short_answer').length;
+  const p1Count = questions.filter(
+    (q) => q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice'
+  ).length;
+  const p2Count = questions.filter((q) => q.type === 'part2_true_false').length;
+  const p3Count = questions.filter((q) => q.type === 'part3_short_answer').length;
 
   // Calculate current total score
   const calculateTotalScore = (): number => {
@@ -217,6 +228,17 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
       copy[index] = copy[targetIndex];
       copy[targetIndex] = temp;
       return copy;
+    });
+  };
+
+  const handleDragReorder = (fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex || fromIndex < 0 || toIndex < 0) return;
+    setQuestions((prev) => {
+      if (fromIndex >= prev.length || toIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
     });
   };
 
@@ -1069,6 +1091,9 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
               </h2>
               <p className="text-xs text-slate-500 mt-0.5 tabular-nums">
                 Phần I: {p1Count} câu · Phần II: {p2Count} câu · Phần III: {p3Count} câu
+                {questions.length > 1 && (
+                  <span className="text-slate-400"> · Kéo thả thẻ để đổi thứ tự</span>
+                )}
               </p>
             </div>
 
@@ -1082,28 +1107,28 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
                 className="min-h-[38px] px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-xs"
               >
                 <Sparkles className="w-3.5 h-3.5" />
-                <span>Tạo đề tự động theo Ma trận</span>
+                <span>Tạo theo Ma trận GDPT 2018</span>
               </button>
 
               <button
                 type="button"
                 onClick={() => {
-                  setPickerInitialTab('manual');
+                  setPickerInitialTab('flexible');
                   setIsPickerOpen(true);
                 }}
                 className="min-h-[38px] px-3.5 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold inline-flex items-center gap-1.5 transition-colors shadow-xs"
               >
-                <BookOpen className="w-3.5 h-3.5" />
-                <span>Chọn từ Ngân hàng</span>
+                <SlidersHorizontal className="w-3.5 h-3.5" />
+                <span>Tạo theo Bài học &amp; Mức độ</span>
               </button>
 
               <button
                 type="button"
+                disabled={questions.length < 2}
                 onClick={() => {
-                  const shuffled = [...questions].sort(() => Math.random() - 0.5);
-                  setQuestions(shuffled);
+                  setQuestions((prev) => shuffleQuestionsList(prev));
                 }}
-                className="min-h-[38px] px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 inline-flex items-center gap-1.5"
+                className="min-h-[38px] px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 inline-flex items-center gap-1.5"
               >
                 <Shuffle className="w-3.5 h-3.5" />
                 <span>Đảo thứ tự</span>
@@ -1114,120 +1139,208 @@ export const ExamCreator: React.FC<ExamCreatorProps> = ({
           {/* List */}
           <div className="space-y-3">
             {questions.length === 0 ? (
-              <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-3">
-                <p className="text-slate-600 text-sm font-medium">
+              <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-10 text-center space-y-3">
+                <p className="text-slate-700 text-sm font-semibold">
                   Chưa có câu hỏi nào trong đề thi này.
                 </p>
-                <p className="text-slate-500 text-xs">
-                  Bốc câu hỏi ngẫu nhiên theo Ma trận GDPT 2018 (Chuyên đề × Mức độ) hoặc chọn thủ công từ Ngân hàng.
+                <p className="text-slate-500 text-xs max-w-lg mx-auto leading-relaxed">
+                  Chọn tạo đề cân đối theo Ma trận chuẩn GDPT 2018 hoặc chọn linh hoạt nhiều Bài học &amp; Mức độ nhận thức (bốc ngẫu nhiên hoặc tick chọn thủ công).
                 </p>
-                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                <div className="flex flex-wrap items-center justify-center gap-2.5 pt-1">
                   <button
                     type="button"
                     onClick={() => {
                       setPickerInitialTab('matrix');
                       setIsPickerOpen(true);
                     }}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold"
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold shadow-xs transition-colors"
                   >
                     <Sparkles className="w-4 h-4" />
-                    <span>Tạo đề tự động theo Ma trận</span>
+                    <span>Tạo theo Ma trận GDPT 2018</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => {
-                      setPickerInitialTab('manual');
+                      setPickerInitialTab('flexible');
                       setIsPickerOpen(true);
                     }}
-                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold"
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs transition-colors"
                   >
-                    <Plus className="w-4 h-4" />
-                    <span>Chọn thủ công ({bankQuestions.length} câu)</span>
+                    <SlidersHorizontal className="w-4 h-4" />
+                    <span>Tạo theo Bài học &amp; Mức độ ({bankQuestions.length} câu)</span>
                   </button>
                 </div>
               </div>
             ) : (
-              questions.map((q, idx) => (
-                <div
-                  key={q.id}
-                  className="bg-white border border-slate-200 rounded-2xl p-4 shadow-xs text-xs space-y-2 hover:border-teal-200 transition-colors"
-                >
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="w-6 h-6 rounded-lg bg-slate-100 text-slate-800 font-bold flex items-center justify-center text-xs tabular-nums">
-                        {idx + 1}
-                      </span>
-                      <span className="font-mono font-bold text-slate-700">{q.code}</span>
-                      <span className="text-slate-400">·</span>
-                      <span className="font-semibold text-teal-700">
-                        {QUESTION_TYPE_SHORT_LABELS[q.type]}
-                      </span>
-                    </div>
+              questions.map((q, idx) => {
+                const isDragging = draggedIndex === idx;
+                const isDragTarget = dragOverIndex === idx && draggedIndex !== null && draggedIndex !== idx;
+                const topicDisplay = getQuestionTopicDisplay(q);
 
-                    <div className="flex items-center gap-1 shrink-0">
-                      <button
-                        type="button"
-                        disabled={idx === 0}
-                        onClick={() => handleMoveQuestion(idx, 'up')}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30"
-                        title="Di chuyển lên"
-                      >
-                        <ArrowUp className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        disabled={idx === questions.length - 1}
-                        onClick={() => handleMoveQuestion(idx, 'down')}
-                        className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30"
-                        title="Di chuyển xuống"
-                      >
-                        <ArrowDown className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => handleRemoveQuestion(q.id)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                        title="Gỡ câu này khỏi đề thi"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="text-slate-900 font-medium leading-relaxed">
-                    <ChemRenderer text={q.content} />
-                  </div>
-
-                  {q.type === 'part1_single_choice' && q.options && (
-                    <div className="grid grid-cols-2 gap-1.5 pt-1">
-                      {q.options.map(o => (
-                        <div
-                          key={o.id}
-                          className={`p-1.5 rounded-lg border text-[11px] flex items-center gap-1.5 ${
-                            o.id === q.correctOptionId ? 'bg-emerald-50 border-emerald-300 font-semibold text-emerald-900' : 'bg-slate-50 border-slate-200 text-slate-600'
-                          }`}
+                return (
+                  <div
+                    key={q.id}
+                    draggable
+                    onDragStart={(e) => {
+                      setDraggedIndex(idx);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', String(idx));
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (dragOverIndex !== idx) {
+                        setDragOverIndex(idx);
+                      }
+                    }}
+                    onDragLeave={() => {
+                      if (dragOverIndex === idx) {
+                        setDragOverIndex(null);
+                      }
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      const rawFrom = e.dataTransfer.getData('text/plain');
+                      const fromIdx = draggedIndex ?? (rawFrom ? Number(rawFrom) : -1);
+                      if (Number.isInteger(fromIdx) && fromIdx >= 0) {
+                        handleDragReorder(fromIdx, idx);
+                      }
+                      setDraggedIndex(null);
+                      setDragOverIndex(null);
+                    }}
+                    onDragEnd={() => {
+                      setDraggedIndex(null);
+                      setDragOverIndex(null);
+                    }}
+                    className={`bg-white border rounded-2xl p-4 shadow-xs text-xs space-y-2 transition-all ${
+                      isDragging
+                        ? 'opacity-50 border-indigo-300 bg-indigo-50/30'
+                        : isDragTarget
+                          ? 'border-teal-500 ring-2 ring-teal-500/20 bg-teal-50/20'
+                          : 'border-slate-200 hover:border-teal-200'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 flex-wrap min-w-0">
+                        <span
+                          className="p-1 -ml-1 rounded-md text-slate-400 hover:text-slate-600 cursor-grab active:cursor-grabbing shrink-0"
+                          title="Kéo thả để sắp xếp lại thứ tự câu hỏi"
                         >
-                          <span className="font-bold">{o.id}.</span>
-                          <span className="flex-1 break-words"><ChemRenderer text={o.text} inline /></span>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-
-                  {q.type === 'part2_true_false' && q.statements && (
-                    <div className="space-y-1 pt-1">
-                      {q.statements.map(s => (
-                        <div key={s.id} className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] flex justify-between items-center">
-                          <span><b>{s.id})</b> <ChemRenderer text={s.statement} inline /></span>
-                          <span className={`px-1.5 py-0.5 rounded font-bold text-[10px] ${s.correctAnswer ? 'text-emerald-700 bg-emerald-100' : 'text-rose-700 bg-rose-100'}`}>
-                            {s.correctAnswer ? 'Đúng' : 'Sai'}
+                          <GripVertical className="w-4 h-4" />
+                        </span>
+                        <span className="w-6 h-6 rounded-lg bg-slate-100 text-slate-800 font-bold flex items-center justify-center text-xs tabular-nums shrink-0">
+                          {idx + 1}
+                        </span>
+                        <span className="font-mono font-bold text-slate-700">{q.code}</span>
+                        <span className="text-slate-300">·</span>
+                        <span className="font-semibold text-teal-700">
+                          {QUESTION_TYPE_SHORT_LABELS[q.type]}
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-700 border border-indigo-100 font-semibold text-[11px]">
+                          {COGNITIVE_LEVEL_SHORT_LABELS[q.level]}
+                        </span>
+                        {topicDisplay && (
+                          <span className="text-[11px] text-slate-500 truncate max-w-[260px]" title={topicDisplay}>
+                            {topicDisplay}
                           </span>
-                        </div>
-                      ))}
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          disabled={idx === 0}
+                          onClick={() => handleMoveQuestion(idx, 'up')}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30"
+                          title="Di chuyển lên"
+                        >
+                          <ArrowUp className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={idx === questions.length - 1}
+                          onClick={() => handleMoveQuestion(idx, 'down')}
+                          className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 disabled:opacity-30"
+                          title="Di chuyển xuống"
+                        >
+                          <ArrowDown className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveQuestion(q.id)}
+                          className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                          title="Gỡ câu này khỏi đề thi"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              ))
+
+                    <div className="text-slate-900 font-medium leading-relaxed">
+                      <ChemRenderer text={q.content} />
+                    </div>
+
+                    {(q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') && q.options && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-1">
+                        {q.options.map((o) => {
+                          const isCorrect =
+                            o.id === q.correctOptionId ||
+                            (Array.isArray(q.correctOptionIds) && q.correctOptionIds.includes(o.id));
+                          return (
+                            <div
+                              key={o.id}
+                              className={`p-1.5 rounded-lg border text-[11px] flex items-center gap-1.5 ${
+                                isCorrect
+                                  ? 'bg-emerald-50 border-emerald-300 font-semibold text-emerald-900'
+                                  : 'bg-slate-50 border-slate-200 text-slate-600'
+                              }`}
+                            >
+                              <span className="font-bold">{o.id}.</span>
+                              <span className="flex-1 break-words">
+                                <ChemRenderer text={o.text} inline />
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {q.type === 'part2_true_false' && q.statements && (
+                      <div className="space-y-1 pt-1">
+                        {q.statements.map((s) => (
+                          <div
+                            key={s.id}
+                            className="p-1.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] flex justify-between items-center gap-2"
+                          >
+                            <span>
+                              <b>{s.id})</b> <ChemRenderer text={s.statement} inline />
+                            </span>
+                            <span
+                              className={`px-1.5 py-0.5 rounded font-bold text-[10px] shrink-0 ${
+                                s.correctAnswer
+                                  ? 'text-emerald-700 bg-emerald-100'
+                                  : 'text-rose-700 bg-rose-100'
+                              }`}
+                            >
+                              {s.correctAnswer ? 'Đúng' : 'Sai'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {q.type === 'part3_short_answer' && q.shortAnswerConfig && (
+                      <div className="pt-1 flex flex-wrap items-center gap-1.5 text-[11px]">
+                        <span className="text-slate-500 font-medium">Đáp án chuẩn:</span>
+                        <span className="px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold font-mono">
+                          {(q.shortAnswerConfig.acceptableAnswers || []).join(' / ')}
+                          {q.shortAnswerConfig.unit ? ` ${q.shortAnswerConfig.unit}` : ''}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
