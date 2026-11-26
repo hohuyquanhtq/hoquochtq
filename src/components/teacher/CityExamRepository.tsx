@@ -1,10 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Exam, Question, User } from '../../types';
+import { Exam, ExamShareStatus, Question, User } from '../../types';
 import {
   cloneCityExamToPersonalBank,
   cloneCityQuestionToPersonalBank,
+  fetchCityExamsForSuperAdmin,
   fetchCityPublicExams,
   fetchCitySharedQuestions,
+  reviewExamCityShareByAdmin,
 } from '../../services/workspaceService';
 import { exportPrintReadyExamWithAnswersDocx } from '../../services/sampleWordTemplateService';
 import {
@@ -31,20 +33,28 @@ import {
   RefreshCw,
   School,
   Search,
+  ShieldCheck,
   Sparkles,
   User as UserIcon,
   X,
+  XCircle,
 } from 'lucide-react';
 
 interface CityExamRepositoryProps {
   currentUser: User;
   onExamCloned: (clonedExam: Exam) => void;
   onQuestionCloned?: (clonedQuestion: Question) => void;
+  onExamShareStatusChanged?: (
+    examId: string,
+    nextStatus: ExamShareStatus,
+    reviewNote?: string
+  ) => void;
   onOpenPersonalExams?: () => void;
   onOpenPersonalQuestionBank?: () => void;
 }
 
 type CityRepositoryTab = 'exams' | 'questions';
+type AdminExamStatusFilter = 'all' | 'pending_review' | 'city_public';
 
 const TOPIC_DISPLAY_LABELS: Record<string, string> = {
   hoa_dai_cuong: 'Hóa đại cương',
@@ -60,10 +70,15 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   currentUser,
   onExamCloned,
   onQuestionCloned,
+  onExamShareStatusChanged,
   onOpenPersonalExams,
   onOpenPersonalQuestionBank,
 }) => {
+  const isSuperAdmin = currentUser.role === 'admin';
+  const adminUid = currentUser.uid || currentUser.id;
+
   const [activeTab, setActiveTab] = useState<CityRepositoryTab>('exams');
+  const [adminStatusFilter, setAdminStatusFilter] = useState<AdminExamStatusFilter>('all');
 
   // City Exams state
   const [cityExams, setCityExams] = useState<Exam[]>([]);
@@ -94,6 +109,9 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   const [cloningExamId, setCloningExamId] = useState<string | null>(null);
   const [exportingWordId, setExportingWordId] = useState<string | null>(null);
   const [cloningQuestionId, setCloningQuestionId] = useState<string | null>(null);
+  const [reviewingExamId, setReviewingExamId] = useState<string | null>(null);
+  const [rejectTargetExam, setRejectTargetExam] = useState<Exam | null>(null);
+  const [rejectReason, setRejectReason] = useState<string>('');
   const [expandedExplanationIds, setExpandedExplanationIds] = useState<Set<string>>(new Set());
 
   const showToast = (msg: string, action: 'exams' | 'questions' | null = null) => {
@@ -112,7 +130,7 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
     const errors: string[] = [];
 
     const [examsRes, questionsRes] = await Promise.allSettled([
-      fetchCityPublicExams(),
+      isSuperAdmin ? fetchCityExamsForSuperAdmin() : fetchCityPublicExams(),
       fetchCitySharedQuestions(),
     ]);
 
@@ -146,7 +164,17 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
 
   useEffect(() => {
     void loadRepositoryData();
-  }, []);
+  }, [isSuperAdmin]);
+
+  const pendingExamsCount = useMemo(
+    () => cityExams.filter((ex) => ex.share_status === 'pending_review').length,
+    [cityExams]
+  );
+
+  const approvedExamsCount = useMemo(
+    () => cityExams.filter((ex) => ex.share_status === 'city_public').length,
+    [cityExams]
+  );
 
   const availableSchools = useMemo(() => {
     const set = new Set<string>();
@@ -167,6 +195,11 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   const filteredExams = useMemo(() => {
     const term = searchTerm.trim().toLowerCase();
     return cityExams.filter((ex) => {
+      if (isSuperAdmin) {
+        if (adminStatusFilter !== 'all' && ex.share_status !== adminStatusFilter) return false;
+      } else {
+        if (ex.share_status !== 'city_public') return false;
+      }
       if (gradeFilter !== 'all' && ex.grade !== gradeFilter) return false;
       if (topicFilter !== 'all' && ex.topic !== topicFilter) return false;
       if (schoolFilter !== 'all' && (ex.authorSchool || '').trim() !== schoolFilter) return false;
@@ -184,7 +217,15 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
       }
       return true;
     });
-  }, [cityExams, gradeFilter, topicFilter, schoolFilter, searchTerm]);
+  }, [
+    cityExams,
+    isSuperAdmin,
+    adminStatusFilter,
+    gradeFilter,
+    topicFilter,
+    schoolFilter,
+    searchTerm,
+  ]);
 
   const filteredQuestions = useMemo(() => {
     const term = questionSearchTerm.trim().toLowerCase();
@@ -219,9 +260,83 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
   ]);
 
   const totalCityExamQuestions = useMemo(
-    () => cityExams.reduce((sum, ex) => sum + (ex.questions?.length || 0), 0),
-    [cityExams]
+    () => filteredExams.reduce((sum, ex) => sum + (ex.questions?.length || 0), 0),
+    [filteredExams]
   );
+
+  const handleApproveExam = async (exam: Exam) => {
+    if (!isSuperAdmin || reviewingExamId === exam.id) return;
+    setReviewingExamId(exam.id);
+    setErrorMsg(null);
+    const nowIso = new Date().toISOString();
+    const note = 'Đã kiểm duyệt chuẩn GDPT 2018.';
+    try {
+      await reviewExamCityShareByAdmin(exam.id, adminUid, 'approve', note);
+      setCityExams((prev) =>
+        prev.map((item) =>
+          item.id === exam.id
+            ? {
+                ...item,
+                share_status: 'city_public',
+                cityApprovedBy: adminUid,
+                cityApprovedAt: nowIso,
+                cityReviewNote: note,
+                updatedAt: nowIso,
+              }
+            : item
+        )
+      );
+      setPreviewExam((prev) =>
+        prev && prev.id === exam.id
+          ? {
+              ...prev,
+              share_status: 'city_public',
+              cityApprovedBy: adminUid,
+              cityApprovedAt: nowIso,
+              cityReviewNote: note,
+            }
+          : prev
+      );
+      onExamShareStatusChanged?.(exam.id, 'city_public', note);
+      showToast(`Đã duyệt công khai đề "${exam.title}" lên Kho đề Thành phố!`);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'Không thể duyệt công khai đề thi. Vui lòng thử lại.'
+      );
+    } finally {
+      setReviewingExamId(null);
+    }
+  };
+
+  const handleConfirmRejectExam = async () => {
+    if (!isSuperAdmin || !rejectTargetExam || reviewingExamId === rejectTargetExam.id) return;
+    const exam = rejectTargetExam;
+    const note =
+      rejectReason.trim() || 'Chưa đạt yêu cầu kiểm duyệt — vui lòng chỉnh sửa và gửi lại.';
+    setReviewingExamId(exam.id);
+    setErrorMsg(null);
+    try {
+      await reviewExamCityShareByAdmin(exam.id, adminUid, 'reject', note);
+      setCityExams((prev) => prev.filter((item) => item.id !== exam.id));
+      if (previewExam?.id === exam.id) {
+        setPreviewExam(null);
+      }
+      onExamShareStatusChanged?.(exam.id, 'private', note);
+      setRejectTargetExam(null);
+      setRejectReason('');
+      showToast(`Đã từ chối và trả lại đề "${exam.title}" cho giáo viên tác giả.`);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error
+          ? err.message
+          : 'Không thể từ chối đề thi này. Vui lòng thử lại.'
+      );
+    } finally {
+      setReviewingExamId(null);
+    }
+  };
 
   const handleCloneExam = async (exam: Exam) => {
     setCloningExamId(exam.id);
@@ -293,23 +408,35 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
       <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div className="space-y-1">
-            <div className="flex items-center gap-2 text-teal-700 font-bold text-xs uppercase tracking-wider">
+            <div className="flex flex-wrap items-center gap-2 text-teal-700 font-bold text-xs uppercase tracking-wider">
               <Globe className="w-4 h-4 shrink-0" />
               <span>Kho học liệu dùng chung · TP. Đà Nẵng</span>
+              {isSuperAdmin && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-emerald-800 normal-case tracking-normal text-[11px]">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  Chế độ kiểm duyệt Super Admin
+                </span>
+              )}
             </div>
             <h1 className="text-2xl font-extrabold text-slate-900 tracking-tight">
               Kho đề &amp; Ngân hàng câu hỏi Thành phố (GDPT 2018)
             </h1>
             <p className="text-sm text-slate-600 max-w-3xl">
-              Khai thác các đề kiểm tra hoàn chỉnh đã được kiểm duyệt và ngân hàng câu hỏi do giáo viên toàn thành phố đóng góp để tải bản in Word hoặc lưu về kho cá nhân.
+              {isSuperAdmin
+                ? 'Kiểm duyệt các đề thi giáo viên đề xuất chia sẻ lên Kho Thành phố, quản lý đề đã công khai và khai thác ngân hàng câu hỏi đóng góp toàn thành phố.'
+                : 'Khai thác các đề kiểm tra hoàn chỉnh đã được kiểm duyệt và ngân hàng câu hỏi do giáo viên toàn thành phố đóng góp để tải bản in Word hoặc lưu về kho cá nhân.'}
             </p>
           </div>
 
           <div className="flex items-center gap-3 shrink-0">
             <div className="px-4 py-2.5 rounded-xl bg-slate-50 border border-slate-200 text-right tabular-nums">
-              <p className="text-[11px] font-semibold text-slate-500">Tổng học liệu Kho TP</p>
+              <p className="text-[11px] font-semibold text-slate-500">
+                {isSuperAdmin ? 'Tổng đề & câu Kho TP' : 'Tổng học liệu Kho TP'}
+              </p>
               <p className="text-base sm:text-lg font-extrabold text-slate-900">
-                {cityExams.length} đề · {cityQuestions.length} câu đóng góp
+                {isSuperAdmin
+                  ? `${approvedExamsCount} đã duyệt · ${pendingExamsCount} chờ duyệt`
+                  : `${approvedExamsCount} đề · ${cityQuestions.length} câu đóng góp`}
               </p>
             </div>
             <button
@@ -378,6 +505,87 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
             </span>
           </button>
         </div>
+
+        {/* Super Admin Sub-Tabs for Exam Moderation (Only visible to Super Admin in Tab 1) */}
+        {activeTab === 'exams' && isSuperAdmin && (
+          <div
+            role="tablist"
+            aria-label="Bộ lọc trạng thái kiểm duyệt đề thi"
+            className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100"
+          >
+            <span className="text-xs font-bold text-slate-500 mr-1">Trạng thái duyệt:</span>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminStatusFilter === 'all'}
+              onClick={() => setAdminStatusFilter('all')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                adminStatusFilter === 'all'
+                  ? 'bg-slate-900 border-slate-900 text-white'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <span>Tất cả</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums ${
+                  adminStatusFilter === 'all'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {cityExams.length}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminStatusFilter === 'pending_review'}
+              onClick={() => setAdminStatusFilter('pending_review')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                adminStatusFilter === 'pending_review'
+                  ? 'bg-amber-600 border-amber-600 text-white'
+                  : 'bg-amber-50/70 border-amber-200 text-amber-800 hover:bg-amber-100'
+              }`}
+            >
+              <Clock className="w-3.5 h-3.5" />
+              <span>Chờ kiểm duyệt</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums ${
+                  adminStatusFilter === 'pending_review'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-amber-200/70 text-amber-900'
+                }`}
+              >
+                {pendingExamsCount}
+              </span>
+            </button>
+
+            <button
+              type="button"
+              role="tab"
+              aria-selected={adminStatusFilter === 'city_public'}
+              onClick={() => setAdminStatusFilter('city_public')}
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold inline-flex items-center gap-1.5 border transition-colors ${
+                adminStatusFilter === 'city_public'
+                  ? 'bg-emerald-600 border-emerald-600 text-white'
+                  : 'bg-emerald-50/70 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+              }`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>Đã duyệt công khai</span>
+              <span
+                className={`px-1.5 py-0.5 rounded text-[11px] tabular-nums ${
+                  adminStatusFilter === 'city_public'
+                    ? 'bg-white/20 text-white'
+                    : 'bg-emerald-200/70 text-emerald-900'
+                }`}
+              >
+                {approvedExamsCount}
+              </span>
+            </button>
+          </div>
+        )}
 
         {/* Filter Bar per Active Tab */}
         {activeTab === 'exams' ? (
@@ -530,8 +738,10 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
             <div className="bg-white border border-dashed border-slate-300 rounded-2xl p-12 text-center space-y-2">
               <Filter className="w-8 h-8 text-slate-300 mx-auto" />
               <p className="text-sm font-bold text-slate-700">
-                {cityExams.length === 0
-                  ? 'Hiện chưa có đề thi nào được duyệt công khai lên Kho Thành phố.'
+                {isSuperAdmin && adminStatusFilter === 'pending_review'
+                  ? 'Hiện không có đề thi nào đang chờ kiểm duyệt.'
+                  : cityExams.length === 0
+                  ? 'Hiện chưa có đề thi nào trong Kho đề Thành phố.'
                   : 'Không tìm thấy đề thi nào khớp với bộ lọc đang chọn.'}
               </p>
               <p className="text-xs text-slate-500 max-w-md mx-auto">
@@ -541,27 +751,40 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
           ) : (
             <div className="space-y-3">
               <div className="text-xs text-slate-500 font-medium tabular-nums">
-                Hiển thị <strong>{filteredExams.length}</strong> / {cityExams.length} đề thi hoàn chỉnh ({totalCityExamQuestions} câu hỏi trong các đề).
+                Hiển thị <strong>{filteredExams.length}</strong> / {cityExams.length} đề thi ({totalCityExamQuestions} câu hỏi).
               </div>
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
                 {filteredExams.map((exam) => {
                   const p1 = exam.questions.filter((q) => q.type === 'part1_single_choice').length;
                   const p2 = exam.questions.filter((q) => q.type === 'part2_true_false').length;
                   const p3 = exam.questions.filter((q) => q.type === 'part3_short_answer').length;
+                  const isPending = exam.share_status === 'pending_review';
                   const isCloning = cloningExamId === exam.id;
                   const isExporting = exportingWordId === exam.id;
+                  const isReviewing = reviewingExamId === exam.id;
 
                   return (
                     <div
                       key={exam.id}
-                      className="bg-white border border-slate-200 hover:border-indigo-300 rounded-2xl p-5 shadow-xs transition-colors flex flex-col justify-between gap-4"
+                      className={`bg-white border rounded-2xl p-5 shadow-xs transition-colors flex flex-col justify-between gap-4 ${
+                        isPending
+                          ? 'border-amber-300 hover:border-amber-400 bg-amber-50/15'
+                          : 'border-slate-200 hover:border-indigo-300'
+                      }`}
                     >
                       <div className="space-y-2.5">
                         <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
-                          <span className="px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
-                            <CheckCircle2 className="w-3 h-3" />
-                            Đã kiểm duyệt TP
-                          </span>
+                          {isPending ? (
+                            <span className="px-2.5 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 inline-flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              Chờ kiểm duyệt
+                            </span>
+                          ) : (
+                            <span className="px-2.5 py-0.5 rounded-md bg-emerald-50 text-emerald-800 border border-emerald-200 inline-flex items-center gap-1">
+                              <CheckCircle2 className="w-3 h-3" />
+                              Đã duyệt công khai
+                            </span>
+                          )}
                           <span className="px-2.5 py-0.5 rounded-md bg-indigo-50 text-indigo-800 border border-indigo-200">
                             {GRADE_LABELS[exam.grade] || `Lớp ${exam.grade}`}
                           </span>
@@ -592,7 +815,13 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
                             <span>
                               · Tác giả: <strong>{exam.authorName}</strong>
                             </span>
-                            {exam.cityApprovedAt && (
+                            {isPending && exam.shareRequestedAt && (
+                              <span className="text-amber-700 font-semibold">
+                                · Đề xuất:{' '}
+                                {new Date(exam.shareRequestedAt).toLocaleDateString('vi-VN')}
+                              </span>
+                            )}
+                            {!isPending && exam.cityApprovedAt && (
                               <span>
                                 · Duyệt: {new Date(exam.cityApprovedAt).toLocaleDateString('vi-VN')}
                               </span>
@@ -612,6 +841,33 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
                           <span>· P.III: {p3}</span>
                         </div>
                       </div>
+
+                      {/* Super Admin Quick Moderation Bar for Pending Exams */}
+                      {isSuperAdmin && isPending && (
+                        <div className="pt-3 border-t border-amber-200/80 flex flex-wrap items-center gap-2">
+                          <button
+                            type="button"
+                            disabled={isReviewing}
+                            onClick={() => void handleApproveExam(exam)}
+                            className="flex-1 min-h-[38px] px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+                          >
+                            <CheckCircle2 className="w-4 h-4 shrink-0" />
+                            <span>{isReviewing ? 'Đang duyệt...' : 'Duyệt công khai'}</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isReviewing}
+                            onClick={() => {
+                              setRejectTargetExam(exam);
+                              setRejectReason('');
+                            }}
+                            className="flex-1 min-h-[38px] px-3.5 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center justify-center gap-1.5 shadow-xs transition-colors"
+                          >
+                            <XCircle className="w-4 h-4 shrink-0" />
+                            <span>Từ chối / Trả lại</span>
+                          </button>
+                        </div>
+                      )}
 
                       <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5">
@@ -871,6 +1127,83 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
         </>
       )}
 
+      {/* Reject Exam Modal for Super Admin */}
+      {rejectTargetExam && isSuperAdmin && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reject-city-exam-title"
+        >
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden">
+            <div className="px-5 py-4 bg-rose-50 border-b border-rose-200 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-rose-900">
+                <XCircle className="w-5 h-5 text-rose-600 shrink-0" />
+                <h3 id="reject-city-exam-title" className="text-sm font-extrabold">
+                  Từ chối / Trả lại đề thi chờ duyệt
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRejectTargetExam(null);
+                  setRejectReason('');
+                }}
+                className="p-1 rounded-lg text-rose-700 hover:bg-rose-100"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3 text-xs">
+              <p className="text-slate-700 leading-relaxed">
+                Đề thi <strong className="text-slate-900">&quot;{rejectTargetExam.title}&quot;</strong>{' '}
+                (tác giả: <strong>{rejectTargetExam.authorName}</strong>) sẽ được gỡ cờ chờ duyệt và trả về kho cá nhân.
+              </p>
+              <div>
+                <label className="block font-bold text-slate-700 mb-1.5">
+                  Ghi chú phản hồi cho giáo viên (tùy chọn)
+                </label>
+                <textarea
+                  rows={3}
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  placeholder="VD: Vui lòng bổ sung đáp án Phần III hoặc rà soát lại công thức hóa học ở câu 12..."
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-slate-800 focus:outline-none focus:ring-2 focus:ring-rose-500"
+                />
+              </div>
+            </div>
+
+            <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex items-center justify-end gap-2">
+              <button
+                type="button"
+                disabled={reviewingExamId === rejectTargetExam.id}
+                onClick={() => {
+                  setRejectTargetExam(null);
+                  setRejectReason('');
+                }}
+                className="px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-bold"
+              >
+                Hủy
+              </button>
+              <button
+                type="button"
+                disabled={reviewingExamId === rejectTargetExam.id}
+                onClick={() => void handleConfirmRejectExam()}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5"
+              >
+                <XCircle className="w-4 h-4" />
+                <span>
+                  {reviewingExamId === rejectTargetExam.id
+                    ? 'Đang xử lý...'
+                    : 'Xác nhận Từ chối / Trả lại'}
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Read-only Full Exam Preview Modal */}
       {previewExam && (
         <div
@@ -883,7 +1216,11 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
               <div>
                 <div className="flex items-center gap-2 text-emerald-400 text-[11px] font-bold uppercase tracking-wider">
                   <Sparkles className="w-3.5 h-3.5" />
-                  <span>Xem trước đề thi từ Kho Thành phố</span>
+                  <span>
+                    {previewExam.share_status === 'pending_review'
+                      ? 'Kiểm duyệt đề thi chờ duyệt Kho Thành phố'
+                      : 'Xem trước đề thi từ Kho Thành phố'}
+                  </span>
                 </div>
                 <h3 className="text-base font-extrabold mt-0.5">{previewExam.title}</h3>
                 <p className="text-xs text-slate-300 mt-0.5">
@@ -966,14 +1303,14 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
               ))}
             </div>
 
-            <div className="px-6 py-3.5 bg-white border-t border-slate-200 flex items-center justify-between gap-3 shrink-0">
+            <div className="px-6 py-3.5 bg-white border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
               <div className="flex items-center gap-2 text-xs text-slate-600">
                 <BookOpen className="w-4 h-4 text-indigo-600" />
                 <span className="tabular-nums">
                   {previewExam.questions.length} câu · {previewExam.durationMinutes} phút
                 </span>
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
                   onClick={() => setPreviewExam(null)}
@@ -981,18 +1318,44 @@ export const CityExamRepository: React.FC<CityExamRepositoryProps> = ({
                 >
                   Đóng
                 </button>
-                <button
-                  type="button"
-                  disabled={cloningExamId === previewExam.id}
-                  onClick={async () => {
-                    await handleCloneExam(previewExam);
-                    setPreviewExam(null);
-                  }}
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5"
-                >
-                  <CopyPlus className="w-4 h-4" />
-                  <span>Nhân bản về kho cá nhân</span>
-                </button>
+                {isSuperAdmin && previewExam.share_status === 'pending_review' ? (
+                  <>
+                    <button
+                      type="button"
+                      disabled={reviewingExamId === previewExam.id}
+                      onClick={() => {
+                        setRejectTargetExam(previewExam);
+                        setRejectReason('');
+                      }}
+                      className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                    >
+                      <XCircle className="w-4 h-4" />
+                      <span>Từ chối / Trả lại</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={reviewingExamId === previewExam.id}
+                      onClick={() => void handleApproveExam(previewExam)}
+                      className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                    >
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span>Duyệt công khai</span>
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={cloningExamId === previewExam.id}
+                    onClick={async () => {
+                      await handleCloneExam(previewExam);
+                      setPreviewExam(null);
+                    }}
+                    className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white text-xs font-bold inline-flex items-center gap-1.5"
+                  >
+                    <CopyPlus className="w-4 h-4" />
+                    <span>Nhân bản về kho cá nhân</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>

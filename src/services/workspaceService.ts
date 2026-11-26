@@ -1108,25 +1108,41 @@ export async function reviewExamCityShareByAdmin(
     throw new Error('Cần quyền Quản trị viên để duyệt đề chia sẻ.');
   }
   const safeId = safeDocId(examId);
+  const ref = doc(db, 'exams', safeId);
   const nowIso = new Date().toISOString();
   const cleanNote = (note || '').trim().slice(0, 500);
 
-  await updateDoc(
-    doc(db, 'exams', safeId),
-    stripUndefinedDeep({
-      share_status: decision === 'approve' ? 'city_public' : 'private',
-      ...(decision === 'approve'
-        ? {
-            cityApprovedBy: adminUid,
-            cityApprovedAt: nowIso,
-          }
-        : {}),
-      cityReviewNote: cleanNote || (decision === 'approve' ? 'Đã kiểm duyệt chuẩn GDPT 2018.' : 'Chưa đạt yêu cầu kiểm duyệt.'),
-      updatedBy: adminUid,
-      updatedAt: nowIso,
-      serverUpdatedAt: serverTimestamp(),
-    })
-  );
+  const patch = stripUndefinedDeep({
+    share_status: decision === 'approve' ? 'city_public' : 'private',
+    ...(decision === 'approve'
+      ? {
+          cityApprovedBy: adminUid,
+          cityApprovedAt: nowIso,
+        }
+      : {}),
+    cityReviewNote:
+      cleanNote ||
+      (decision === 'approve'
+        ? 'Đã kiểm duyệt chuẩn GDPT 2018.'
+        : 'Chưa đạt yêu cầu kiểm duyệt — đã trả lại tác giả chỉnh sửa.'),
+    updatedBy: adminUid,
+    updatedAt: nowIso,
+    serverUpdatedAt: serverTimestamp(),
+  });
+
+  try {
+    await updateDoc(ref, patch);
+  } catch (err) {
+    const existing = await getDoc(ref).catch(() => null);
+    if (existing?.exists() && !existing.data()?.serverCreatedAt) {
+      await updateDoc(ref, {
+        ...patch,
+        serverCreatedAt: serverTimestamp(),
+      });
+      return;
+    }
+    handleFirestoreError(err, OperationType.UPDATE, `exams/${safeId}`);
+  }
 }
 
 export async function fetchCitySharedQuestions(): Promise<Question[]> {
@@ -1210,6 +1226,53 @@ export async function fetchCityPublicExams(): Promise<Exam[]> {
         new Date(b.cityApprovedAt || b.updatedAt || b.createdAt).getTime() -
         new Date(a.cityApprovedAt || a.updatedAt || a.createdAt).getTime()
     );
+}
+
+export async function fetchCityExamsForSuperAdmin(): Promise<Exam[]> {
+  if (firebaseInitError || !auth.currentUser) return [];
+  try {
+    const [pendingSnap, publicSnap] = await Promise.all([
+      getDocs(query(collection(db, 'exams'), where('share_status', '==', 'pending_review'))),
+      getDocs(query(collection(db, 'exams'), where('share_status', '==', 'city_public'))),
+    ]);
+
+    const mergedMap = new Map<string, Exam>();
+    pendingSnap.docs.forEach((d) => {
+      const raw = d.data() as Exam;
+      mergedMap.set(d.id, {
+        ...raw,
+        id: d.id,
+        examId: raw.examId || d.id,
+        share_status: 'pending_review',
+      });
+    });
+    publicSnap.docs.forEach((d) => {
+      const raw = d.data() as Exam;
+      mergedMap.set(d.id, {
+        ...raw,
+        id: d.id,
+        examId: raw.examId || d.id,
+        share_status: 'city_public',
+      });
+    });
+
+    return Array.from(mergedMap.values()).sort((a, b) => {
+      // Pending exams surface first so Super Admin sees review queue immediately
+      const aPending = a.share_status === 'pending_review' ? 1 : 0;
+      const bPending = b.share_status === 'pending_review' ? 1 : 0;
+      if (aPending !== bPending) return bPending - aPending;
+      const timeA = new Date(
+        a.shareRequestedAt || a.cityApprovedAt || a.updatedAt || a.createdAt
+      ).getTime();
+      const timeB = new Date(
+        b.shareRequestedAt || b.cityApprovedAt || b.updatedAt || b.createdAt
+      ).getTime();
+      return timeB - timeA;
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'exams');
+    return [];
+  }
 }
 
 export async function cloneCityExamToPersonalBank(

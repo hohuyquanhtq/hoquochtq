@@ -1557,6 +1557,27 @@ export default function App() {
                     ...prev.filter((item) => item.id !== clonedQuestion.id),
                   ]);
                 }}
+                onExamShareStatusChanged={(examId, nextStatus, reviewNote) => {
+                  setExams((prev) => {
+                    const updated = prev.map((ex) =>
+                      ex.id === examId
+                        ? {
+                            ...ex,
+                            share_status: nextStatus,
+                            ...(nextStatus === 'city_public'
+                              ? { cityApprovedAt: new Date().toISOString() }
+                              : {}),
+                            ...(reviewNote ? { cityReviewNote: reviewNote } : {}),
+                            updatedAt: new Date().toISOString(),
+                          }
+                        : ex
+                    );
+                    if (activeUid) {
+                      StorageService.saveExams(updated, activeUid);
+                    }
+                    return updated;
+                  });
+                }}
                 onOpenPersonalExams={() => setActiveTab('exam_manager')}
                 onOpenPersonalQuestionBank={() => setActiveTab('question_bank')}
               />
