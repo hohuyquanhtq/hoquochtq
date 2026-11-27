@@ -314,9 +314,9 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
 
   return (
     <>
-      {/* Desktop Fixed Sidebar (264px expanded / 76px collapsed) */}
+      {/* Desktop Fixed Sidebar (264px expanded / 76px collapsed) positioned cleanly between Fixed Header (h-16) and Fixed Footer (h-10) */}
       <aside
-        className={`hidden lg:block shrink-0 h-full transition-[width] duration-200 ease-out ${
+        className={`hidden lg:block shrink-0 h-full lg:pt-16 lg:pb-10 transition-[width] duration-200 ease-out ${
           isCollapsed ? 'w-[76px]' : 'w-[264px]'
         }`}
       >

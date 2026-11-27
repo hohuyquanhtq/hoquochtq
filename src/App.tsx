@@ -19,7 +19,7 @@ import {
   ExamAnswerReviewCheck,
 } from './types';
 import { StorageService } from './services/storage';
-import { Header } from './components/common/Header';
+import { Header, WorkspaceFooter, type HeaderNotificationItem } from './components/common/Header';
 import { WorkspaceSidebar } from './components/common/WorkspaceSidebar';
 import { ErrorBoundary } from './components/common/ErrorBoundary';
 import { SystemDesignModal } from './components/docs/SystemDesignModal';
@@ -1952,8 +1952,37 @@ export default function App() {
   );
 
   if (isWorkspaceShell && userProfile) {
+    const isAdminSession = isSuperAdminUser(userProfile);
+    const pendingCityExams = exams.filter((e) => e.share_status === 'pending_review');
+    const workspaceNotifications: HeaderNotificationItem[] = pendingCityExams.map((exam) => ({
+      id: `city_review_${exam.id}`,
+      title: isAdminSession
+        ? `Đề thi chờ duyệt Kho TP: ${exam.title}`
+        : `Đang chờ duyệt Kho TP: ${exam.title}`,
+      subtitle: `Mã phòng: ${exam.code} · Khối ${exam.grade}`,
+      targetTab: isAdminSession ? 'city_exam_bank' : 'exam_manager',
+    }));
+
     return (
       <div className="h-screen flex overflow-hidden bg-slate-50 dark:bg-slate-950 font-sans transition-colors">
+        {/* Fixed Header (h-16) cố định trên cùng */}
+        <Header
+          workspaceMode
+          currentUser={userProfile}
+          isGuest={false}
+          activeTab={activeTab}
+          setActiveTab={(tab) => {
+            setGuestExamMode(false);
+            setActiveTab(tab);
+          }}
+          onOpenMobileMenu={() => setIsMobileSidebarOpen(true)}
+          onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
+          onProfileUpdated={(updated) => setLocalUpdatedProfile(updated)}
+          onLogout={handleLogout}
+          notificationCount={workspaceNotifications.length}
+          notifications={workspaceNotifications}
+        />
+
         <WorkspaceSidebar
           activeTab={activeTab}
           userRole={userProfile.role}
@@ -1973,31 +2002,17 @@ export default function App() {
           onCloseMobile={() => setIsMobileSidebarOpen(false)}
         />
 
+        {/* Main Container: pt-16 (tránh Fixed Header) và pb-12 (tránh Fixed Footer) */}
         <div className="flex-1 min-w-0 flex flex-col h-full overflow-hidden">
-          <Header
-            workspaceMode
-            currentUser={userProfile}
-            isGuest={false}
-            activeTab={activeTab}
-            setActiveTab={(tab) => {
-              setGuestExamMode(false);
-              setActiveTab(tab);
-            }}
-            onOpenMobileMenu={() => setIsMobileSidebarOpen(true)}
-            onOpenSystemDocs={() => setIsSystemDocsOpen(true)}
-            onProfileUpdated={(updated) => setLocalUpdatedProfile(updated)}
-            onLogout={handleLogout}
-          />
-
-          <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 sm:px-6 lg:px-8 py-6">
-            <div className="max-w-7xl mx-auto">
+          <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden pt-16 pb-12">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
               {renderMainViewportContent()}
-            </div>
-            <div className="mt-10 -mx-4 sm:-mx-6 lg:-mx-8 -mb-6">
-              {renderFooter()}
             </div>
           </main>
         </div>
+
+        {/* Fixed Footer (h-10) cố định dưới đáy màn hình */}
+        <WorkspaceFooter />
 
         <SystemDesignModal isOpen={isSystemDocsOpen} onClose={() => setIsSystemDocsOpen(false)} />
       </div>
