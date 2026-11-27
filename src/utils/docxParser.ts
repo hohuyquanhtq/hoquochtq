@@ -247,10 +247,13 @@ function cleanStrayBoldEdge(text: string): string {
 }
 
 /**
- * Matches question headers across Word formatting (bold, italic, underline, markdown headings, single-cell tables)
- * e.g. "Câu 1.", "**Câu 1.**", "<u>Câu 2:</u>", "Câu 1 [TH]:", "Câu 1 (VD)...", "Câu 1. [NB]", "Bài 1:"
- * Preserves any whitelisted cognitive-level tag ([NB]/[TH]/[VD]/[VDC]/[M1]-[M4] or paren form) in `headerTag`
- * while never consuming chemical formulas such as [H+] or [Fe3+].
+ * Matches question headers STRICTLY at the start of a line across Word formatting
+ * (bold, italic, underline, markdown headings, single-cell tables).
+ * Standard syntax: ^\s*(?:Câu|CÂU|Bài|BÀI)\s+(\d+)[\s.:)]
+ * - Never matches mid-sentence "câu 1" / "đến câu 15." inside section headers or prose.
+ * - Case-sensitive on Câu/CÂU/Bài/BÀI so wrapped lowercase PDF continuation lines ("câu 15. Mỗi câu...") are ignored.
+ * - Preserves whitelisted cognitive tags ([NB]/[TH]/[VD]/[VDC]/[M1]-[M4] or paren form) in `headerTag`
+ *   while strictly protecting chemical formulas such as [H+], [OH-], [Fe3+], [Cu(NH3)4]2+.
  */
 function matchQuestionStart(rawLine: string): { num: number; rest: string; headerTag?: string } | null {
   let line = rawLine.trim();
@@ -264,10 +267,10 @@ function matchQuestionStart(rawLine: string): { num: number; rest: string; heade
     }
   }
 
-  // Case A: Explicit cognitive tag right after "Câu X" even without trailing "." or ":",
-  // e.g. "Câu 1 [TH]: ...", "Câu 1 (VD) ...", "Câu 1 [NB]. ...", "**Câu 1 (VDC)** ..."
+  // Case A: Explicit cognitive tag right after "Câu X" even without trailing "." / ":" / ")",
+  // e.g. "Câu 1 [TH]: ...", "Câu 1 (VD) ...", "CÂU 1 [NB]. ...", "Bài 1 (m2) ..."
   const taggedStartRegex =
-    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|Bài)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(\[\s*(?:NB|TH|VDC|VD|M1|M2|M3|M4)\s*\]|\(\s*(?:NB|TH|VDC|VD|M1|M2|M3|M4)\s*\))(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:(?:[.:–—\-]+\s*|\s+)(.*)|\s*)$/i;
+    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|CÂU|Bài|BÀI)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(\[\s*(?:[Nn][Bb]|[Tt][Hh]|[Vv][Dd][Cc]?|[Mm][1-4])\s*\]|\(\s*(?:[Nn][Bb]|[Tt][Hh]|[Vv][Dd][Cc]?|[Mm][1-4])\s*\))(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:(?:[.:)–—\-]+\s*|\s+)(.*)|\s*)$/;
   const taggedMatch = line.match(taggedStartRegex);
   if (taggedMatch) {
     const num = parseInt(taggedMatch[1], 10);
@@ -278,18 +281,53 @@ function matchQuestionStart(rawLine: string): { num: number; rest: string; heade
     }
   }
 
-  // Case B: Standard "Câu X." / "Câu X:" / "Câu X (Biết):" header
-  const regex =
-    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|Bài)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:\s*(\([^\)]*\)|\[[^\]]*\]))?(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:[.:–—\-]+\s*|\s*$)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(.*)$/i;
-  const m = line.match(regex);
-  if (!m) return null;
+  // Case B: Standard punctuated start-of-line header:
+  // "Câu 1.", "CÂU 1:", "Bài 1)", "Câu 1 - ...", "Câu 1 (0,25 điểm):", "Câu 1 (Biết).", or bare "Câu 1"
+  const punctuatedRegex =
+    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|CÂU|Bài|BÀI)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:\s*(\([^\)]*\)|\[[^\]]*\]))?(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:[.:)–—\-]+\s*|\s*$)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(.*)$/;
+  const m = line.match(punctuatedRegex);
+  if (m) {
+    const num = parseInt(m[1], 10);
+    if (isNaN(num)) return null;
 
-  const num = parseInt(m[1], 10);
-  if (isNaN(num)) return null;
-  const rawBracket = m[2]?.trim();
-  const headerTag = rawBracket && parseCognitiveLevelToken(rawBracket) ? rawBracket : undefined;
-  const rest = cleanStrayBoldEdge(m[3] || '');
-  return { num, rest, headerTag };
+    const rawBracket = m[2]?.trim();
+    const parsedTag = rawBracket ? parseCognitiveLevelToken(rawBracket) : null;
+    const isScoreOrMetaBracket =
+      !!rawBracket &&
+      !parsedTag &&
+      /^\(\s*(?:[\d,.]+\s*(?:đ|điểm|diem|pt|pts?)|biết|nhận\s*biết|hiểu|thông\s*hiểu|vận\s*dụng(?:\s*cao)?)\s*\)$/i.test(
+        rawBracket
+      );
+
+    // Protect chemical ions/complexes like [H+], [OH-], [Fe3+], [Cu(NH3)4]2+ from ever being stripped as bracket metadata
+    if (rawBracket && !parsedTag && !isScoreOrMetaBracket) {
+      const preservedRest = cleanStrayBoldEdge(`${rawBracket} ${m[3] || ''}`.trim());
+      return { num, rest: preservedRest, headerTag: undefined };
+    }
+
+    const headerTag = parsedTag ? rawBracket : undefined;
+    const rest = cleanStrayBoldEdge(m[3] || '');
+    return { num, rest, headerTag };
+  }
+
+  // Case C: Unpunctuated space after number at start of line: "Câu 1 Chất nào sau đây..."
+  // Strictly reject Vietnamese range/prose connectors ("Câu 1 đến câu 15...", "Câu 1 và câu 2...")
+  const spaceStartRegex =
+    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|CÂU|Bài|BÀI)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*\s+(.+)$/;
+  const spaceMatch = line.match(spaceStartRegex);
+  if (spaceMatch) {
+    const num = parseInt(spaceMatch[1], 10);
+    const rest = cleanStrayBoldEdge(spaceMatch[2] || '');
+    if (
+      !isNaN(num) &&
+      rest &&
+      !/^(?:đến|tới|và|của|hoặc|là|có|được|thuộc|nằm|gồm|trong|ở)\b/i.test(rest)
+    ) {
+      return { num, rest, headerTag: undefined };
+    }
+  }
+
+  return null;
 }
 
 /**
@@ -722,30 +760,10 @@ export function recalculateParsedExamResult(
 }
 
 /**
- * Ensures distinct inline questions like "... D. Methane. Câu 2. Chất nào..." split onto separate lines
- * without splitting references inside prose ("từ Câu 1 đến Câu 12").
- */
-function separateInlineQuestionStarts(text: string): string {
-  const { masked, restore } = maskRichBlocks(text);
-  const split = masked
-    .split(/\r?\n/)
-    .map(rawLine => {
-      const line = rawLine.trim();
-      if (!line) return '';
-      // Split before "Câu <N>." / "Câu <N>:" when preceded by sentence punctuation or option text,
-      // avoiding Vietnamese prepositions like "từ", "đến", "và", "như", "ở", "xem"
-      return line.replace(
-        /(?<!\b(?:từ|đến|và|của|như|theo|ở|tại|xem|giữa|cho|tới))\s+((?:\*{0,2})?(?:Câu|Bài)\s+\d+(?:\s*(?:\([^)]+\)|\[[^\]]+\]))?(?:\*{0,2})?\s*[.:–—])/gi,
-        '\n$1'
-      );
-    })
-    .join('\n');
-  return restore(split);
-}
-
-/**
  * Parses Vietnamese Chemistry Exam text into structured Question array
- * supporting Part I (4-choice), Part II (True/False statements), and Part III (Short Answer)
+ * supporting Part I (4-choice), Part II (True/False statements), and Part III (Short Answer).
+ * Strictly preserves line boundaries so mid-sentence phrases like "...từ câu 1 đến câu 15..."
+ * inside section headers or exam instructions are never split into fake questions.
  */
 export function parseExamContent(
   rawText: string,
@@ -766,7 +784,7 @@ export function parseExamContent(
       ? rawText.slice(0, rawText.indexOf(answerSectionText))
       : rawText;
 
-  const normalizedBodyText = separateInlineQuestionStarts(examBodyText.trim() ? examBodyText : rawText);
+  const normalizedBodyText = examBodyText.trim() ? examBodyText : rawText;
   const lines = normalizedBodyText
     .split(/\r?\n/)
     .map(l => l.trim())
@@ -833,16 +851,17 @@ export function parseExamContent(
       break;
     }
 
-    // Check for Section Header
+    // 1. Check for Section Header FIRST (PHẦN I/1, PHẦN II/2, PHẦN III/3)
+    //    Once recognized, update activeSection and completely ignore/skip this header + its subtitle instructions.
     const secCandidate = detectSectionHeaderDetailed(line);
     if (secCandidate) {
       flushActiveBlock();
 
-      // Merge up to 2 immediate subtitle lines (e.g. bare "PHẦN II" followed by "TRẮC NGHIỆM ĐÚNG SAI" or "(2,0 điểm)")
+      // Merge up to 3 immediate subtitle/instruction lines (e.g. "Thí sinh trả lời từ câu 1 đến câu 15...", "(2,0 điểm)")
       let combinedRawTitle = secCandidate.rawTitle;
       let resolvedCandidate = secCandidate;
 
-      for (let lookahead = 1; lookahead <= 2 && idx + 1 < lines.length; lookahead++) {
+      for (let lookahead = 1; lookahead <= 3 && idx + 1 < lines.length; lookahead++) {
         const nextLine = lines[idx + 1];
         if (matchQuestionStart(nextLine)) break;
         if (/^[\-–—*_\s|]*HẾT[\-–—*_\s|]*$/i.test(nextLine) || /^(?:BẢNG\s+)?ĐÁP\s*ÁN/i.test(nextLine)) break;
@@ -853,7 +872,11 @@ export function parseExamContent(
           break;
         }
 
-        if (isSectionSubtitleLine(nextLine)) {
+        // Also absorb wrapped PDF continuation lines like "...từ câu 1 đến" + "câu 15. Mỗi câu hỏi..."
+        const isWrappedRangeContinuation =
+          /(?:từ|đến|tới)\s*$/i.test(combinedRawTitle) && /^câu\s+\d+\b/i.test(nextLine);
+
+        if (isSectionSubtitleLine(nextLine) || isWrappedRangeContinuation) {
           const merged = detectSectionHeaderDetailed(`${combinedRawTitle} ${nextLine}`);
           if (merged && merged.type !== 'ambiguous') {
             resolvedCandidate = merged;
@@ -880,7 +903,13 @@ export function parseExamContent(
       continue;
     }
 
-    // Check for Question start: "Câu 1.", "**Câu 1:**", "Câu 1 [TH]:", "Câu 1 (VD)...", "Bài 1:"
+    // Ignore standalone exam instruction subtitles appearing outside any active question
+    if (!activeBlock && isSectionSubtitleLine(line)) {
+      continue;
+    }
+
+    // 2. Check for Question start STRICTLY at line start:
+    //    "Câu 1.", "CÂU 1:", "Bài 1)", "Câu 1 [TH]:", "Câu 1 (VD)..."
     const qMatch = matchQuestionStart(line);
     if (qMatch) {
       flushActiveBlock();

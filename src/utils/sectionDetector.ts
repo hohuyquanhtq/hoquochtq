@@ -107,12 +107,16 @@ function looksLikeProseAfterHeader(normRest: string): boolean {
  */
 export function isSectionSubtitleLine(rawLine: string): boolean {
   const cleaned = cleanSectionHeaderLine(rawLine);
-  if (!cleaned || cleaned.length > 180) return false;
+  if (!cleaned || cleaned.length > 360) return false;
   if (/^(?:cau|bai)\s+\d+/i.test(removeDiacritics(cleaned))) return false;
 
   const norm = removeDiacritics(cleaned);
   if (matchExplicitTypeKeyword(norm) !== null) return true;
-  if (/^(?:thi\s+sinh\s+tra\s+loi|chon\s+(?:mot|1)\s+phuong\s+an|trong\s+moi\s+y|moi\s+cau\s+hoi\s+chi\s+chon|ghi\s+ro\s+ket\s+qua|lam\s+tron\s+ket\s+qua)\b/i.test(norm)) {
+  if (
+    /^(?:thi\s+sinh\s+tra\s+loi|tra\s+loi\s+tu\s+cau|chon\s+(?:mot|1)\s+phuong\s+an|trong\s+moi\s+y|moi\s+cau(?:\s+hoi)?(?:\s+thi\s+sinh)?\s+chi\s+chon|ghi\s+(?:ro\s+)?ket\s+qua|dien\s+(?:ro\s+)?ket\s+qua|lam\s+tron\s+ket\s+qua)\b/i.test(
+      norm
+    )
+  ) {
     return true;
   }
   if (/^\(?[\d,.]+\s*diem\)?$/i.test(norm)) {
@@ -125,6 +129,8 @@ export function isSectionSubtitleLine(rawLine: string): boolean {
  * Detailed section header detector supporting:
  * - Bare Roman titles: PHẦN I, Phần II, PHẦN III, Phần 1/2/3
  * - Punctuated/unpunctuated titles: PHẦN I:, Phần I., phần ii đúng sai
+ * - Full GDPT 2018 headers with inline instructions:
+ *   "PHẦN I. Câu trắc nghiệm nhiều phương án lựa chọn. Thí sinh trả lời từ câu 1 đến câu 15..."
  * - Shorthand Roman headers: I. TRẮC NGHIỆM, II. ĐÚNG SAI, III. TRẢ LỜI NGẮN
  * - Semantic headers without Roman numerals: Trắc nghiệm đúng sai, Câu hỏi trả lời ngắn
  * - Ambiguous headers requiring teacher confirmation: PHẦN IV, PHẦN A, TỰ LUẬN
@@ -132,7 +138,7 @@ export function isSectionSubtitleLine(rawLine: string): boolean {
  */
 export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCandidate | null {
   const cleaned = cleanSectionHeaderLine(rawLine);
-  if (!cleaned || cleaned.length > 180) return null;
+  if (!cleaned || cleaned.length > 360) return null;
 
   // Never treat pure separator / dashes / answer key lines / questions as section headers
   if (/^[\-–—=_|.\s]+$/.test(cleaned)) return null;
@@ -152,7 +158,9 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
     const isPart3 = !!phanMatch[1];
     const isPart2 = !!phanMatch[2];
     const sep = phanMatch[4] || '';
-    const rest = (phanMatch[5] || '').trim();
+    const rawRest = (phanMatch[5] || '').trim();
+    // Strip optional inline parenthetical metadata right after "PHẦN I", e.g. "(4,0 điểm):"
+    const rest = rawRest.replace(/^\([^)]*\)\s*[.:–—\-\/]*\s*/, '').trim();
 
     const defaultByRoman: QuestionType = isPart3
       ? 'part3_short_answer'
@@ -160,7 +168,7 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
       ? 'part2_true_false'
       : 'part1_single_choice';
 
-    // Bare header e.g. "PHẦN I", "PHẦN II.", "PHẦN III:" (after metadata stripped)
+    // Bare header e.g. "PHẦN I", "PHẦN II.", "PHẦN III:", "Phần 1 (4,0 điểm)"
     if (!rest) {
       return {
         type: defaultByRoman,
@@ -173,15 +181,22 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
 
     // Reject prose without explicit exam-section keywords, e.g. "Phần I của thí nghiệm thu được..."
     const explicitType = matchExplicitTypeKeyword(rest);
-    const hasGenericExamHeader = /^(?:trac\s+nghiem|cac\s+cau\s+hoi|cau\s+hoi|lua\s+chon|phan\s+(?:thi|kiem\s+tra)|bai\s+tap|ly\s+thuyet)\b/i.test(rest);
-    const hasDelimiter = /[.:–—\-\/]/.test(sep);
+    const hasGenericExamHeader =
+      /^(?:trac\s+nghiem|cau\s+trac\s+nghiem|cac\s+cau\s+hoi|cau\s+hoi|lua\s+chon|phan\s+(?:thi|kiem\s+tra)|bai\s+tap|ly\s+thuyet|thi\s+sinh\s+tra\s+loi|tra\s+loi\s+tu\s+cau|moi\s+cau(?:\s+hoi)?|trong\s+moi\s+y)\b/i.test(
+        rest
+      );
+    const hasExamInstructionPhrase =
+      /\b(?:thi\s+sinh\s+tra\s+loi|tra\s+loi\s+tu\s+cau|chi\s+chon\s+(?:mot|1)\s+phuong\s+an|chon\s+dung\s+hoac\s+sai|ghi\s+(?:ro\s+)?ket\s+qua)\b/i.test(
+        rest
+      );
+    const hasDelimiter = /[.:–—\-\/]/.test(sep) || /^\([^)]*\)\s*[.:–—\-\/]/.test(rawRest);
 
     if (looksLikeProseAfterHeader(rest)) {
       return null;
     }
 
-    // Without punctuation separator (e.g. "phần i của..."), ONLY accept if remainder starts with an exam-header keyword
-    if (!hasDelimiter && !explicitType && !hasGenericExamHeader) {
+    // Without punctuation separator (e.g. "phần i của..."), ONLY accept if remainder has exam-header/instruction keywords
+    if (!hasDelimiter && !explicitType && !hasGenericExamHeader && !hasExamInstructionPhrase) {
       return null;
     }
 
@@ -197,8 +212,12 @@ export function detectSectionHeaderDetailed(rawLine: string): SectionDetectionCa
       };
     }
 
-    // Has delimiter + generic/short title (e.g. "PHẦN II: CÁC CÂU HỎI", "PHẦN I. TRẮC NGHIỆM")
-    if (hasGenericExamHeader || (hasDelimiter && rest.split(/\s+/).length <= 7 && !/[.,;]$/.test(rest))) {
+    // Has exam header / instruction phrasing or delimiter + short title (e.g. "PHẦN II: CÁC CÂU HỎI", "PHẦN I. Thí sinh trả lời từ câu 1 đến câu 15...")
+    if (
+      hasGenericExamHeader ||
+      hasExamInstructionPhrase ||
+      (hasDelimiter && rest.split(/\s+/).length <= 7 && !/[.,;]$/.test(rest))
+    ) {
       return {
         type: defaultByRoman,
         method: 'roman_header',
