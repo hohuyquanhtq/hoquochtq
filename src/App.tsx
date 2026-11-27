@@ -15,6 +15,7 @@ import {
   ChemGrade,
   Classroom,
   ClassEnrollment,
+  HubLearningProfile,
   UploadRecord,
   ExamAnswerReviewCheck,
 } from './types';
@@ -70,6 +71,15 @@ import {
   deleteClassroomFromFirestore,
   removeStudentEnrollmentFromFirestore,
 } from './services/workspaceService';
+import {
+  awardPlaygroundRewardToHubProfile,
+  fetchStudentHubProfilesByUid,
+  linkStudentUidToHubProfile,
+  mapHubProfileToEnrollment,
+  recordExamResultToHubProfile,
+  saveHubStudentProfile,
+  sortHubProfilesByStt,
+} from './services/hubService';
 import { canMoveFolder, normalizeFolderId } from './utils/folderTree';
 import { joinClassByCode } from './services/authService';
 import { gradeSubmission } from './utils/gradingEngine';
@@ -154,6 +164,8 @@ export default function App() {
   const [classes, setClasses] = useState<Classroom[]>([]);
   const [enrollments, setEnrollments] = useState<ClassEnrollment[]>([]);
   const [assignedExams, setAssignedExams] = useState<StudentAssignedExamItem[]>([]);
+  const [studentHubProfiles, setStudentHubProfiles] = useState<HubLearningProfile[]>([]);
+  const [lastHubSyncNotice, setLastHubSyncNotice] = useState<string | null>(null);
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(false);
   const [isSeedingSamples, setIsSeedingSamples] = useState(false);
 
@@ -221,6 +233,8 @@ export default function App() {
     setReviewingSubmissionForTeacher(null);
     setCurrentFolderId(null);
     setCreatorInitialFolderId(null);
+    setStudentHubProfiles([]);
+    setLastHubSyncNotice(null);
   }, []);
 
   // Load workspace when authenticated user changes
@@ -238,7 +252,7 @@ export default function App() {
     setIsLoadingWorkspace(true);
     try {
       if (isTeacherOrAdminRole(user.role)) {
-        const ws = await fetchTeacherWorkspaceFromFirestore(uid);
+        const ws = await fetchTeacherWorkspaceFromFirestore(uid, user.email);
         setQuestions(ws.questions);
         setFolders(ws.folders);
         setCustomSubjects(ws.subjects || []);
@@ -293,10 +307,11 @@ export default function App() {
           })();
         }
       } else if (user.role === 'student') {
-        const sws = await fetchStudentWorkspaceFromFirestore(uid);
+        const sws = await fetchStudentWorkspaceFromFirestore(uid, user.email);
         setEnrollments(sws.enrollments);
         setAssignedExams(sws.assignedExams);
         setSubmissions(sws.submissions);
+        setStudentHubProfiles(sws.hubProfiles || []);
         StorageService.saveSubmissions(sws.submissions, uid);
       }
     } catch (err) {
@@ -918,9 +933,103 @@ export default function App() {
     setEnrollments((prev) => prev.filter((en) => en.classId !== cls.id));
   };
 
-  const handleRemoveEnrollment = async (enrollmentId: string) => {
-    await removeStudentEnrollmentFromFirestore(enrollmentId);
+  const handleRemoveEnrollment = async (enrollmentId: string, hubProfileDocId?: string) => {
+    await removeStudentEnrollmentFromFirestore(enrollmentId, hubProfileDocId);
     setEnrollments((prev) => prev.filter((en) => en.id !== enrollmentId));
+  };
+
+  const handleRefreshTeacherHub = async () => {
+    if (!activeUid || !userProfile) return;
+    const ws = await fetchTeacherWorkspaceFromFirestore(activeUid, userProfile.email);
+    setClasses(ws.classes);
+    setEnrollments(ws.enrollments);
+  };
+
+  const handleAddHubStudent = async (params: {
+    classCode: string;
+    classId: string;
+    className: string;
+    stt: number;
+    studentName: string;
+    studentEmail?: string;
+    studentUid?: string;
+  }) => {
+    if (!activeUid) return;
+    const savedProfile = await saveHubStudentProfile({
+      ...params,
+      ownerId: activeUid,
+    });
+    const matchedClass = classes.find(
+      (c) => c.id === params.classId || normalizeExamCode(c.classCode) === normalizeExamCode(params.classCode)
+    );
+    const enrollment = mapHubProfileToEnrollment(savedProfile, matchedClass);
+    setEnrollments((prev) => {
+      const filtered = prev.filter((en) => en.id !== enrollment.id);
+      return sortHubProfilesByStt([...filtered, enrollment]);
+    });
+  };
+
+  const handleLinkHubProfile = async (
+    classCode: string,
+    stt: number
+  ): Promise<{ success: boolean; message: string }> => {
+    if (!activeUid || !userProfile) {
+      return { success: false, message: 'Vui lòng đăng nhập để liên kết hồ sơ Hub.' };
+    }
+    try {
+      const profile = await linkStudentUidToHubProfile({
+        classCode,
+        stt,
+        studentUid: activeUid,
+        studentName: userProfile.name,
+        studentEmail: userProfile.email,
+      });
+      const freshProfiles = await fetchStudentHubProfilesByUid(activeUid, userProfile.email).catch(
+        () => [profile]
+      );
+      setStudentHubProfiles(freshProfiles.length > 0 ? freshProfiles : [profile]);
+      setEnrollments((prev) => {
+        const mapped = mapHubProfileToEnrollment(profile);
+        const filtered = prev.filter((e) => normalizeExamCode(e.classCode) !== normalizeExamCode(mapped.classCode));
+        return sortHubProfilesByStt([...filtered, mapped]);
+      });
+      return {
+        success: true,
+        message: `Đã liên kết tài khoản với hub_learning_profiles/${profile.id} (STT #${profile.stt}).`,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: err instanceof Error ? err.message : 'Không thể liên kết hồ sơ Hub.',
+      };
+    }
+  };
+
+  const handleAwardPlaygroundReward = async (params: {
+    activityCode: string;
+    activityTitle: string;
+    score: number;
+    maxScore: number;
+    xpReward: number;
+    badge?: { id: string; name: string; icon?: string };
+  }) => {
+    if (!activeUid || !userProfile) {
+      return { synced: false, xpEarned: params.xpReward, error: 'Chưa đăng nhập.' };
+    }
+    const outcome = await awardPlaygroundRewardToHubProfile({
+      studentUid: activeUid,
+      studentEmail: userProfile.email,
+      studentName: userProfile.name,
+      preferredClassCode: studentHubProfiles[0]?.classCode || enrollments[0]?.classCode,
+      ...params,
+    });
+    if (outcome.synced) {
+      const freshProfiles = await fetchStudentHubProfilesByUid(activeUid, userProfile.email).catch(
+        () => studentHubProfiles
+      );
+      setStudentHubProfiles(freshProfiles);
+    }
+    return outcome;
   };
 
   const handleSeedStarterSamples = async () => {
@@ -1114,6 +1223,34 @@ export default function App() {
     if (activeUid && !cloudSubmitFailed) {
       StorageService.addSubmission(finalSubmission, activeUid);
       setSubmissions(StorageService.getSubmissions(undefined, activeUid));
+
+      // Sync exam result into dbHub -> hub_learning_profiles/${classCode}_${stt} by studentUid
+      if (!nextIsTeacherPreview && userProfile?.role === 'student') {
+        void recordExamResultToHubProfile({
+          studentUid: activeUid,
+          studentEmail: userProfile.email,
+          studentName: userProfile.name || finalSubmission.studentName,
+          preferredClassCode:
+            studentHubProfiles[0]?.classCode ||
+            enrollments[0]?.classCode ||
+            finalSubmission.studentClass,
+          submission: finalSubmission,
+          source: 'exam_bank',
+        }).then(async (hubOutcome) => {
+          if (hubOutcome.synced) {
+            setLastHubSyncNotice(
+              `Đã ghi kết quả bài thi "${finalSubmission.examTitle}" (${finalSubmission.totalScore.toFixed(
+                2
+              )} điểm) và cộng +${hubOutcome.xpEarned} XP vào hub_learning_profiles/${hubOutcome.profileDocId}.`
+            );
+            const freshProfiles = await fetchStudentHubProfilesByUid(
+              activeUid,
+              userProfile.email
+            ).catch(() => null);
+            if (freshProfiles) setStudentHubProfiles(freshProfiles);
+          }
+        });
+      }
     }
     setReviewIsTeacherPreview(nextIsTeacherPreview);
     setReviewAnswerCheck(nextReviewCheck);
@@ -1151,6 +1288,30 @@ export default function App() {
         if (activeUid) {
           StorageService.addSubmission(serverRes.submission, activeUid);
           setSubmissions(StorageService.getSubmissions(undefined, activeUid));
+          if (userProfile?.role === 'student') {
+            void recordExamResultToHubProfile({
+              studentUid: activeUid,
+              studentEmail: userProfile.email,
+              studentName: userProfile.name || serverRes.submission.studentName,
+              preferredClassCode:
+                studentHubProfiles[0]?.classCode ||
+                enrollments[0]?.classCode ||
+                serverRes.submission.studentClass,
+              submission: serverRes.submission,
+              source: 'exam_bank',
+            }).then(async (hubOutcome) => {
+              if (hubOutcome.synced) {
+                setLastHubSyncNotice(
+                  `Đã ghi kết quả bài thi "${serverRes.submission!.examTitle}" và cộng +${hubOutcome.xpEarned} XP vào hub_learning_profiles/${hubOutcome.profileDocId}.`
+                );
+                const freshProfiles = await fetchStudentHubProfilesByUid(
+                  activeUid,
+                  userProfile.email
+                ).catch(() => null);
+                if (freshProfiles) setStudentHubProfiles(freshProfiles);
+              }
+            });
+          }
         }
       } else {
         setSubmitSyncError(
@@ -1745,6 +1906,8 @@ export default function App() {
                 onSaveClass={handleSaveClass}
                 onDeleteClass={handleDeleteClass}
                 onRemoveEnrollment={handleRemoveEnrollment}
+                onRefreshHub={handleRefreshTeacherHub}
+                onAddHubStudent={handleAddHubStudent}
               />
             )}
 
@@ -1904,7 +2067,11 @@ export default function App() {
               submissions={submissions}
               enrollments={enrollments}
               assignedExams={assignedExams}
+              hubProfiles={studentHubProfiles}
+              lastHubSyncNotice={lastHubSyncNotice}
               onJoinClassByCode={handleJoinClassByCode}
+              onLinkHubProfile={handleLinkHubProfile}
+              onAwardPlaygroundReward={handleAwardPlaygroundReward}
               onStartExam={handleStartExam}
               onOpenExamLanding={(code) =>
                 void resolveDirectExamByCode(

@@ -1496,5 +1496,149 @@ service cloud.firestore {
         && incoming().serverCreatedAt == request.time;
       allow update, delete: if false;
     }
+
+    // Shared HTQ Chemistry Hub Collections (hub_classes & hub_learning_profiles)
+    function isValidHubClass(data) {
+      return data.keys().hasAll([
+          'id', 'ownerId', 'className', 'classCode', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'ownerId', 'teacherId', 'ownerEmail', 'teacherName', 'school',
+          'className', 'classCode', 'description', 'assignedExamCodes',
+          'isActive', 'createdAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerId)
+        && (!('teacherId' in data) || isValidId(data.teacherId))
+        && (!('ownerEmail' in data) || (data.ownerEmail is string && data.ownerEmail.size() <= 200))
+        && (!('teacherName' in data) || (data.teacherName is string && data.teacherName.size() <= 150))
+        && (!('school' in data) || (data.school is string && data.school.size() <= 200))
+        && data.className is string && data.className.size() >= 1 && data.className.size() <= 120
+        && isValidExamCode(data.classCode)
+        && (!('description' in data) || (data.description is string && data.description.size() <= 500))
+        && (!('assignedExamCodes' in data) || (
+          data.assignedExamCodes is list
+          && data.assignedExamCodes.size() <= 100
+          && (data.assignedExamCodes.size() == 0 || isValidExamCode(data.assignedExamCodes[0]))
+        ))
+        && (!('isActive' in data) || data.isActive is bool)
+        && (!('createdAt' in data) || (data.createdAt is string && data.createdAt.size() <= 64))
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && (!('serverCreatedAt' in data) || data.serverCreatedAt is timestamp)
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    function isValidHubLearningProfile(data) {
+      return data.keys().hasAll([
+          'id', 'classCode', 'stt', 'studentName', 'xp', 'updatedAt', 'serverUpdatedAt'
+        ])
+        && data.keys().hasOnly([
+          'id', 'classId', 'classCode', 'className', 'stt',
+          'studentUid', 'studentId', 'studentName', 'studentEmail',
+          'ownerId', 'teacherId', 'xp', 'badges', 'testResults',
+          'joinedAt', 'updatedAt', 'serverCreatedAt', 'serverUpdatedAt'
+        ])
+        && isValidId(data.id)
+        && (!('classId' in data) || isValidId(data.classId))
+        && isValidExamCode(data.classCode)
+        && (!('className' in data) || (data.className is string && data.className.size() <= 120))
+        && data.stt is number && data.stt >= 1 && data.stt <= 9999
+        && (!('studentUid' in data) || (data.studentUid is string && data.studentUid.size() <= 128))
+        && (!('studentId' in data) || (data.studentId is string && data.studentId.size() <= 128))
+        && data.studentName is string && data.studentName.size() >= 1 && data.studentName.size() <= 150
+        && (!('studentEmail' in data) || (data.studentEmail is string && data.studentEmail.size() <= 200))
+        && (!('ownerId' in data) || isValidId(data.ownerId))
+        && (!('teacherId' in data) || isValidId(data.teacherId))
+        && data.xp is number && data.xp >= 0 && data.xp <= 10000000
+        && (!('badges' in data) || (data.badges is list && data.badges.size() <= 100))
+        && (!('testResults' in data) || (data.testResults is list && data.testResults.size() <= 500))
+        && (!('joinedAt' in data) || (data.joinedAt is string && data.joinedAt.size() <= 64))
+        && data.updatedAt is string && data.updatedAt.size() <= 64
+        && (!('serverCreatedAt' in data) || data.serverCreatedAt is timestamp)
+        && data.serverUpdatedAt is timestamp;
+    }
+
+    match /hub_classes/{classId} {
+      allow get: if isValidId(classId) && isSignedIn() && (
+        isAdmin()
+        || (isActiveTeacher() && existing().ownerId == request.auth.uid)
+        || isActiveStudent()
+      );
+      allow list: if isSignedIn() && (
+        isAdmin()
+        || (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+      );
+      allow create: if isValidId(classId)
+        && (isActiveTeacher() || isAdmin())
+        && isValidHubClass(incoming())
+        && incoming().id == classId
+        && (incoming().ownerId == request.auth.uid || isAdmin())
+        && incoming().serverUpdatedAt == request.time;
+      allow update: if isValidId(classId)
+        && (isAdmin() || (isActiveTeacher() && existing().ownerId == request.auth.uid))
+        && isValidHubClass(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerId == existing().ownerId
+        && incoming().serverUpdatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'teacherId', 'ownerEmail', 'teacherName', 'school',
+          'className', 'classCode', 'description', 'assignedExamCodes',
+          'isActive', 'updatedAt', 'serverUpdatedAt'
+        ]);
+      allow delete: if isValidId(classId) && (
+        isAdmin() || (isActiveTeacher() && existing().ownerId == request.auth.uid)
+      );
+    }
+
+    match /hub_learning_profiles/{profileId} {
+      allow get: if isValidId(profileId) && isSignedIn() && (
+        isAdmin()
+        || (isActiveTeacher() && existing().ownerId == request.auth.uid)
+        || existing().studentUid == request.auth.uid
+      );
+      allow list: if isSignedIn() && (
+        isAdmin()
+        || (isActiveTeacher() && resource.data.ownerId == request.auth.uid)
+        || resource.data.studentUid == request.auth.uid
+      );
+      allow create: if isValidId(profileId)
+        && isSignedIn()
+        && isValidHubLearningProfile(incoming())
+        && incoming().id == profileId
+        && incoming().serverUpdatedAt == request.time
+        && (
+          isAdmin()
+          || (isActiveTeacher() && incoming().ownerId == request.auth.uid)
+          || (isActiveStudent() && incoming().studentUid == request.auth.uid)
+        );
+      allow update: if isValidId(profileId)
+        && isSignedIn()
+        && isValidHubLearningProfile(incoming())
+        && incoming().id == existing().id
+        && incoming().classCode == existing().classCode
+        && incoming().stt == existing().stt
+        && incoming().serverUpdatedAt == request.time
+        && (
+          (
+            (isAdmin() || (isActiveTeacher() && existing().ownerId == request.auth.uid))
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'classId', 'className', 'studentUid', 'studentId', 'studentName',
+              'studentEmail', 'xp', 'badges', 'testResults', 'updatedAt', 'serverUpdatedAt'
+            ])
+          )
+          || (
+            isActiveStudent()
+            && existing().studentUid == request.auth.uid
+            && incoming().studentUid == existing().studentUid
+            && incoming().xp >= existing().xp
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'testResults', 'xp', 'badges', 'updatedAt', 'serverUpdatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(profileId) && (
+        isAdmin() || (isActiveTeacher() && existing().ownerId == request.auth.uid)
+      );
+    }
   }
 }

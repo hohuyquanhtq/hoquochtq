@@ -547,6 +547,51 @@
         "addedCount", "updatedCount", "skippedCount", "deletedCount",
         "errorCount", "duplicateCount"
       ]
+    },
+    "HubClassroom": {
+      "title": "HubClassroom",
+      "description": "Shared classroom synced with HTQ Chemistry Hub (dbHub: long-factor-lk4jk).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "teacherId": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerEmail": { "type": "string", "maxLength": 200 },
+        "teacherName": { "type": "string", "maxLength": 150 },
+        "school": { "type": "string", "maxLength": 200 },
+        "className": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "description": { "type": "string", "maxLength": 500 },
+        "assignedExamCodes": { "type": "array" },
+        "isActive": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerId", "className", "classCode", "updatedAt"]
+    },
+    "HubLearningProfile": {
+      "title": "HubLearningProfile",
+      "description": "Shared student learning profile keyed by {classCode}_{stt} with XP, badges, and testResults.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "classId": { "type": "string", "maxLength": 128 },
+        "classCode": { "type": "string", "minLength": 2, "maxLength": 32, "pattern": "^[A-Z0-9\\-]+$" },
+        "className": { "type": "string", "maxLength": 120 },
+        "stt": { "type": "number" },
+        "studentUid": { "type": "string", "maxLength": 128 },
+        "studentId": { "type": "string", "maxLength": 128 },
+        "studentName": { "type": "string", "minLength": 1, "maxLength": 150 },
+        "studentEmail": { "type": "string", "maxLength": 200 },
+        "ownerId": { "type": "string", "maxLength": 128 },
+        "teacherId": { "type": "string", "maxLength": 128 },
+        "xp": { "type": "number" },
+        "badges": { "type": "array" },
+        "testResults": { "type": "array" },
+        "joinedAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "classCode", "stt", "studentName", "xp", "updatedAt"]
     }
   },
   "firestore": {
@@ -641,6 +686,14 @@
     "/curriculumImportLogs/{logId}": {
       "schema": { "$ref": "#/entities/CurriculumImportLog" },
       "description": "Admin-only immutable audit history of Excel/CSV bulk curriculum imports."
+    },
+    "/hub_classes/{classId}": {
+      "schema": { "$ref": "#/entities/HubClassroom" },
+      "description": "Shared classrooms (dbHub: long-factor-lk4jk) filtered by teacher ownerId."
+    },
+    "/hub_learning_profiles/{profileId}": {
+      "schema": { "$ref": "#/entities/HubLearningProfile" },
+      "description": "Shared student profiles keyed by {classCode}_{stt}, sorted ascending by stt, tracking testResults, badges, and cumulative XP."
     }
   }
 }

@@ -38,8 +38,19 @@ import {
   Classroom,
   ClassJoinLookup,
   ClassEnrollment,
+  HubLearningProfile,
   UploadRecord,
 } from '../types';
+import {
+  fetchHubClassesByOwner,
+  fetchHubLearningProfilesByClassCodes,
+  fetchStudentHubProfilesByUid,
+  mapHubProfileToEnrollment,
+  sortHubProfilesByStt,
+  syncClassroomToHub,
+  deleteClassroomFromHub,
+  deleteHubStudentProfile,
+} from './hubService';
 import { generateExamCode6, normalizeExamCode } from '../utils/urlHelper';
 import { normalizeFolderId, normalizeParentId } from '../utils/folderTree';
 
@@ -59,6 +70,7 @@ export interface StudentWorkspaceData {
   classLookups: ClassJoinLookup[];
   assignedExams: { exam: Exam; classCode: string; className: string; ownerId: string }[];
   submissions: StudentSubmission[];
+  hubProfiles: HubLearningProfile[];
 }
 
 function safeDocId(raw: string): string {
@@ -69,7 +81,10 @@ function safeDocId(raw: string): string {
 // TEACHER ISOLATED WORKSPACE OPERATIONS (ownerId == uid)
 // ============================================================================
 
-export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<TeacherWorkspaceData> {
+export async function fetchTeacherWorkspaceFromFirestore(
+  uid: string,
+  teacherEmail?: string
+): Promise<TeacherWorkspaceData> {
   if (firebaseInitError || !uid) {
     return {
       questions: [],
@@ -83,7 +98,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     };
   }
 
-  const [qSnap, fSnap, eSnap, sSnap, cSnap, enSnap, uSnap, subSnap] = await Promise.all([
+  const [qSnap, fSnap, eSnap, sSnap, cSnap, enSnap, uSnap, subSnap, hubClasses] = await Promise.all([
     getDocs(query(collection(db, 'questions'), where('ownerId', '==', uid))),
     getDocs(query(collection(db, 'folders'), where('ownerId', '==', uid))),
     getDocs(query(collection(db, 'exams'), where('ownerId', '==', uid))),
@@ -92,6 +107,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     getDocs(query(collection(db, 'classEnrollments'), where('teacherId', '==', uid))),
     getDocs(query(collection(db, 'uploadRecords'), where('ownerId', '==', uid))),
     getDocs(query(collection(db, 'subjects'), where('ownerId', '==', uid))).catch(() => null),
+    fetchHubClassesByOwner(uid, teacherEmail).catch(() => [] as Classroom[]),
   ]);
 
   const submissions = sSnap.docs
@@ -136,9 +152,82 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     })
     .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
 
-  const classes = cSnap.docs
-    .map((d) => d.data() as Classroom)
-    .sort((a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime());
+  const localClasses = cSnap.docs.map((d) => ({
+    ...(d.data() as Classroom),
+    source: 'local' as const,
+  }));
+
+  // Merge hub_classes (dbHub -> long-factor-lk4jk) with local HQTest classes by classCode
+  const mergedClassMap = new Map<string, Classroom>();
+  localClasses.forEach((cls) => {
+    const codeKey = normalizeExamCode(cls.classCode) || cls.id;
+    mergedClassMap.set(codeKey, cls);
+  });
+  hubClasses.forEach((hubCls) => {
+    const codeKey = normalizeExamCode(hubCls.classCode) || hubCls.id;
+    const existingLocal = mergedClassMap.get(codeKey);
+    const mergedExamCodes = Array.from(
+      new Set([
+        ...(hubCls.assignedExamCodes || []),
+        ...(existingLocal?.assignedExamCodes || []),
+      ])
+    );
+    mergedClassMap.set(codeKey, {
+      ...existingLocal,
+      ...hubCls,
+      assignedExamCodes: mergedExamCodes,
+      source: 'hub',
+    });
+  });
+
+  const classes = Array.from(mergedClassMap.values()).sort(
+    (a, b) => new Date(b.updatedAt || b.createdAt).getTime() - new Date(a.updatedAt || a.createdAt).getTime()
+  );
+
+  // Read shared students from dbHub -> hub_learning_profiles (sorted ascending by stt)
+  const classCodeToMeta = new Map<string, Classroom>();
+  classes.forEach((cls) => {
+    const normCode = normalizeExamCode(cls.classCode);
+    if (normCode) classCodeToMeta.set(normCode, cls);
+  });
+
+  const hubProfiles = await fetchHubLearningProfilesByClassCodes(
+    Array.from(classCodeToMeta.keys()),
+    uid
+  ).catch(() => [] as HubLearningProfile[]);
+
+  const hubEnrollments: ClassEnrollment[] = hubProfiles.map((profile) =>
+    mapHubProfileToEnrollment(profile, classCodeToMeta.get(normalizeExamCode(profile.classCode)))
+  );
+
+  const localEnrollments: ClassEnrollment[] = enSnap.docs.map((d) => ({
+    ...(d.data() as ClassEnrollment),
+    source: 'local' as const,
+  }));
+
+  // Deduplicate enrollments (prefer hub_learning_profiles when studentUid or email matches in same class)
+  const mergedEnrollmentMap = new Map<string, ClassEnrollment>();
+  hubEnrollments.forEach((en) => {
+    const normCode = normalizeExamCode(en.classCode);
+    const dedupeKey = en.hubProfileDocId || `${normCode}_${en.stt || en.studentId}`;
+    mergedEnrollmentMap.set(dedupeKey, en);
+  });
+  localEnrollments.forEach((en) => {
+    const normCode = normalizeExamCode(en.classCode);
+    const alreadyInHub = hubEnrollments.some(
+      (h) =>
+        normalizeExamCode(h.classCode) === normCode &&
+        ((h.studentUid && en.studentId && h.studentUid === en.studentId) ||
+          (h.studentEmail &&
+            en.studentEmail &&
+            h.studentEmail.toLowerCase() === en.studentEmail.toLowerCase()))
+    );
+    if (!alreadyInHub) {
+      mergedEnrollmentMap.set(en.id, en);
+    }
+  });
+
+  const enrollments = sortHubProfilesByStt(Array.from(mergedEnrollmentMap.values()));
 
   const subjects = subSnap
     ? subSnap.docs.map((d) => d.data() as SubjectItem)
@@ -151,7 +240,7 @@ export async function fetchTeacherWorkspaceFromFirestore(uid: string): Promise<T
     exams,
     submissions,
     classes,
-    enrollments: enSnap.docs.map((d) => d.data() as ClassEnrollment),
+    enrollments,
     uploadRecords: uSnap.docs
       .map((d) => d.data() as UploadRecord)
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
@@ -758,6 +847,21 @@ export async function saveClassroomToFirestore(
   batch.set(classRef, classPayload);
   batch.set(doc(db, 'classJoinCodes', normalizedCode), joinLookupPayload);
   await batch.commit();
+
+  // Mirror classroom to shared dbHub (hub_classes) in best-effort mode
+  await syncClassroomToHub(
+    {
+      ...cls,
+      id: safeId,
+      ownerId,
+      classCode: normalizedCode,
+      assignedExamCodes: classPayload.assignedExamCodes,
+      isActive: classPayload.isActive,
+      updatedAt: nowIso,
+    },
+    ownerId,
+    auth.currentUser?.email || undefined
+  ).catch(() => false);
 }
 
 export async function deleteClassroomFromFirestore(cls: Classroom): Promise<void> {
@@ -769,33 +873,67 @@ export async function deleteClassroomFromFirestore(cls: Classroom): Promise<void
     batch.delete(doc(db, 'classJoinCodes', normalizedCode));
   }
   await batch.commit();
+  await deleteClassroomFromHub(cls).catch(() => false);
 }
 
-export async function removeStudentEnrollmentFromFirestore(enrollmentId: string): Promise<void> {
+export async function removeStudentEnrollmentFromFirestore(
+  enrollmentId: string,
+  hubProfileDocId?: string
+): Promise<void> {
   if (firebaseInitError || !auth.currentUser) return;
-  await deleteDoc(doc(db, 'classEnrollments', safeDocId(enrollmentId)));
+  await deleteDoc(doc(db, 'classEnrollments', safeDocId(enrollmentId))).catch(() => {});
+  if (hubProfileDocId) {
+    await deleteHubStudentProfile(hubProfileDocId).catch(() => false);
+  }
 }
 
 // ============================================================================
 // STUDENT WORKSPACE (ENROLLED CLASSES, ASSIGNED EXAMS, SYNCED SUBMISSIONS)
 // ============================================================================
 
-export async function fetchStudentWorkspaceFromFirestore(uid: string): Promise<StudentWorkspaceData> {
+export async function fetchStudentWorkspaceFromFirestore(
+  uid: string,
+  studentEmail?: string
+): Promise<StudentWorkspaceData> {
   if (firebaseInitError || !uid) {
     return {
       enrollments: [],
       classLookups: [],
       assignedExams: [],
       submissions: [],
+      hubProfiles: [],
     };
   }
 
-  const [enSnap, subSnap] = await Promise.all([
+  const [enSnap, subSnap, hubProfiles] = await Promise.all([
     getDocs(query(collection(db, 'classEnrollments'), where('studentId', '==', uid))),
     getDocs(query(collection(db, 'submissions'), where('studentId', '==', uid))),
+    fetchStudentHubProfilesByUid(uid, studentEmail).catch(() => [] as HubLearningProfile[]),
   ]);
 
-  const enrollments = enSnap.docs.map((d) => d.data() as ClassEnrollment);
+  const localEnrollments = enSnap.docs.map((d) => ({
+    ...(d.data() as ClassEnrollment),
+    source: 'local' as const,
+  }));
+  const hubEnrollments = hubProfiles.map((profile) => mapHubProfileToEnrollment(profile));
+
+  const enrollmentByClassCode = new Map<string, ClassEnrollment>();
+  localEnrollments.forEach((en) => {
+    enrollmentByClassCode.set(normalizeExamCode(en.classCode) || en.id, en);
+  });
+  hubEnrollments.forEach((en) => {
+    const key = normalizeExamCode(en.classCode) || en.id;
+    const existing = enrollmentByClassCode.get(key);
+    enrollmentByClassCode.set(key, {
+      ...existing,
+      ...en,
+      classId: existing?.classId || en.classId,
+      className: en.className || existing?.className || en.classCode,
+      teacherName: existing?.teacherName || en.teacherName,
+    });
+  });
+
+  const enrollments = sortHubProfilesByStt(Array.from(enrollmentByClassCode.values()));
   const submissions = subSnap.docs
     .map((d) => d.data() as StudentSubmission)
     .sort((a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime());
@@ -931,6 +1069,7 @@ export async function fetchStudentWorkspaceFromFirestore(uid: string): Promise<S
     classLookups,
     assignedExams,
     submissions,
+    hubProfiles,
   };
 }
 

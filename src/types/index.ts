@@ -46,6 +46,7 @@ export interface Classroom {
   description?: string;
   assignedExamCodes: string[];
   isActive: boolean;
+  source?: 'hub' | 'local';
   createdAt: string;
   updatedAt: string;
 }
@@ -62,17 +63,68 @@ export interface ClassJoinLookup {
   updatedAt: string;
 }
 
+export interface HubTestResult {
+  id: string;
+  submissionId?: string;
+  examId?: string;
+  examCode: string;
+  examTitle: string;
+  score: number;
+  maxScore: number;
+  xpEarned: number;
+  durationSeconds?: number;
+  source: 'exam_bank' | 'playground';
+  badgeId?: string;
+  badgeName?: string;
+  submittedAt: string;
+}
+
+export interface HubBadge {
+  id: string;
+  name: string;
+  icon?: string;
+  xpReward?: number;
+  earnedAt: string;
+  source?: 'exam_bank' | 'playground';
+}
+
+export interface HubLearningProfile {
+  id: string; // `${classCode}_${stt}`
+  classId?: string;
+  classCode: string;
+  className?: string;
+  stt: number;
+  studentUid?: string;
+  studentId?: string;
+  studentName: string;
+  studentEmail?: string;
+  ownerId?: string;
+  teacherId?: string;
+  xp: number;
+  badges?: HubBadge[];
+  testResults?: HubTestResult[];
+  joinedAt?: string;
+  updatedAt?: string;
+}
+
 export interface ClassEnrollment {
-  id: string; // `${classId}_${studentId}`
+  id: string; // `${classId}_${studentId}` or `${classCode}_${stt}`
   classId: string;
   classCode: string;
   className: string;
   teacherId: string;
   teacherName: string;
   studentId: string;
+  studentUid?: string;
   studentName: string;
   studentEmail: string;
   studentClassName?: string;
+  stt?: number;
+  xp?: number;
+  badges?: HubBadge[];
+  testResults?: HubTestResult[];
+  hubProfileDocId?: string;
+  source?: 'hub' | 'local';
   joinedAt: string;
 }
 

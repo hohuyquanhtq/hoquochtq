@@ -83,7 +83,85 @@ try {
   auth = {} as Auth;
 }
 
-export { app, db, auth, firebaseInitError };
+// ============================================================================
+// SHARED HTQ CHEMISTRY HUB FIRESTORE INSTANCE (dbHub -> Project: long-factor-lk4jk)
+// Dùng chung hub_classes & hub_learning_profiles, giữ nguyên auth/Super Admin của HQTest
+// ============================================================================
+const HUB_APP_NAME = 'htq-chemistry-hub';
+const DEFAULT_HUB_PROJECT_ID = 'long-factor-lk4jk';
+
+function resolveHubFirebaseConfig() {
+  const env = (typeof import.meta !== 'undefined' ? (import.meta as any).env : {}) || {};
+  const projectId = cleanEnvStr(env.VITE_HUB_FIREBASE_PROJECT_ID) || DEFAULT_HUB_PROJECT_ID;
+  const apiKey = cleanEnvStr(env.VITE_HUB_FIREBASE_API_KEY) || resolvedConfig.apiKey;
+  const authDomain =
+    cleanEnvStr(env.VITE_HUB_FIREBASE_AUTH_DOMAIN) || `${projectId}.firebaseapp.com`;
+  const storageBucket =
+    cleanEnvStr(env.VITE_HUB_FIREBASE_STORAGE_BUCKET) || `${projectId}.firebasestorage.app`;
+  const messagingSenderId = cleanEnvStr(env.VITE_HUB_FIREBASE_MESSAGING_SENDER_ID);
+  const appId = cleanEnvStr(env.VITE_HUB_FIREBASE_APP_ID);
+  const firestoreDatabaseId =
+    cleanEnvStr(env.VITE_HUB_FIREBASE_DATABASE_ID) ||
+    cleanEnvStr(env.VITE_HUB_FIRESTORE_DATABASE_ID);
+
+  return {
+    projectId,
+    apiKey,
+    authDomain,
+    storageBucket,
+    ...(messagingSenderId ? { messagingSenderId } : {}),
+    ...(appId ? { appId } : {}),
+    firestoreDatabaseId,
+  };
+}
+
+const resolvedHubConfig = resolveHubFirebaseConfig();
+let hubApp: FirebaseApp;
+let dbHub: Firestore;
+let hubInitError: string | null = null;
+
+try {
+  const existingHubApp = getApps().find((a) => a.name === HUB_APP_NAME);
+  hubApp =
+    existingHubApp ||
+    initializeApp(
+      {
+        projectId: resolvedHubConfig.projectId,
+        apiKey: resolvedHubConfig.apiKey,
+        authDomain: resolvedHubConfig.authDomain,
+        storageBucket: resolvedHubConfig.storageBucket,
+        ...(resolvedHubConfig.messagingSenderId
+          ? { messagingSenderId: resolvedHubConfig.messagingSenderId }
+          : {}),
+        ...(resolvedHubConfig.appId ? { appId: resolvedHubConfig.appId } : {}),
+      },
+      HUB_APP_NAME
+    );
+  dbHub = resolvedHubConfig.firestoreDatabaseId
+    ? getFirestore(hubApp, resolvedHubConfig.firestoreDatabaseId)
+    : getFirestore(hubApp);
+} catch (err) {
+  hubInitError = err instanceof Error ? err.message : String(err);
+  console.error('[HQTest dbHub] Lỗi khởi tạo Firestore dbHub:', err);
+  hubApp = app;
+  dbHub = db;
+}
+
+export { app, db, auth, firebaseInitError, hubApp, dbHub, hubInitError };
+
+export function getHubFirebaseInfo(): {
+  projectId: string;
+  databaseId: string;
+  initialized: boolean;
+  initError: string | null;
+} {
+  return {
+    projectId: resolvedHubConfig.projectId || DEFAULT_HUB_PROJECT_ID,
+    databaseId: resolvedHubConfig.firestoreDatabaseId || '(default)',
+    initialized: !hubInitError,
+    initError: hubInitError,
+  };
+}
 
 export function getFirebaseProjectInfo(): {
   projectId: string;
@@ -125,8 +203,21 @@ async function testFirestoreConnection(): Promise<void> {
     }
   }
 }
+async function testHubFirestoreConnection(): Promise<void> {
+  if (hubInitError) return;
+  try {
+    await getDocFromServer(doc(dbHub, 'test', 'connection'));
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('the client is offline')) {
+      console.error(
+        `[HQTest dbHub] Firestore client for ${resolvedHubConfig.projectId} is offline.`
+      );
+    }
+  }
+}
 if (typeof window !== 'undefined') {
   void testFirestoreConnection();
+  void testHubFirestoreConnection();
 }
 
 export enum OperationType {
