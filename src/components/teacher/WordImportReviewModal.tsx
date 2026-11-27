@@ -54,6 +54,12 @@ import {
   fetchCurriculumLessonsBySubjectGrade,
   filterAndGroupCurriculumLessons,
 } from '../../services/curriculumService';
+import {
+  COGNITIVE_LEVEL_BADGE_STYLES,
+  LevelDetectionSource,
+  WORD_IMPORT_AUTO_LEVEL_LABEL,
+  WordImportLevelMode,
+} from '../../utils/cognitiveLevelTagParser';
 
 export interface InheritedQuestionBankMetadata {
   subjectId: string;
@@ -66,6 +72,7 @@ export interface InheritedQuestionBankMetadata {
   lessonTopic: string;
   defaultQuestionType: QuestionType | '';
   level: CognitiveLevel;
+  levelMode?: WordImportLevelMode;
 }
 
 export interface WordBatchSaveResult {
@@ -82,6 +89,11 @@ interface WordImportReviewModalProps {
   parsedResult: ParsedExamResult;
   parsedQuestionsCount?: number;
   inheritedMetadata: InheritedQuestionBankMetadata;
+  initialLevelSources?: Record<number, LevelDetectionSource>;
+  initialAutoDetectedLevels?: Record<
+    number,
+    { level: CognitiveLevel; source: LevelDetectionSource }
+  >;
   existingQuestions: Question[];
   subjects: SubjectItem[];
   currentUserId?: string;
@@ -647,6 +659,8 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
   fileSize,
   parsedResult,
   inheritedMetadata,
+  initialLevelSources,
+  initialAutoDetectedLevels,
   existingQuestions,
   subjects,
   currentUserId,
@@ -660,6 +674,8 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
 
   const initialDeclaredGrade: ChemGrade | '' =
     normalizeQuestionGrade(inheritedMetadata.grade) || '';
+
+  const initialLevelMode: WordImportLevelMode = inheritedMetadata.levelMode || 'auto';
 
   // Batch metadata state (strictly ordered: Môn học -> Khối lớp -> Chương/Bài học -> Dạng câu hỏi -> Mức độ)
   // Không tự động ép cứng '11' hoặc '12' nếu giáo viên chưa chọn khối lớp ở bộ lọc ngoài.
@@ -675,15 +691,47 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
   const [batchDefaultType, setBatchDefaultType] = useState<QuestionType | ''>(
     inheritedMetadata.defaultQuestionType
   );
-  const [batchLevel, setBatchLevel] = useState<CognitiveLevel>(
-    inheritedMetadata.level || 'nhan_biet'
-  );
+  const [batchLevelMode, setBatchLevelMode] = useState<WordImportLevelMode>(initialLevelMode);
   const [batchSource, setBatchSource] = useState<string>(defaultSource);
   const [showBatchPanel, setShowBatchPanel] = useState<boolean>(true);
   // Theo dõi các câu hỏi đã được giáo viên chỉnh sửa riêng metadata để không bị ghi đè khi đổi dropdown hàng loạt
   const [manuallyOverriddenCurriculumIds, setManuallyOverriddenCurriculumIds] = useState<Set<string>>(
     () => new Set()
   );
+  const [manuallyOverriddenLevelIds, setManuallyOverriddenLevelIds] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  // Snapshot mức độ nhận diện tự động theo mã [NB]/[TH]/[VD]/[VDC] (hoặc AI/mặc định) để hỗ trợ chuyển đổi chế độ ngay trong modal
+  const autoDetectedByDraftId = useMemo<
+    Record<string, { level: CognitiveLevel; source: LevelDetectionSource }>
+  >(() => {
+    const map: Record<string, { level: CognitiveLevel; source: LevelDetectionSource }> = {};
+    parsedResult.questions.forEach((rawQ, idx) => {
+      const draftId = `draft_word_${idx}`;
+      const preset = initialAutoDetectedLevels?.[idx];
+      if (preset) {
+        map[draftId] = preset;
+      } else {
+        map[draftId] = {
+          level: rawQ.level || 'nhan_biet',
+          source: initialLevelSources?.[idx] || 'tag',
+        };
+      }
+    });
+    return map;
+  }, [parsedResult.questions, initialAutoDetectedLevels, initialLevelSources]);
+
+  const [levelSources, setLevelSources] = useState<Record<string, LevelDetectionSource>>(() => {
+    const map: Record<string, LevelDetectionSource> = {};
+    parsedResult.questions.forEach((_, idx) => {
+      const draftId = `draft_word_${idx}`;
+      map[draftId] =
+        initialLevelSources?.[idx] ||
+        (initialLevelMode === 'auto' ? 'tag' : 'fixed');
+    });
+    return map;
+  });
 
   // Working copy of extracted questions (deterministic draft IDs, inheriting active QuestionBank metadata)
   const [draftQuestions, setDraftQuestions] = useState<Question[]>(() => {
@@ -719,6 +767,11 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
         }
       }
 
+      const resolvedLevel: CognitiveLevel =
+        initialLevelMode === 'auto'
+          ? cloned.level || 'nhan_biet'
+          : initialLevelMode;
+
       return {
         ...cloned,
         id: `draft_word_${idx}`,
@@ -733,7 +786,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
           inheritedMetadata.lessonName ||
           inheritedMetadata.lessonTopic ||
           cloned.lessonTopic,
-        level: inheritedMetadata.level || cloned.level || 'nhan_biet',
+        level: resolvedLevel,
         source: cloned.source || defaultSource,
         ownerId: currentUserId || cloned.ownerId,
         authorId: currentUserId || cloned.authorId || 'teacher',
@@ -790,11 +843,24 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
     let missing = 0;
     let dupBank = 0;
     let dupFile = 0;
+    let defaultFallbackCount = 0;
+    const byLevel: Record<CognitiveLevel, number> = {
+      nhan_biet: 0,
+      thong_hieu: 0,
+      van_dung: 0,
+      van_dung_cao: 0,
+    };
 
     draftQuestions.forEach((q, idx) => {
       if (q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice') part1++;
       else if (q.type === 'part2_true_false') part2++;
       else if (q.type === 'part3_short_answer') part3++;
+
+      const lvl: CognitiveLevel = q.level || 'nhan_biet';
+      byLevel[lvl] = (byLevel[lvl] || 0) + 1;
+      if (levelSources[q.id] === 'default_fallback') {
+        defaultFallbackCount++;
+      }
 
       if (hasMissingAnswer(q)) missing++;
       const st = duplicateStatuses[idx];
@@ -811,8 +877,10 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
       dupBank,
       dupFile,
       dupTotal: dupBank + dupFile,
+      byLevel,
+      defaultFallbackCount,
     };
-  }, [draftQuestions, duplicateStatuses]);
+  }, [draftQuestions, duplicateStatuses, levelSources]);
 
   const visibleEntries = useMemo(() => {
     return draftQuestions
@@ -914,6 +982,41 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
     setSaveOutcome(null);
   };
 
+  const handleBatchLevelModeChange = (nextMode: WordImportLevelMode) => {
+    setBatchLevelMode(nextMode);
+    setDraftQuestions((prev) =>
+      prev.map((q) => {
+        if (manuallyOverriddenLevelIds.has(q.id)) return q;
+        if (nextMode === 'auto') {
+          const detected = autoDetectedByDraftId[q.id];
+          return {
+            ...q,
+            level: detected?.level || 'nhan_biet',
+            updatedAt: new Date().toISOString(),
+          };
+        }
+        return {
+          ...q,
+          level: nextMode,
+          updatedAt: new Date().toISOString(),
+        };
+      })
+    );
+    setLevelSources((prev) => {
+      const next: Record<string, LevelDetectionSource> = { ...prev };
+      draftQuestions.forEach((q) => {
+        if (manuallyOverriddenLevelIds.has(q.id)) return;
+        if (nextMode === 'auto') {
+          next[q.id] = autoDetectedByDraftId[q.id]?.source || 'default_fallback';
+        } else {
+          next[q.id] = 'fixed';
+        }
+      });
+      return next;
+    });
+    setSaveOutcome(null);
+  };
+
   const handleUpdateSingleQuestion = (id: string, patch: Partial<Question>) => {
     const touchesCurriculum =
       patch.subjectId !== undefined ||
@@ -930,6 +1033,14 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
         next.add(id);
         return next;
       });
+    }
+    if (patch.level !== undefined) {
+      setManuallyOverriddenLevelIds((prev) => {
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+      setLevelSources((prev) => ({ ...prev, [id]: 'manual' }));
     }
 
     setDraftQuestions((prev) =>
@@ -990,10 +1101,31 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
       targetIds.forEach((id) => next.delete(id));
       return next;
     });
+    setManuallyOverriddenLevelIds((prev) => {
+      const next = new Set(prev);
+      targetIds.forEach((id) => next.delete(id));
+      return next;
+    });
+
+    setLevelSources((prev) => {
+      const next: Record<string, LevelDetectionSource> = { ...prev };
+      targetIds.forEach((id) => {
+        if (batchLevelMode === 'auto') {
+          next[id] = autoDetectedByDraftId[id]?.source || 'default_fallback';
+        } else {
+          next[id] = 'fixed';
+        }
+      });
+      return next;
+    });
 
     setDraftQuestions((prev) =>
       prev.map((q) => {
         if (!targetIds.has(q.id)) return q;
+        const resolvedLevel: CognitiveLevel =
+          batchLevelMode === 'auto'
+            ? autoDetectedByDraftId[q.id]?.level || q.level || 'nhan_biet'
+            : batchLevelMode;
         let nextQ: Question = {
           ...q,
           subjectId: curriculum.subjectId || DEFAULT_SUBJECT_ID,
@@ -1004,7 +1136,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
           lessonId: curriculum.lessonId || undefined,
           lessonName: curriculum.lessonName || undefined,
           lessonTopic: curriculum.lessonName || q.lessonTopic,
-          level: batchLevel,
+          level: resolvedLevel,
           source: batchSource.trim() || defaultSource,
           updatedAt: new Date().toISOString(),
         };
@@ -1137,7 +1269,7 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
+      className="fixed inset-0 z-[60] bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-3 sm:p-5 overflow-y-auto"
       role="dialog"
       aria-modal="true"
       aria-labelledby="word-import-review-title"
@@ -1272,15 +1404,18 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
 
                   <div>
                     <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                      5. Mức độ nhận thức mặc định
+                      5. Mức độ nhận thức
                     </label>
                     <select
-                      value={batchLevel}
-                      onChange={(e) => setBatchLevel(e.target.value as CognitiveLevel)}
+                      value={batchLevelMode}
+                      onChange={(e) =>
+                        handleBatchLevelModeChange(e.target.value as WordImportLevelMode)
+                      }
                       className="w-full min-h-[38px] px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white font-medium text-slate-800"
                     >
-                      <option value="nhan_biet">Biết (Nhận biết)</option>
-                      <option value="thong_hieu">Hiểu (Thông hiểu)</option>
+                      <option value="auto">{WORD_IMPORT_AUTO_LEVEL_LABEL}</option>
+                      <option value="nhan_biet">Nhận biết</option>
+                      <option value="thong_hieu">Thông hiểu</option>
                       <option value="van_dung">Vận dụng</option>
                       <option value="van_dung_cao">Vận dụng cao</option>
                     </select>
@@ -1340,6 +1475,37 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
             </div>
           ) : (
             <>
+              {/* Thanh thống kê nhanh mức độ nhận thức ở góc trên bảng preview */}
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-slate-50 border border-slate-200 rounded-xl px-4 py-2.5 text-xs tabular-nums">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-900">
+                    Tổng số câu: {summary.total}
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                    NB: {summary.byLevel.nhan_biet} câu
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 font-semibold">
+                    TH: {summary.byLevel.thong_hieu} câu
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-300 font-semibold">
+                    VD: {summary.byLevel.van_dung} câu
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-semibold">
+                    VDC: {summary.byLevel.van_dung_cao} câu
+                  </span>
+                </div>
+                {summary.defaultFallbackCount > 0 && (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-semibold">
+                    <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                    <span>{summary.defaultFallbackCount} câu Mặc định</span>
+                  </span>
+                )}
+              </div>
+
               {/* Filter & selection toolbar */}
               <div className="flex flex-wrap items-center justify-between gap-3 bg-white border border-slate-200 rounded-xl px-4 py-2.5 text-xs">
                 <div className="flex flex-wrap items-center gap-3">
@@ -1465,9 +1631,37 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
                           <span className="px-2 py-0.5 rounded-md bg-blue-50 text-blue-800 font-semibold">
                             {QUESTION_TYPE_SHORT_LABELS[q.type]}
                           </span>
-                          <span className="px-2 py-0.5 rounded-md bg-indigo-50 text-indigo-800 font-semibold">
-                            {COGNITIVE_LEVEL_SHORT_LABELS[q.level]}
-                          </span>
+                          {(() => {
+                            const lvl: CognitiveLevel = q.level || 'nhan_biet';
+                            const style = COGNITIVE_LEVEL_BADGE_STYLES[lvl];
+                            const src = levelSources[q.id];
+                            return (
+                              <>
+                                <span
+                                  className={`px-2 py-0.5 rounded-md font-semibold ${style.badgeClass}`}
+                                >
+                                  [{style.tagCode}] {style.label}
+                                </span>
+                                {src === 'default_fallback' && (
+                                  <span
+                                    title="Không tìm thấy mã [NB]/[TH]/[VD]/[VDC] ở đầu câu hỏi nên hệ thống gán mặc định Nhận biết"
+                                    className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 font-medium text-[11px] inline-flex items-center gap-1"
+                                  >
+                                    <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                                    <span>Mặc định</span>
+                                  </span>
+                                )}
+                                {src === 'ai' && (
+                                  <span
+                                    title="Mức độ được trợ lý AI tự động gợi ý do câu hỏi chưa gắn mã"
+                                    className="px-2 py-0.5 rounded-md bg-teal-50 text-teal-700 border border-teal-200 font-medium text-[11px]"
+                                  >
+                                    (AI gợi ý)
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
 
                           {dup.kind === 'in_bank' && (
                             <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 font-bold inline-flex items-center gap-1">
@@ -1489,7 +1683,24 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
                           )}
                         </div>
 
-                        <div className="flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <select
+                            aria-label={`Đổi mức độ nhận thức Câu ${index + 1}`}
+                            value={q.level || 'nhan_biet'}
+                            onChange={(e) =>
+                              handleUpdateSingleQuestion(q.id, {
+                                level: e.target.value as CognitiveLevel,
+                              })
+                            }
+                            className={`px-2 py-1 rounded-lg border text-[11px] font-semibold transition-colors cursor-pointer ${
+                              COGNITIVE_LEVEL_BADGE_STYLES[q.level || 'nhan_biet'].selectClass
+                            }`}
+                          >
+                            <option value="nhan_biet">Nhận biết</option>
+                            <option value="thong_hieu">Thông hiểu</option>
+                            <option value="van_dung">Vận dụng</option>
+                            <option value="van_dung_cao">Vận dụng cao</option>
+                          </select>
                           <button
                             type="button"
                             onClick={() => toggleEditor(q.id)}
@@ -1629,54 +1840,83 @@ export const WordImportReviewModal: React.FC<WordImportReviewModalProps> = ({
         </div>
 
         {/* Footer */}
-        <div className="px-5 sm:px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 shrink-0">
-          <div className="text-xs text-slate-600 tabular-nums">
-            {summary.total > 0 ? (
-              <span>
-                Đang chọn <strong className="text-slate-900">{selectedNonDuplicateCount}</strong> câu
-                hợp lệ để lưu vào collection <code className="px-1 py-0.5 rounded bg-slate-200/70 text-[11px]">questions</code>
-                {summary.dupTotal > 0 && (
-                  <span className="text-amber-700 font-medium">
-                    {' '}
-                    · Tự động chặn {summary.dupTotal + selectedDuplicateCount} câu trùng lặp
-                  </span>
-                )}
+        <div className="px-5 sm:px-6 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-col gap-2.5 shrink-0">
+          {summary.total > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 text-xs tabular-nums">
+              <span className="font-bold text-slate-800">
+                Đã nhận diện: {summary.total} câu
               </span>
-            ) : (
-              <span>Không có câu hỏi nào để lưu.</span>
-            )}
-          </div>
+              <span className="text-slate-400">(</span>
+              <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                {summary.byLevel.nhan_biet} Nhận biết
+              </span>
+              <span className="px-2 py-0.5 rounded-md bg-sky-50 text-sky-700 border border-sky-200 font-semibold">
+                {summary.byLevel.thong_hieu} Thông hiểu
+              </span>
+              <span className="px-2 py-0.5 rounded-md bg-amber-50 text-amber-700 border border-amber-300 font-semibold">
+                {summary.byLevel.van_dung} Vận dụng
+              </span>
+              <span className="px-2 py-0.5 rounded-md bg-rose-50 text-rose-700 border border-rose-200 font-semibold">
+                {summary.byLevel.van_dung_cao} Vận dụng cao
+              </span>
+              <span className="text-slate-400">)</span>
+              {summary.defaultFallbackCount > 0 && (
+                <span className="text-[11px] text-amber-700 font-medium ml-1">
+                  · {summary.defaultFallbackCount} câu chưa gắn mã (mặc định Nhận biết)
+                </span>
+              )}
+            </div>
+          )}
 
-          <div className="flex items-center gap-2.5">
-            <button
-              type="button"
-              disabled={isSaving}
-              onClick={onClose}
-              className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold disabled:opacity-50"
-            >
-              {saveOutcome?.type === 'success' ? 'Đóng' : 'Hủy'}
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="text-xs text-slate-600 tabular-nums">
+              {summary.total > 0 ? (
+                <span>
+                  Đang chọn <strong className="text-slate-900">{selectedNonDuplicateCount}</strong> câu
+                  hợp lệ để lưu vào collection <code className="px-1 py-0.5 rounded bg-slate-200/70 text-[11px]">questions</code>
+                  {summary.dupTotal > 0 && (
+                    <span className="text-amber-700 font-medium">
+                      {' '}
+                      · Tự động chặn {summary.dupTotal + selectedDuplicateCount} câu trùng lặp
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span>Không có câu hỏi nào để lưu.</span>
+              )}
+            </div>
 
-            {saveOutcome?.type !== 'success' && (
+            <div className="flex items-center gap-2.5">
               <button
                 type="button"
-                disabled={isSaving || selectedNonDuplicateCount === 0}
-                onClick={() => void handleConfirmSaveClick()}
-                className="min-h-[40px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2"
+                disabled={isSaving}
+                onClick={onClose}
+                className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold disabled:opacity-50"
               >
-                {isSaving ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Đang lưu lên Firestore...</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-4 h-4" />
-                    <span>Lưu {selectedNonDuplicateCount} câu vào Ngân hàng</span>
-                  </>
-                )}
+                {saveOutcome?.type === 'success' ? 'Đóng' : 'Hủy'}
               </button>
-            )}
+
+              {saveOutcome?.type !== 'success' && (
+                <button
+                  type="button"
+                  disabled={isSaving || selectedNonDuplicateCount === 0}
+                  onClick={() => void handleConfirmSaveClick()}
+                  className="min-h-[40px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2"
+                >
+                  {isSaving ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Đang lưu lên Firestore...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-4 h-4" />
+                      <span>Lưu {selectedNonDuplicateCount} câu vào Ngân hàng</span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

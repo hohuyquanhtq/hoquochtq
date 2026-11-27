@@ -2,6 +2,7 @@ import mammoth from 'mammoth';
 import {
   Question,
   QuestionType,
+  CognitiveLevel,
   ParsedExamResult,
   MultipleChoiceOption,
   TrueFalseStatement,
@@ -24,6 +25,11 @@ import {
   SectionDetectionCandidate,
 } from './sectionDetector';
 import { extractTablesFromHtml } from './answerExtractionEngine/documentTableReader';
+import {
+  extractCognitiveLevelTag,
+  parseCognitiveLevelToken,
+  stripLeadingCognitiveLevelTag,
+} from './cognitiveLevelTagParser';
 
 export { detectSectionHeader, detectSectionHeaderDetailed, extractTextFromPdfDetailed };
 export type { SectionDetectionCandidate, PdfExtractionResult };
@@ -135,13 +141,15 @@ export async function extractTextFromDocx(arrayBuffer: ArrayBuffer): Promise<str
  */
 export async function parseDocxExam(
   arrayBuffer: ArrayBuffer,
-  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12',
+  options?: { defaultLevel?: CognitiveLevel }
 ): Promise<{ text: string; result: ParsedExamResult }> {
   try {
     const res = await parseDocxWithEquations(arrayBuffer);
     if (res && res.fullMarkdownText && res.fullMarkdownText.trim().length > 20) {
       const result = parseExamContent(res.fullMarkdownText, defaultGrade, {
         equationWarnings: res.warnings,
+        defaultLevel: options?.defaultLevel,
         extractedTables: res.tables.map(t => ({
           id: t.id,
           sourceType: t.sourceType,
@@ -163,6 +171,7 @@ export async function parseDocxExam(
       return {
         text: converted,
         result: parseExamContent(converted, defaultGrade, {
+          defaultLevel: options?.defaultLevel,
           extractedTables: extractedTables.map(t => ({
             id: t.id,
             sourceType: t.sourceType,
@@ -177,7 +186,12 @@ export async function parseDocxExam(
   }
 
   const fallbackText = await extractTextFromDocx(arrayBuffer);
-  return { text: fallbackText, result: parseExamContent(fallbackText, defaultGrade) };
+  return {
+    text: fallbackText,
+    result: parseExamContent(fallbackText, defaultGrade, {
+      defaultLevel: options?.defaultLevel,
+    }),
+  };
 }
 
 /**
@@ -198,7 +212,8 @@ export async function extractTextFromPdf(arrayBuffer: ArrayBuffer): Promise<stri
  */
 export async function parsePdfExam(
   arrayBuffer: ArrayBuffer,
-  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12'
+  defaultGrade: '10' | '11' | '12' | 'chuyen_hsg' = '12',
+  options?: { defaultLevel?: CognitiveLevel }
 ): Promise<{ text: string; pdfMeta: PdfExtractionMeta; result: ParsedExamResult }> {
   const detailed = await extractTextFromPdfDetailed(arrayBuffer);
   const pdfMeta: PdfExtractionMeta = {
@@ -208,7 +223,10 @@ export async function parsePdfExam(
     isLikelyScanned: detailed.isLikelyScanned,
     warning: detailed.warning,
   };
-  const result = parseExamContent(detailed.text, defaultGrade, { pdfMeta });
+  const result = parseExamContent(detailed.text, defaultGrade, {
+    pdfMeta,
+    defaultLevel: options?.defaultLevel,
+  });
   return { text: detailed.text, pdfMeta, result };
 }
 
@@ -230,9 +248,11 @@ function cleanStrayBoldEdge(text: string): string {
 
 /**
  * Matches question headers across Word formatting (bold, italic, underline, markdown headings, single-cell tables)
- * e.g. "Câu 1.", "**Câu 1.**", "<u>Câu 2:</u>", "Câu 3 (Biết):", "Bài 1:"
+ * e.g. "Câu 1.", "**Câu 1.**", "<u>Câu 2:</u>", "Câu 1 [TH]:", "Câu 1 (VD)...", "Câu 1. [NB]", "Bài 1:"
+ * Preserves any whitelisted cognitive-level tag ([NB]/[TH]/[VD]/[VDC]/[M1]-[M4] or paren form) in `headerTag`
+ * while never consuming chemical formulas such as [H+] or [Fe3+].
  */
-function matchQuestionStart(rawLine: string): { num: number; rest: string } | null {
+function matchQuestionStart(rawLine: string): { num: number; rest: string; headerTag?: string } | null {
   let line = rawLine.trim();
   if (!line || /^[\-–—=_|.\s]+$/.test(line)) return null;
 
@@ -244,15 +264,32 @@ function matchQuestionStart(rawLine: string): { num: number; rest: string } | nu
     }
   }
 
+  // Case A: Explicit cognitive tag right after "Câu X" even without trailing "." or ":",
+  // e.g. "Câu 1 [TH]: ...", "Câu 1 (VD) ...", "Câu 1 [NB]. ...", "**Câu 1 (VDC)** ..."
+  const taggedStartRegex =
+    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|Bài)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(\[\s*(?:NB|TH|VDC|VD|M1|M2|M3|M4)\s*\]|\(\s*(?:NB|TH|VDC|VD|M1|M2|M3|M4)\s*\))(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:(?:[.:–—\-]+\s*|\s+)(.*)|\s*)$/i;
+  const taggedMatch = line.match(taggedStartRegex);
+  if (taggedMatch) {
+    const num = parseInt(taggedMatch[1], 10);
+    if (!isNaN(num)) {
+      const headerTag = taggedMatch[2].trim();
+      const rest = cleanStrayBoldEdge(taggedMatch[3] || '');
+      return { num, rest, headerTag };
+    }
+  }
+
+  // Case B: Standard "Câu X." / "Câu X:" / "Câu X (Biết):" header
   const regex =
-    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|Bài)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:\s*[\(\[][^\)\]]*[\)\]])?(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:[.:–—\-]+\s*|\s*$)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(.*)$/i;
+    /^(?:[\s#*>_|]*|<\/?(?:b|u|i|strong|em)>)*(?:Câu|Bài)\s+(\d+)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:\s*(\([^\)]*\)|\[[^\]]*\]))?(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(?:[.:–—\-]+\s*|\s*$)(?:[\s*_]*|<\/?(?:b|u|i|strong|em)>)*(.*)$/i;
   const m = line.match(regex);
   if (!m) return null;
 
   const num = parseInt(m[1], 10);
   if (isNaN(num)) return null;
-  const rest = cleanStrayBoldEdge(m[2] || '');
-  return { num, rest };
+  const rawBracket = m[2]?.trim();
+  const headerTag = rawBracket && parseCognitiveLevelToken(rawBracket) ? rawBracket : undefined;
+  const rest = cleanStrayBoldEdge(m[3] || '');
+  return { num, rest, headerTag };
 }
 
 /**
@@ -429,6 +466,7 @@ interface RawQuestionBlock {
   promptNum: number;
   sectionId: string;
   rawText: string;
+  headerTag?: string;
 }
 
 /**
@@ -452,7 +490,7 @@ export function reclassifyQuestionType(q: Question, targetType: QuestionType): Q
       ...q,
       code: newCode,
       type: 'part1_single_choice',
-      content: mc.prompt || sourceText,
+      content: stripLeadingCognitiveLevelTag(mc.prompt || sourceText) || mc.prompt || sourceText,
       options,
       correctOptionId: correctOptId,
       statements: undefined,
@@ -479,7 +517,7 @@ export function reclassifyQuestionType(q: Question, targetType: QuestionType): Q
       ...q,
       code: newCode,
       type: 'part2_true_false',
-      content: tf.prompt || sourceText,
+      content: stripLeadingCognitiveLevelTag(tf.prompt || sourceText) || tf.prompt || sourceText,
       options: undefined,
       correctOptionId: undefined,
       statements,
@@ -504,7 +542,7 @@ export function reclassifyQuestionType(q: Question, targetType: QuestionType): Q
     ...q,
     code: newCode,
     type: 'part3_short_answer',
-    content: prompt,
+    content: stripLeadingCognitiveLevelTag(prompt) || prompt,
     options: undefined,
     correctOptionId: undefined,
     statements: undefined,
@@ -697,7 +735,7 @@ function separateInlineQuestionStarts(text: string): string {
       // Split before "Câu <N>." / "Câu <N>:" when preceded by sentence punctuation or option text,
       // avoiding Vietnamese prepositions like "từ", "đến", "và", "như", "ở", "xem"
       return line.replace(
-        /(?<!\b(?:từ|đến|và|của|như|theo|ở|tại|xem|giữa|cho|tới))\s+((?:\*{0,2})?(?:Câu|Bài)\s+\d+(?:\s*\([^)]+\))?(?:\*{0,2})?\s*[.:–—])/gi,
+        /(?<!\b(?:từ|đến|và|của|như|theo|ở|tại|xem|giữa|cho|tới))\s+((?:\*{0,2})?(?:Câu|Bài)\s+\d+(?:\s*(?:\([^)]+\)|\[[^\]]+\]))?(?:\*{0,2})?\s*[.:–—])/gi,
         '\n$1'
       );
     })
@@ -716,9 +754,11 @@ export function parseExamContent(
     equationWarnings?: DocxEquationWarning[];
     selectedAnswerCandidateId?: string;
     pdfMeta?: PdfExtractionMeta;
+    defaultLevel?: CognitiveLevel;
     extractedTables?: { id: string; sourceType: string; surroundingHeader?: string; rows: string[][] }[];
   }
 ): ParsedExamResult {
+  const fallbackLevel: CognitiveLevel = extraMeta?.defaultLevel || 'nhan_biet';
   // 1. Isolate question content from answer keys and solutions
   const { answerSectionText } = isolateAnswerBlock(rawText);
   const examBodyText =
@@ -754,7 +794,7 @@ export function parseExamContent(
   const sectionTrackerById = new Map<string, InternalSectionTracker>();
   const questionBlocks: RawQuestionBlock[] = [];
   let activeSection: InternalSectionTracker | null = null;
-  let activeBlock: { promptNum: number; sectionId: string; lines: string[] } | null = null;
+  let activeBlock: { promptNum: number; sectionId: string; headerTag?: string; lines: string[] } | null = null;
 
   const ensureFallbackSection = (): InternalSectionTracker => {
     const id = `sec_${sectionTrackers.length + 1}`;
@@ -777,6 +817,7 @@ export function parseExamContent(
       questionBlocks.push({
         promptNum: activeBlock.promptNum,
         sectionId: activeBlock.sectionId,
+        headerTag: activeBlock.headerTag,
         rawText: activeBlock.lines.join('\n').trim(),
       });
       activeBlock = null;
@@ -839,7 +880,7 @@ export function parseExamContent(
       continue;
     }
 
-    // Check for Question start: "Câu 1.", "**Câu 1:**", "Bài 1:"
+    // Check for Question start: "Câu 1.", "**Câu 1:**", "Câu 1 [TH]:", "Câu 1 (VD)...", "Bài 1:"
     const qMatch = matchQuestionStart(line);
     if (qMatch) {
       flushActiveBlock();
@@ -849,6 +890,7 @@ export function parseExamContent(
       activeBlock = {
         promptNum: qMatch.num,
         sectionId: activeSection.id,
+        headerTag: qMatch.headerTag,
         lines: qMatch.rest ? [qMatch.rest] : [],
       };
       continue;
@@ -966,14 +1008,19 @@ export function parseExamContent(
           ? 'Chưa có đáp án chính thức'
           : undefined);
 
+      const headerLevelP1 = block.headerTag ? parseCognitiveLevelToken(block.headerTag) : null;
+      const rawPromptP1 = mcResult.prompt || rawContent;
+      const tagP1 = extractCognitiveLevelTag(rawPromptP1);
+      const rawSourceWithTagP1 = block.headerTag ? `${block.headerTag} ${rawContent}` : rawContent;
+
       question = {
         id: qId,
         code: qCode,
         type: 'part1_single_choice',
         grade: defaultGrade,
         topic: 'hoa_dai_cuong',
-        level: p1Counter <= 6 ? 'nhan_biet' : 'thong_hieu',
-        content: mcResult.prompt || rawContent,
+        level: headerLevelP1 || tagP1.detectedLevel || fallbackLevel,
+        content: tagP1.cleanedContent || rawPromptP1,
         options: mcResult.options,
         correctOptionId: correctOptId,
         recognitionSource: detectedKey ? 'answer_table' : mcResult.correctOptionId ? 'question_content' : undefined,
@@ -982,7 +1029,7 @@ export function parseExamContent(
         parseWarning: warnMsg,
         authorId: 'teacher_curr',
         sectionId: block.sectionId,
-        rawSourceText: rawContent,
+        rawSourceText: rawSourceWithTagP1,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -1008,14 +1055,19 @@ export function parseExamContent(
           ? 'Chưa có đáp án chính thức cho tất cả các ý'
           : undefined);
 
+      const headerLevelP2 = block.headerTag ? parseCognitiveLevelToken(block.headerTag) : null;
+      const rawPromptP2 = tfResult.prompt || rawContent;
+      const tagP2 = extractCognitiveLevelTag(rawPromptP2);
+      const rawSourceWithTagP2 = block.headerTag ? `${block.headerTag} ${rawContent}` : rawContent;
+
       question = {
         id: qId,
         code: qCode,
         type: 'part2_true_false',
         grade: defaultGrade,
         topic: 'hoa_vo_co',
-        level: 'van_dung',
-        content: tfResult.prompt || rawContent,
+        level: headerLevelP2 || tagP2.detectedLevel || fallbackLevel,
+        content: tagP2.cleanedContent || rawPromptP2,
         statements: tfResult.statements,
         recognitionSource: detectedTF ? 'answer_table' : 'question_content',
         teacherVerified: tfResult.statements.length >= 2 && allAssigned && !structureMismatchWarning,
@@ -1023,7 +1075,7 @@ export function parseExamContent(
         parseWarning: warnMsg,
         authorId: 'teacher_curr',
         sectionId: block.sectionId,
-        rawSourceText: rawContent,
+        rawSourceText: rawSourceWithTagP2,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -1031,6 +1083,9 @@ export function parseExamContent(
       p3Counter++;
       const detectedShort = answerKeys.part3.get(p3Counter) || answerKeys.part3.get(promptNum);
       const { prompt: cleanPrompt, inlineAnswer } = extractPart3Data(rawContent);
+      const headerLevelP3 = block.headerTag ? parseCognitiveLevelToken(block.headerTag) : null;
+      const tagP3 = extractCognitiveLevelTag(cleanPrompt);
+      const rawSourceWithTagP3 = block.headerTag ? `${block.headerTag} ${rawContent}` : rawContent;
 
       const finalVal = detectedShort?.answer || inlineAnswer || '';
       const hasAnswer = !!finalVal;
@@ -1041,8 +1096,8 @@ export function parseExamContent(
         type: 'part3_short_answer',
         grade: defaultGrade,
         topic: 'hoa_thuc_nghiem',
-        level: 'van_dung_cao',
-        content: cleanPrompt,
+        level: headerLevelP3 || tagP3.detectedLevel || fallbackLevel,
+        content: tagP3.cleanedContent || cleanPrompt,
         options: undefined,
         statements: undefined,
         shortAnswerConfig: {
@@ -1059,7 +1114,7 @@ export function parseExamContent(
         parseWarning: structureMismatchWarning || (hasAnswer ? undefined : 'Chưa có đáp án chính thức'),
         authorId: 'teacher_curr',
         sectionId: block.sectionId,
-        rawSourceText: rawContent,
+        rawSourceText: rawSourceWithTagP3,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };

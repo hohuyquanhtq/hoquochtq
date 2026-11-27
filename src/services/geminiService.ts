@@ -1,48 +1,83 @@
-import { GoogleGenAI } from '@google/genai';
-import { Question } from '../types';
+import { CognitiveLevel, Question } from '../types';
 
-let aiInstance: GoogleGenAI | null = null;
+const VALID_LEVELS = new Set<CognitiveLevel>([
+  'nhan_biet',
+  'thong_hieu',
+  'van_dung',
+  'van_dung_cao',
+]);
 
-function getAiClient(): GoogleGenAI | null {
-  if (aiInstance) return aiInstance;
-  const apiKey = (typeof process !== 'undefined' && process.env?.GEMINI_API_KEY) || (import.meta as any).env?.VITE_GEMINI_API_KEY;
-  if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
-    aiInstance = new GoogleGenAI({ apiKey });
-    return aiInstance;
+/**
+ * AI-assisted chemistry question explanation generator (calls server-side /api/gemini/explain)
+ */
+export async function generateAiChemistryExplanation(question: Question): Promise<string> {
+  try {
+    const response = await fetch('/api/gemini/explain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: question.content,
+        type: question.type,
+        options: question.options,
+        correctOptionId: question.correctOptionId,
+        statements: question.statements,
+      }),
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return (
+        data?.error ||
+        'Lưu ý: Cần thiết lập GEMINI_API_KEY để sử dụng trợ lý giải thích AI tự động.'
+      );
+    }
+
+    return typeof data?.explanation === 'string' && data.explanation.trim()
+      ? data.explanation
+      : 'Không thể tạo lời giải tự động.';
+  } catch (error) {
+    console.error('Gemini explanation error:', error);
+    return 'Đã xảy ra lỗi khi kết nối tới mô hình AI. Vui lòng thử lại sau.';
   }
-  return null;
 }
 
 /**
- * AI-assisted chemistry question explanation generator
+ * Optional fast AI fallback to classify cognitive levels ONLY for questions that
+ * did not have explicit [NB], [TH], [VD], [VDC] tags in the uploaded Word file.
+ * Strictly timeout-guarded (5s) and returns {} silently if AI is off, busy, or unreachable.
  */
-export async function generateAiChemistryExplanation(question: Question): Promise<string> {
-  const ai = getAiClient();
-  if (!ai) {
-    return 'Lưu ý: Cần thiết lập GEMINI_API_KEY để sử dụng trợ lý giải thích AI tự động.';
-  }
+export async function classifyMissingCognitiveLevelsWithAi(
+  items: Array<{ id: string; content: string; type?: string }>
+): Promise<Record<string, CognitiveLevel>> {
+  if (!items || items.length === 0) return {};
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 5000);
 
   try {
-    const prompt = `Bạn là chuyên gia giảng dạy môn Hóa học THPT và Chuyên Hóa Việt Nam. Hãy viết lời giải chi tiết, rõ ràng, khoa học cho câu hỏi sau:
-Nội dung: ${question.content}
-Dạng câu: ${question.type}
-${question.options ? `Các phương án: ${question.options.map(o => `${o.id}. ${o.text}`).join('; ')}` : ''}
-${question.correctOptionId ? `Đáp án đúng: ${question.correctOptionId}` : ''}
-${question.statements ? `Mệnh đề: ${question.statements.map(s => `${s.id}) ${s.statement}`).join('; ')}` : ''}
-
-Yêu cầu:
-- Trình bày phương trình hóa học đầy đủ, đúng điều kiện nhiệt độ/xúc tác.
-- Giải thích bản chất hiện tượng hóa học hoặc tính toán từng bước.
-- Ngắn gọn, súc tích, chuẩn chương trình giáo dục phổ thông mới.`;
-
-    const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
-      contents: prompt,
+    const response = await fetch('/api/gemini/classify-levels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items }),
+      signal: controller.signal,
     });
 
-    return response.text || 'Không thể tạo lời giải tự động.';
-  } catch (error) {
-    console.error('Gemini explanation error:', error);
-    return 'Đã xảy ra lỗi khi kết nối tới mô hình AI. Vui lòng kiểm tra API key.';
+    if (!response.ok) return {};
+    const data = await response.json().catch(() => ({}));
+    if (!data?.available || !data?.levels || typeof data.levels !== 'object') {
+      return {};
+    }
+
+    const result: Record<string, CognitiveLevel> = {};
+    for (const [id, lvl] of Object.entries(data.levels)) {
+      if (typeof lvl === 'string' && VALID_LEVELS.has(lvl as CognitiveLevel)) {
+        result[id] = lvl as CognitiveLevel;
+      }
+    }
+    return result;
+  } catch {
+    return {};
+  } finally {
+    clearTimeout(timeoutId);
   }
 }

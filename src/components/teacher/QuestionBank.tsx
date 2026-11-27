@@ -31,9 +31,12 @@ import {
   ChevronRight,
   ChevronUp,
   Copy,
+  Download,
   Edit3,
   Eye,
+  FileText,
   FlaskConical,
+  Info,
   Loader2,
   Plus,
   Search,
@@ -46,7 +49,18 @@ import {
 import { ChemRenderer } from '../../utils/chemRenderer';
 import { parseDocxExam } from '../../utils/docxParser';
 import { WordImportReviewModal } from './WordImportReviewModal';
-import { generateAiChemistryExplanation } from '../../services/geminiService';
+import {
+  classifyMissingCognitiveLevelsWithAi,
+  generateAiChemistryExplanation,
+} from '../../services/geminiService';
+import { downloadStandardChemistryWordTemplate } from '../../services/sampleWordTemplateService';
+import {
+  extractCognitiveLevelTag,
+  LevelDetectionSource,
+  stripLeadingCognitiveLevelTag,
+  WORD_IMPORT_AUTO_LEVEL_LABEL,
+  WordImportLevelMode,
+} from '../../utils/cognitiveLevelTagParser';
 import {
   fetchCurriculumLessonsBySubjectGrade,
   filterAndGroupCurriculumLessons,
@@ -114,10 +128,18 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
   // States bóc tách Word sử dụng engine chuẩn của hệ thống
   const wordInputRef = useRef<HTMLInputElement | null>(null);
+  const [wordImportLevelMode, setWordImportLevelMode] = useState<WordImportLevelMode>('auto');
   const [isExtractingWord, setIsExtractingWord] = useState<boolean>(false);
+  const [isDownloadingTemplate, setIsDownloadingTemplate] = useState<boolean>(false);
   const [activeWordResult, setActiveWordResult] = useState<ParsedExamResult | null>(null);
   const [activeWordFileName, setActiveWordFileName] = useState<string>('');
   const [activeWordFileSize, setActiveWordFileSize] = useState<number>(0);
+  const [activeWordLevelSources, setActiveWordLevelSources] = useState<
+    Record<number, LevelDetectionSource>
+  >({});
+  const [activeWordAutoLevels, setActiveWordAutoLevels] = useState<
+    Record<number, { level: CognitiveLevel; source: LevelDetectionSource }>
+  >({});
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -518,12 +540,70 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
         return;
       }
 
-      // 4. Gán metadata kế thừa đúng theo lựa chọn của giáo viên (để trống grade nếu bộ lọc ngoài đang là "Tất cả khối")
-      const preparedQuestions = result.questions.map((q) => {
-        const finalLevel =
-          levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : q.level || 'nhan_biet';
+      // 4. Quét Regex tốc độ cao nhận diện thẻ [NB], [TH], [VD], [VDC], [M1]-[M4] ở đầu mỗi câu hỏi
+      // và làm sạch thẻ khỏi nội dung (giữ nguyên 100% ký hiệu hóa học như [H+], [OH-], [Fe3+]).
+      const regexAnalysis = result.questions.map((q) => {
+        const rawSourceCheck = extractCognitiveLevelTag(q.rawSourceText || '');
+        const contentCheck = extractCognitiveLevelTag(q.content || '');
+        const detectedLevel = contentCheck.detectedLevel || rawSourceCheck.detectedLevel;
+        const cleanedContent =
+          stripLeadingCognitiveLevelTag(q.content || '') || q.content;
+        return {
+          detectedLevel,
+          cleanedContent,
+        };
+      });
+
+      // Nếu đang ở chế độ tự động và có câu hỏi chưa gắn mã, thử phân loại nhanh bằng AI (nếu khả dụng)
+      let aiDetectedByIndex: Record<string, CognitiveLevel> = {};
+      if (wordImportLevelMode === 'auto') {
+        const untaggedItems = result.questions
+          .map((q, idx) => ({
+            id: String(idx),
+            type: q.type,
+            content: regexAnalysis[idx].cleanedContent,
+            hasTag: Boolean(regexAnalysis[idx].detectedLevel),
+          }))
+          .filter((item) => !item.hasTag)
+          .map(({ id, type, content }) => ({ id, type, content }));
+
+        if (untaggedItems.length > 0) {
+          aiDetectedByIndex = await classifyMissingCognitiveLevelsWithAi(untaggedItems);
+        }
+      }
+
+      const nextLevelSources: Record<number, LevelDetectionSource> = {};
+      const nextAutoLevels: Record<
+        number,
+        { level: CognitiveLevel; source: LevelDetectionSource }
+      > = {};
+
+      // 5. Gán metadata kế thừa đúng theo lựa chọn của giáo viên (để trống grade nếu bộ lọc ngoài đang là "Tất cả khối")
+      const preparedQuestions = result.questions.map((q, idx) => {
+        const { detectedLevel, cleanedContent } = regexAnalysis[idx];
+        const aiLevel = aiDetectedByIndex[String(idx)];
+
+        // Mức độ nhận diện tự động (lưu kèm để giáo viên có thể chuyển qua lại chế độ trong modal)
+        const autoLevel: CognitiveLevel = detectedLevel || aiLevel || 'nhan_biet';
+        const autoSource: LevelDetectionSource = detectedLevel
+          ? 'tag'
+          : aiLevel
+          ? 'ai'
+          : 'default_fallback';
+        nextAutoLevels[idx] = { level: autoLevel, source: autoSource };
+
+        let finalLevel: CognitiveLevel;
+        if (wordImportLevelMode === 'auto') {
+          finalLevel = autoLevel;
+          nextLevelSources[idx] = autoSource;
+        } else {
+          finalLevel = wordImportLevelMode;
+          nextLevelSources[idx] = 'fixed';
+        }
+
         return {
           ...q,
+          content: cleanedContent,
           subjectId: activeSubjectId,
           subjectName: activeSubject.name,
           grade: inheritedGrade as ChemGrade,
@@ -546,13 +626,25 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
 
       result.questions = preparedQuestions;
 
+      const countsByLevel: Record<CognitiveLevel, number> = {
+        nhan_biet: 0,
+        thong_hieu: 0,
+        van_dung: 0,
+        van_dung_cao: 0,
+      };
+      preparedQuestions.forEach((q) => {
+        countsByLevel[q.level || 'nhan_biet']++;
+      });
+
+      setActiveWordLevelSources(nextLevelSources);
+      setActiveWordAutoLevels(nextAutoLevels);
       setActiveWordResult({ ...result });
       setActiveWordFileName(file.name);
       setActiveWordFileSize(file.size);
       showToast(
-        inheritedGrade
-          ? `Đã bóc tách ${result.questions.length} câu (${activeSubject.name} · ${GRADE_LABELS[inheritedGrade]}).`
-          : `Đã bóc tách ${result.questions.length} câu từ file Word. Vui lòng kiểm tra và chọn Khối lớp trước khi lưu!`
+        wordImportLevelMode === 'auto'
+          ? `Đã bóc tách ${preparedQuestions.length} câu (${countsByLevel.nhan_biet} NB · ${countsByLevel.thong_hieu} TH · ${countsByLevel.van_dung} VD · ${countsByLevel.van_dung_cao} VDC).`
+          : `Đã bóc tách ${preparedQuestions.length} câu · Mức độ: ${COGNITIVE_LEVEL_LABELS[wordImportLevelMode]}.`
       );
     } catch (err: any) {
       console.error(err);
@@ -560,6 +652,20 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
     } finally {
       setIsExtractingWord(false);
       if (wordInputRef.current) wordInputRef.current.value = '';
+    }
+  };
+
+  const handleDownloadSampleWordTemplate = async () => {
+    if (isDownloadingTemplate) return;
+    setIsDownloadingTemplate(true);
+    try {
+      await downloadStandardChemistryWordTemplate();
+      showToast('Đã tải file Word mẫu có gắn sẵn thẻ [NB], [TH], [VD], [VDC].');
+    } catch (err) {
+      console.error(err);
+      showToast('Không thể tạo file Word mẫu. Vui lòng thử lại.');
+    } finally {
+      setIsDownloadingTemplate(false);
     }
   };
 
@@ -612,75 +718,125 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
       )}
 
       {/* Header */}
-      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-teal-700 font-bold text-xs uppercase tracking-wider">
-            <BookOpen className="w-4 h-4" />
-            <span>Ngân hàng câu hỏi đa môn · Chương trình GDPT 2018</span>
+      <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-xs space-y-4">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 text-teal-700 font-bold text-xs uppercase tracking-wider">
+              <BookOpen className="w-4 h-4" />
+              <span>Ngân hàng câu hỏi đa môn · Chương trình GDPT 2018</span>
+            </div>
+            <h1 className="text-xl md:text-2xl font-bold text-slate-900 mt-1 tabular-nums">
+              Ngân hàng câu hỏi ({questions.length} câu)
+            </h1>
+            <p className="text-sm text-slate-600 mt-1">
+              Phân loại theo môn học, khối lớp, chủ đề bài học, dạng thức đề thi 2025 và 4 mức độ nhận thức.
+            </p>
           </div>
-          <h1 className="text-xl md:text-2xl font-bold text-slate-900 mt-1 tabular-nums">
-            Ngân hàng câu hỏi ({questions.length} câu)
-          </h1>
-          <p className="text-sm text-slate-600 mt-1">
-            Phân loại theo môn học, khối lớp, chủ đề bài học, dạng thức đề thi 2025 và 4 mức độ nhận thức.
-          </p>
+
+          <div className="flex flex-wrap items-center gap-2.5">
+            <button
+              type="button"
+              onClick={() => setShowStatsPanel((v) => !v)}
+              className={`min-h-[42px] px-4 py-2 rounded-xl border text-xs font-semibold transition-colors inline-flex items-center gap-2 ${
+                showStatsPanel
+                  ? 'bg-slate-900 border-slate-900 text-white'
+                  : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
+              }`}
+            >
+              <BarChart3 className="w-4 h-4" />
+              <span>Thống kê ngân hàng</span>
+              {showStatsPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setIsAddModalOpen(true)}
+              className="min-h-[42px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-1.5"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Thêm câu hỏi mới</span>
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => setShowStatsPanel((v) => !v)}
-            className={`min-h-[42px] px-4 py-2 rounded-xl border text-xs font-semibold transition-colors inline-flex items-center gap-2 ${
-              showStatsPanel
-                ? 'bg-slate-900 border-slate-900 text-white'
-                : 'bg-white border-slate-200 hover:bg-slate-50 text-slate-700'
-            }`}
-          >
-            <BarChart3 className="w-4 h-4" />
-            <span>Thống kê ngân hàng</span>
-            {showStatsPanel ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-          </button>
+        {/* Khu vực Bóc tách câu hỏi từ file Word (.docx) kèm Dropdown Mức độ nhận thức */}
+        <div className="pt-4 border-t border-slate-100">
+          <div className="rounded-xl bg-blue-50/70 border border-blue-200/80 p-3.5 space-y-2.5">
+            <div className="flex flex-col lg:flex-row lg:items-center gap-2.5">
+              <div className="flex items-center gap-2 text-blue-900 font-bold text-xs shrink-0">
+                <FileText className="w-4 h-4 text-blue-600" />
+                <span>Bóc tách file Word (.docx):</span>
+              </div>
 
-          {/* NÚT BÓC TÁCH TỪ FILE WORD */}
-          <button
-            type="button"
-            disabled={isExtractingWord}
-            onClick={() => wordInputRef.current?.click()}
-            className="min-h-[42px] px-4 py-2 rounded-xl bg-blue-50 border border-blue-200 hover:bg-blue-100 text-blue-700 text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2 disabled:opacity-60"
-            title={
-              levelFilter !== 'all'
-                ? `Bóc tách câu hỏi và tự động áp dụng mức độ: ${COGNITIVE_LEVEL_LABELS[levelFilter as CognitiveLevel]}`
-                : 'Bóc tách câu hỏi từ Word giữ trọn vẹn công thức Toán/Hóa và xem trước'
-            }
-          >
-            {isExtractingWord ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
-                <span>Đang xử lý file Word...</span>
-              </>
-            ) : (
-              <>
-                <Upload className="w-4 h-4 text-blue-600" />
-                <span>
-                  Bóc tách từ file Word
-                  {levelFilter !== 'all' && (
-                    <span className="ml-1 px-1.5 py-0.5 rounded bg-blue-200/70 text-blue-800 text-[10px] font-bold">
-                      {COGNITIVE_LEVEL_SHORT_LABELS[levelFilter as CognitiveLevel]}
-                    </span>
+              <div className="flex-1 min-w-[260px]">
+                <select
+                  aria-label="Mức độ nhận thức khi tải file Word"
+                  value={wordImportLevelMode}
+                  onChange={(e) => setWordImportLevelMode(e.target.value as WordImportLevelMode)}
+                  className="w-full min-h-[40px] px-3 py-2 rounded-xl border border-blue-200 bg-white text-xs font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500/30 focus:border-blue-400"
+                >
+                  <option value="auto">{WORD_IMPORT_AUTO_LEVEL_LABEL}</option>
+                  <option value="nhan_biet">Nhận biết</option>
+                  <option value="thong_hieu">Thông hiểu</option>
+                  <option value="van_dung">Vận dụng</option>
+                  <option value="van_dung_cao">Vận dụng cao</option>
+                </select>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  disabled={isExtractingWord}
+                  onClick={() => wordInputRef.current?.click()}
+                  className="min-h-[40px] px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-2 disabled:opacity-60"
+                  title={
+                    wordImportLevelMode === 'auto'
+                      ? 'Tự động nhận diện [NB], [TH], [VD], [VDC] trong file Word'
+                      : `Gán tất cả câu hỏi trong file Word về mức độ: ${COGNITIVE_LEVEL_LABELS[wordImportLevelMode]}`
+                  }
+                >
+                  {isExtractingWord ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Đang xử lý file Word...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      <span>Tải &amp; bóc tách file Word</span>
+                    </>
                   )}
-                </span>
-              </>
-            )}
-          </button>
+                </button>
 
-          <button
-            type="button"
-            onClick={() => setIsAddModalOpen(true)}
-            className="min-h-[42px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs transition-colors inline-flex items-center gap-1.5"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Thêm câu hỏi mới</span>
-          </button>
+                <button
+                  type="button"
+                  disabled={isDownloadingTemplate}
+                  onClick={() => void handleDownloadSampleWordTemplate()}
+                  className="min-h-[40px] px-3.5 py-2 rounded-xl bg-white border border-teal-200 hover:bg-teal-50 text-teal-700 text-xs font-semibold transition-colors inline-flex items-center gap-1.5 disabled:opacity-60"
+                  title="Tải file Word mẫu chuẩn GDPT 2018 có minh họa thẻ [NB], [TH], [VD], [VDC]"
+                >
+                  {isDownloadingTemplate ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Download className="w-3.5 h-3.5" />
+                  )}
+                  <span>Tải file Word mẫu</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-1.5 text-[11px] text-slate-600 leading-relaxed">
+              <Info className="w-3.5 h-3.5 text-teal-600 shrink-0 mt-0.5" />
+              <span>
+                <strong className="text-slate-700">Mẹo:</strong> Gắn thẻ{' '}
+                <code className="px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">[NB]</code>,{' '}
+                <code className="px-1 py-0.5 rounded bg-sky-50 text-sky-700 border border-sky-200 font-semibold">[TH]</code>,{' '}
+                <code className="px-1 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-300 font-semibold">[VD]</code>,{' '}
+                <code className="px-1 py-0.5 rounded bg-rose-50 text-rose-700 border border-rose-200 font-semibold">[VDC]</code>{' '}
+                (hoặc dạng <code className="font-semibold">(NB)</code>, <code className="font-semibold">[M1]–[M4]</code>) trước mỗi câu hỏi để hệ thống tự động phân loại nhiều mức độ trong cùng 1 file Word.
+              </span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1332,8 +1488,15 @@ export const QuestionBank: React.FC<QuestionBankProps> = ({
               defaultQuestionType:
                 typeFilter !== 'all' ? (typeFilter as QuestionType) : '',
               level:
-                levelFilter !== 'all' ? (levelFilter as CognitiveLevel) : 'nhan_biet',
+                wordImportLevelMode !== 'auto'
+                  ? wordImportLevelMode
+                  : levelFilter !== 'all'
+                  ? (levelFilter as CognitiveLevel)
+                  : 'nhan_biet',
+              levelMode: wordImportLevelMode,
             }}
+            initialLevelSources={activeWordLevelSources}
+            initialAutoDetectedLevels={activeWordAutoLevels}
             existingQuestions={questions}
             subjects={subjects}
             currentUserId={currentUserId}

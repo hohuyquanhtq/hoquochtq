@@ -7,6 +7,10 @@ import { createPublicExamLinkHandlers } from './server/publicExamLinkHandler.ts'
 import { createCurriculumImportHandlers } from './server/curriculumImportHandler.ts';
 import { handleSetAdminClaims } from './server/adminClaimsHandler.ts';
 import {
+  handleClassifyCognitiveLevels,
+  handleExplainChemistryQuestion,
+} from './server/geminiHandler.ts';
+import {
   checkFirebaseAdminHealth,
   getFirebaseEnvCheck,
   sanitizeSensitiveLogText,
@@ -152,6 +156,8 @@ async function startServer() {
   app.all('/api/submissions/teacher-detail', wrapExpress(handlers.handleGetTeacherSubmissionDetail));
   app.all('/api/exams/allocate-public-code', wrapExpress(publicLinkHandlers.handleAllocatePublicCode));
   app.all('/api/exams/sync-link-status', wrapExpress(publicLinkHandlers.handleSyncPublicExamLinkStatus));
+  app.all('/api/gemini/classify-levels', wrapExpress(handleClassifyCognitiveLevels));
+  app.all('/api/gemini/explain', wrapExpress(handleExplainChemistryQuestion));
   app.use('/api', (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
     res.status(404).json({

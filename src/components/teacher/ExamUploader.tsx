@@ -39,6 +39,7 @@ import {
   ParsedExamResult,
   Question,
   QuestionType,
+  CognitiveLevel,
   ChemGrade,
   RecognitionStatus,
 } from '../../types';
@@ -46,6 +47,10 @@ import { ChemRenderer } from '../../utils/chemRenderer';
 import { ExamAnswerDashboard } from './ExamAnswerDashboard';
 import { isolateAnswerBlock, deepScanWithGemini } from '../../utils/answerExtractionEngine';
 import { generateQuestionCode, normalizeQuestionGrade } from '../../constants/subjects';
+import {
+  COGNITIVE_LEVEL_BADGE_STYLES,
+  extractCognitiveLevelTag,
+} from '../../utils/cognitiveLevelTagParser';
 
 interface ExamUploaderProps {
   onSaveToQuestionBank: (questions: Question[]) => void;
@@ -111,6 +116,8 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
   const [inputText, setInputText] = useState('');
   const [selectedGrade, setSelectedGrade] = useState<ChemGrade>('12');
+  const [defaultFallbackLevel, setDefaultFallbackLevel] = useState<CognitiveLevel>('nhan_biet');
+  const [defaultLevelIds, setDefaultLevelIds] = useState<Set<string>>(() => new Set());
   const [selectedFile, setSelectedFile] = useState<SelectedFileInfo | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -127,6 +134,22 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const [showSourceSnippetModal, setShowSourceSnippetModal] = useState(false);
   const [isDeepScanning, setIsDeepScanning] = useState(false);
   const [pendingActionNotice, setPendingActionNotice] = useState<'bank' | 'exam' | null>(null);
+
+  const computeDefaultLevelIds = (result: ParsedExamResult): Set<string> => {
+    const ids = new Set<string>();
+    result.questions.forEach((q) => {
+      const check = extractCognitiveLevelTag(q.rawSourceText || '');
+      if (!check.detectedLevel) {
+        ids.add(q.id);
+      }
+    });
+    return ids;
+  };
+
+  const applyParsedResultWithLevels = (result: ParsedExamResult) => {
+    setParsedResult(result);
+    setDefaultLevelIds(computeDefaultLevelIds(result));
+  };
 
   const showToast = (msg: string) => {
     setNotification(msg);
@@ -159,9 +182,11 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage('Đang phân loại câu hỏi Phần I, II, III và đối chiếu đáp án...');
         await yieldToNextFrame();
 
-        const { text, result } = await parseDocxExam(buffer, selectedGrade);
+        const { text, result } = await parseDocxExam(buffer, selectedGrade, {
+          defaultLevel: defaultFallbackLevel,
+        });
         setInputText(text);
-        setParsedResult(result);
+        applyParsedResultWithLevels(result);
         setActiveViewTab(result.totalQuestions > 0 ? 'answer_reconciliation' : 'all_questions');
         setAnalysisProgress(100);
         setAnalysisStage(`Hoàn tất phân tích ${result.totalQuestions} câu hỏi từ file Word.`);
@@ -184,9 +209,11 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         setAnalysisStage('Đang bóc tách câu hỏi trắc nghiệm & bảng đáp án PDF...');
         await yieldToNextFrame();
 
-        const { text, pdfMeta, result } = await parsePdfExam(buffer, selectedGrade);
+        const { text, pdfMeta, result } = await parsePdfExam(buffer, selectedGrade, {
+          defaultLevel: defaultFallbackLevel,
+        });
         setInputText(text);
-        setParsedResult(result);
+        applyParsedResultWithLevels(result);
         setActiveViewTab(result.totalQuestions > 0 ? 'answer_reconciliation' : 'all_questions');
         setAnalysisProgress(100);
 
@@ -220,8 +247,10 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
         const text = await file.text();
         setInputText(text);
-        const result = parseExamContent(text, selectedGrade);
-        setParsedResult(result);
+        const result = parseExamContent(text, selectedGrade, {
+          defaultLevel: defaultFallbackLevel,
+        });
+        applyParsedResultWithLevels(result);
         setActiveViewTab('answer_reconciliation');
         setAnalysisProgress(100);
         setAnalysisStage(`Hoàn tất phân tích ${result.totalQuestions} câu hỏi.`);
@@ -270,6 +299,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     setSelectedFile(null);
     setInputText('');
     setParsedResult(null);
+    setDefaultLevelIds(new Set());
     setParseError(null);
     setAnalysisProgress(0);
     setAnalysisStage('');
@@ -293,8 +323,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         selectedAnswerCandidateId: parsedResult?.selectedAnswerCandidateId,
         pdfMeta: parsedResult?.pdfMeta,
         extractedTables: parsedResult?.extractedTables,
+        defaultLevel: defaultFallbackLevel,
       });
-      setParsedResult(result);
+      applyParsedResultWithLevels(result);
       setAnalysisProgress(100);
       setAnalysisStage(`Hoàn tất bóc tách ${result.totalQuestions} câu hỏi.`);
       showToast(`Đã bóc tách thành công ${result.totalQuestions} câu hỏi!`);
@@ -319,8 +350,10 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
     });
     setInputText(sample.content);
     setSelectedGrade(sample.grade);
-    const result = parseExamContent(sample.content, sample.grade);
-    setParsedResult(result);
+    const result = parseExamContent(sample.content, sample.grade, {
+      defaultLevel: defaultFallbackLevel,
+    });
+    applyParsedResultWithLevels(result);
     setActiveViewTab('answer_reconciliation');
     setAnalysisProgress(100);
     setAnalysisStage(`Đã phân tích ${result.totalQuestions} câu hỏi từ đề mẫu.`);
@@ -347,18 +380,22 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
 
       if (type === 'docx') {
         setSelectedGrade('12');
-        const { text, result } = await parseDocxExam(buffer, '12');
+        const { text, result } = await parseDocxExam(buffer, '12', {
+          defaultLevel: defaultFallbackLevel,
+        });
         setInputText(text);
-        setParsedResult(result);
+        applyParsedResultWithLevels(result);
         setActiveViewTab('answer_reconciliation');
         setAnalysisProgress(100);
         setAnalysisStage(`Hoàn tất bóc tách ${result.totalQuestions} câu hỏi từ ${name}.`);
         showToast(`Đã bóc tách file Word mẫu ${name} (${result.totalQuestions} câu)!`);
       } else {
         setSelectedGrade('12');
-        const { text, pdfMeta, result } = await parsePdfExam(buffer, '12');
+        const { text, pdfMeta, result } = await parsePdfExam(buffer, '12', {
+          defaultLevel: defaultFallbackLevel,
+        });
         setInputText(text);
-        setParsedResult(result);
+        applyParsedResultWithLevels(result);
         setActiveViewTab('answer_reconciliation');
         setAnalysisProgress(100);
         if (pdfMeta.isLikelyScanned) {
@@ -384,8 +421,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
       selectedAnswerCandidateId: candidateId,
       pdfMeta: parsedResult.pdfMeta,
       extractedTables: parsedResult.extractedTables,
+      defaultLevel: defaultFallbackLevel,
     });
-    setParsedResult({
+    applyParsedResultWithLevels({
       ...result,
       selectedAnswerCandidateId: candidateId,
       answerMappingConfirmed: true,
@@ -538,6 +576,23 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         ? 'Phần II (Đúng/Sai)'
         : 'Phần III (Trả lời ngắn)';
     showToast(`Đã chuyển câu hỏi sang ${label}`);
+  };
+
+  const handleChangeQuestionLevel = (qId: string, newLevel: CognitiveLevel) => {
+    if (!parsedResult) return;
+    const updatedQuestions = parsedResult.questions.map((q) =>
+      q.id === qId ? { ...q, level: newLevel, updatedAt: new Date().toISOString() } : q
+    );
+    setParsedResult({
+      ...parsedResult,
+      questions: updatedQuestions,
+    });
+    setDefaultLevelIds((prev) => {
+      if (!prev.has(qId)) return prev;
+      const next = new Set(prev);
+      next.delete(qId);
+      return next;
+    });
   };
 
   const getBlockingErrors = (): string | null => {
@@ -787,8 +842,9 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
         selectedAnswerCandidateId: parsedResult?.selectedAnswerCandidateId,
         pdfMeta: parsedResult?.pdfMeta,
         extractedTables: parsedResult?.extractedTables,
+        defaultLevel: defaultFallbackLevel,
       });
-      setParsedResult(result);
+      applyParsedResultWithLevels(result);
       setAnalysisProgress(100);
       setAnalysisStage(`Đã quét lại ${result.answerItems?.length || result.totalQuestions} mục đáp án.`);
       showToast(`Đã quét lại: ${result.answerItems?.length || result.totalQuestions} mục đáp án!`);
@@ -802,6 +858,15 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
   const verifiedAnswerItems =
     parsedResult?.answerItems?.filter((it) => it.recognitionStatus === 'verified' && it.correctAnswer).length || 0;
   const recognitionRate = totalAnswerItems > 0 ? Math.round((verifiedAnswerItems / totalAnswerItems) * 100) : 0;
+
+  const levelCounts = (parsedResult?.questions || []).reduce<Record<CognitiveLevel, number>>(
+    (acc, q) => {
+      const lvl: CognitiveLevel = q.level || 'nhan_biet';
+      acc[lvl] = (acc[lvl] || 0) + 1;
+      return acc;
+    },
+    { nhan_biet: 0, thong_hieu: 0, van_dung: 0, van_dung_cao: 0 }
+  );
 
   const issueQuestions =
     parsedResult?.questions.filter((q) => q.parseStatus !== 'verified' || hasMissingAnswer(q)) || [];
@@ -931,20 +996,38 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
             </p>
           </div>
 
-          <div className="w-full sm:w-56 shrink-0">
-            <label className="block text-sm font-semibold text-slate-700 mb-1.5">
-              Khối lớp áp dụng
-            </label>
-            <select
-              value={selectedGrade}
-              onChange={(e) => handleGradeDropdownChange(e.target.value as ChemGrade)}
-              className="w-full min-h-[44px] text-[15px] font-semibold px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
-            >
-              <option value="12">Lớp 12 THPT</option>
-              <option value="11">Lớp 11 THPT</option>
-              <option value="10">Lớp 10 THPT</option>
-              <option value="chuyen_hsg">Chuyên &amp; HSG</option>
-            </select>
+          <div className="flex flex-col sm:flex-row gap-3 shrink-0">
+            <div className="w-full sm:w-44">
+              <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                Khối lớp áp dụng
+              </label>
+              <select
+                value={selectedGrade}
+                onChange={(e) => handleGradeDropdownChange(e.target.value as ChemGrade)}
+                className="w-full min-h-[44px] text-[14px] font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+              >
+                <option value="12">Lớp 12 THPT</option>
+                <option value="11">Lớp 11 THPT</option>
+                <option value="10">Lớp 10 THPT</option>
+                <option value="chuyen_hsg">Chuyên &amp; HSG</option>
+              </select>
+            </div>
+
+            <div className="w-full sm:w-52">
+              <label className="block text-sm font-semibold text-slate-700 mb-1.5">
+                Mức mặc định (nếu thiếu thẻ)
+              </label>
+              <select
+                value={defaultFallbackLevel}
+                onChange={(e) => setDefaultFallbackLevel(e.target.value as CognitiveLevel)}
+                className="w-full min-h-[44px] text-[14px] font-semibold px-3 py-2 rounded-xl border border-slate-300 bg-slate-50 text-slate-900 focus:outline-none focus:ring-2 focus:ring-teal-600"
+              >
+                <option value="nhan_biet">Nhận biết [NB]</option>
+                <option value="thong_hieu">Thông hiểu [TH]</option>
+                <option value="van_dung">Vận dụng [VD]</option>
+                <option value="van_dung_cao">Vận dụng cao [VDC]</option>
+              </select>
+            </div>
           </div>
         </div>
 
@@ -1068,7 +1151,11 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
               : 'Kéo thả file đề thi (.docx, .pdf, .txt) vào đây hoặc bấm để chọn tệp'}
           </p>
           <p className="text-sm text-slate-600 mt-1">
-            Giữ nguyên công thức hóa học, chỉ số trên/dưới, mũi tên phản ứng và phương trình OMML.
+            Giữ nguyên công thức hóa học ([H+], [OH-], [Fe3+], phức chất...), chỉ số trên/dưới và phương trình OMML. Tự động nhận diện thẻ{' '}
+            <span className="font-semibold text-emerald-700">[NB]</span>,{' '}
+            <span className="font-semibold text-sky-700">[TH]</span>,{' '}
+            <span className="font-semibold text-amber-700">[VD]</span>,{' '}
+            <span className="font-semibold text-rose-700">[VDC]</span> (hoặc <span className="font-semibold">(NB)</span>, <span className="font-semibold">[M1]–[M4]</span>).
           </p>
         </div>
 
@@ -1473,6 +1560,37 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                   </p>
                 </button>
               </div>
+
+              {/* Thanh thống kê nhanh mức độ nhận thức (HQTest Phong thủy palette) */}
+              <div className="flex flex-wrap items-center justify-between gap-2.5 px-4 py-3 rounded-xl bg-slate-50 border border-slate-200 text-xs sm:text-sm tabular-nums">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-bold text-slate-900">
+                    Tổng số câu: {parsedResult.totalQuestions}
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold">
+                    NB: {levelCounts.nhan_biet} câu
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-sky-50 text-sky-700 border border-sky-200 font-semibold">
+                    TH: {levelCounts.thong_hieu} câu
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-300 font-semibold">
+                    VD: {levelCounts.van_dung} câu
+                  </span>
+                  <span className="text-slate-300">|</span>
+                  <span className="px-2.5 py-0.5 rounded-lg bg-rose-50 text-rose-700 border border-rose-200 font-semibold">
+                    VDC: {levelCounts.van_dung_cao} câu
+                  </span>
+                </div>
+                {defaultLevelIds.size > 0 && (
+                  <span className="inline-flex items-center gap-1 text-xs font-semibold text-amber-800 bg-amber-50 border border-amber-200 px-2.5 py-0.5 rounded-lg">
+                    <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                    <span>{defaultLevelIds.size} câu gán mức Mặc định</span>
+                  </span>
+                )}
+              </div>
             </div>
 
             {/* Ambiguous Multi-Table / Variant Code Confirmation Panel */}
@@ -1753,7 +1871,7 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                         }`}
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-sm">
+                          <div className="flex flex-wrap items-center gap-2 text-sm">
                             <span className="font-bold text-slate-900 tabular-nums">
                               Câu {index + 1}
                             </span>
@@ -1768,6 +1886,29 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                                 : 'Phần III (Trả lời ngắn)'}
                             </span>
                             <span aria-hidden="true" className="text-slate-300">·</span>
+                            {(() => {
+                              const lvl: CognitiveLevel = q.level || 'nhan_biet';
+                              const lvlStyle = COGNITIVE_LEVEL_BADGE_STYLES[lvl];
+                              const isDefault = defaultLevelIds.has(q.id);
+                              return (
+                                <>
+                                  <span
+                                    className={`text-[12px] font-bold px-2.5 py-0.5 rounded-lg inline-flex items-center gap-1 ${lvlStyle.badgeClass}`}
+                                  >
+                                    <span>[{lvlStyle.tagCode}] {lvlStyle.label}</span>
+                                  </span>
+                                  {isDefault && (
+                                    <span
+                                      title="Câu hỏi chưa có thẻ [NB]/[TH]/[VD]/[VDC] trong file gốc nên được gán mức mặc định"
+                                      className="text-[12px] font-semibold px-2 py-0.5 rounded-lg bg-amber-50 text-amber-800 border border-amber-200 inline-flex items-center gap-1"
+                                    >
+                                      <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                                      <span>Mặc định</span>
+                                    </span>
+                                  )}
+                                </>
+                              );
+                            })()}
                             <span
                               className={`text-[13px] font-semibold px-2.5 py-0.5 rounded-lg border inline-flex items-center gap-1 ${statusBadge.className}`}
                             >
@@ -1776,7 +1917,23 @@ export const ExamUploader: React.FC<ExamUploaderProps> = ({
                             </span>
                           </div>
 
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <select
+                              aria-label={`Đổi mức độ nhận thức Câu ${index + 1}`}
+                              value={q.level || 'nhan_biet'}
+                              onChange={(e) =>
+                                handleChangeQuestionLevel(q.id, e.target.value as CognitiveLevel)
+                              }
+                              title="Đổi nhanh mức độ nhận thức (NB / TH / VD / VDC)"
+                              className={`text-xs font-bold px-2.5 min-h-[38px] rounded-xl border focus:outline-none focus:ring-2 focus:ring-teal-600 cursor-pointer ${
+                                COGNITIVE_LEVEL_BADGE_STYLES[q.level || 'nhan_biet'].selectClass
+                              }`}
+                            >
+                              <option value="nhan_biet">[NB] Nhận biết</option>
+                              <option value="thong_hieu">[TH] Thông hiểu</option>
+                              <option value="van_dung">[VD] Vận dụng</option>
+                              <option value="van_dung_cao">[VDC] Vận dụng cao</option>
+                            </select>
                             <select
                               value={q.type}
                               onChange={(e) => handleMoveQuestionType(q.id, e.target.value as QuestionType)}
