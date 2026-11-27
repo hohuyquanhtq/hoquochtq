@@ -8,6 +8,7 @@ import {
 } from 'firebase/auth';
 import {
   getFirestore,
+  initializeFirestore,
   doc,
   getDocFromServer,
   getDoc,
@@ -84,67 +85,106 @@ try {
 }
 
 // ============================================================================
-// SHARED HTQ CHEMISTRY HUB FIRESTORE INSTANCE (dbHub -> Project: long-factor-lk4jk)
-// Dùng chung hub_classes & hub_learning_profiles, giữ nguyên auth/Super Admin của HQTest
+// SHARED HTQ CHEMISTRY HUB FIRESTORE INSTANCE (dbHub)
+// Kết nối tới project Hub riêng (VD: long-factor-lk4jk) khi có đủ thông tin cấu hình
+// VITE_HUB_FIREBASE_API_KEY; mặc định dùng chung Firestore chính đã cấp phép (db)
+// để tránh lỗi offline do sai API key khác project và vẫn dùng đúng hub_classes /
+// hub_learning_profiles trên Firestore của ứng dụng.
 // ============================================================================
 const HUB_APP_NAME = 'htq-chemistry-hub';
 const DEFAULT_HUB_PROJECT_ID = 'long-factor-lk4jk';
 
 function resolveHubFirebaseConfig() {
   const env = (typeof import.meta !== 'undefined' ? (import.meta as any).env : {}) || {};
-  const projectId = cleanEnvStr(env.VITE_HUB_FIREBASE_PROJECT_ID) || DEFAULT_HUB_PROJECT_ID;
-  const apiKey = cleanEnvStr(env.VITE_HUB_FIREBASE_API_KEY) || resolvedConfig.apiKey;
+  const explicitProjectId = cleanEnvStr(env.VITE_HUB_FIREBASE_PROJECT_ID);
+  const explicitApiKey = cleanEnvStr(env.VITE_HUB_FIREBASE_API_KEY);
+  const explicitDatabaseId =
+    cleanEnvStr(env.VITE_HUB_FIREBASE_DATABASE_ID) ||
+    cleanEnvStr(env.VITE_HUB_FIRESTORE_DATABASE_ID);
+  const projectId = explicitProjectId || DEFAULT_HUB_PROJECT_ID;
   const authDomain =
     cleanEnvStr(env.VITE_HUB_FIREBASE_AUTH_DOMAIN) || `${projectId}.firebaseapp.com`;
   const storageBucket =
     cleanEnvStr(env.VITE_HUB_FIREBASE_STORAGE_BUCKET) || `${projectId}.firebasestorage.app`;
   const messagingSenderId = cleanEnvStr(env.VITE_HUB_FIREBASE_MESSAGING_SENDER_ID);
   const appId = cleanEnvStr(env.VITE_HUB_FIREBASE_APP_ID);
-  const firestoreDatabaseId =
-    cleanEnvStr(env.VITE_HUB_FIREBASE_DATABASE_ID) ||
-    cleanEnvStr(env.VITE_HUB_FIRESTORE_DATABASE_ID);
+
+  // Only open a separate cross-project Firestore connection when a dedicated Hub API key is provided
+  const hasExplicitExternalConfig =
+    Boolean(explicitApiKey) &&
+    (projectId !== resolvedConfig.projectId ||
+      (Boolean(explicitDatabaseId) && explicitDatabaseId !== resolvedConfig.firestoreDatabaseId));
 
   return {
-    projectId,
-    apiKey,
-    authDomain,
-    storageBucket,
+    projectId: hasExplicitExternalConfig ? projectId : resolvedConfig.projectId,
+    configuredExternalProjectId: projectId,
+    apiKey: hasExplicitExternalConfig ? explicitApiKey : resolvedConfig.apiKey,
+    authDomain: hasExplicitExternalConfig ? authDomain : resolvedConfig.authDomain,
+    storageBucket: hasExplicitExternalConfig ? storageBucket : resolvedConfig.storageBucket,
     ...(messagingSenderId ? { messagingSenderId } : {}),
     ...(appId ? { appId } : {}),
-    firestoreDatabaseId,
+    firestoreDatabaseId: hasExplicitExternalConfig
+      ? explicitDatabaseId
+      : resolvedConfig.firestoreDatabaseId,
+    hasExplicitExternalConfig,
   };
 }
 
 const resolvedHubConfig = resolveHubFirebaseConfig();
-let hubApp: FirebaseApp;
-let dbHub: Firestore;
-let hubInitError: string | null = null;
+let hubApp: FirebaseApp = app;
+let dbHub: Firestore = db;
+let hubInitError: string | null = firebaseInitError;
+let hubFallbackToPrimary = !resolvedHubConfig.hasExplicitExternalConfig;
 
-try {
-  const existingHubApp = getApps().find((a) => a.name === HUB_APP_NAME);
-  hubApp =
-    existingHubApp ||
-    initializeApp(
-      {
-        projectId: resolvedHubConfig.projectId,
-        apiKey: resolvedHubConfig.apiKey,
-        authDomain: resolvedHubConfig.authDomain,
-        storageBucket: resolvedHubConfig.storageBucket,
-        ...(resolvedHubConfig.messagingSenderId
-          ? { messagingSenderId: resolvedHubConfig.messagingSenderId }
-          : {}),
-        ...(resolvedHubConfig.appId ? { appId: resolvedHubConfig.appId } : {}),
-      },
-      HUB_APP_NAME
+if (resolvedHubConfig.hasExplicitExternalConfig) {
+  try {
+    const existingHubApp = getApps().find((a) => a.name === HUB_APP_NAME);
+    hubApp =
+      existingHubApp ||
+      initializeApp(
+        {
+          projectId: resolvedHubConfig.projectId,
+          apiKey: resolvedHubConfig.apiKey,
+          authDomain: resolvedHubConfig.authDomain,
+          storageBucket: resolvedHubConfig.storageBucket,
+          ...(resolvedHubConfig.messagingSenderId
+            ? { messagingSenderId: resolvedHubConfig.messagingSenderId }
+            : {}),
+          ...(resolvedHubConfig.appId ? { appId: resolvedHubConfig.appId } : {}),
+        },
+        HUB_APP_NAME
+      );
+
+    try {
+      dbHub = resolvedHubConfig.firestoreDatabaseId
+        ? initializeFirestore(
+            hubApp,
+            { experimentalAutoDetectLongPolling: true },
+            resolvedHubConfig.firestoreDatabaseId
+          )
+        : initializeFirestore(hubApp, { experimentalAutoDetectLongPolling: true });
+    } catch {
+      // Firestore already initialized for this app instance (e.g. HMR/reload)
+      dbHub = resolvedHubConfig.firestoreDatabaseId
+        ? getFirestore(hubApp, resolvedHubConfig.firestoreDatabaseId)
+        : getFirestore(hubApp);
+    }
+    hubInitError = null;
+    hubFallbackToPrimary = false;
+  } catch (err) {
+    hubInitError = null;
+    hubFallbackToPrimary = true;
+    console.warn(
+      '[HQTest dbHub] Không thể khởi tạo Firestore Hub riêng, tự động dùng Firestore chính:',
+      err
     );
-  dbHub = resolvedHubConfig.firestoreDatabaseId
-    ? getFirestore(hubApp, resolvedHubConfig.firestoreDatabaseId)
-    : getFirestore(hubApp);
-} catch (err) {
-  hubInitError = err instanceof Error ? err.message : String(err);
-  console.error('[HQTest dbHub] Lỗi khởi tạo Firestore dbHub:', err);
-  hubApp = app;
-  dbHub = db;
+    hubApp = app;
+    dbHub = db;
+  }
+}
+
+export function getActiveHubDb(): Firestore {
+  return hubFallbackToPrimary ? db : dbHub;
 }
 
 export { app, db, auth, firebaseInitError, hubApp, dbHub, hubInitError };
@@ -154,12 +194,17 @@ export function getHubFirebaseInfo(): {
   databaseId: string;
   initialized: boolean;
   initError: string | null;
+  isExternalHub: boolean;
 } {
+  const usingExternal = resolvedHubConfig.hasExplicitExternalConfig && !hubFallbackToPrimary;
   return {
-    projectId: resolvedHubConfig.projectId || DEFAULT_HUB_PROJECT_ID,
-    databaseId: resolvedHubConfig.firestoreDatabaseId || '(default)',
-    initialized: !hubInitError,
-    initError: hubInitError,
+    projectId: usingExternal ? resolvedHubConfig.projectId : resolvedConfig.projectId,
+    databaseId: usingExternal
+      ? resolvedHubConfig.firestoreDatabaseId || '(default)'
+      : resolvedConfig.firestoreDatabaseId || '(default)',
+    initialized: !firebaseInitError && !hubInitError,
+    initError: hubInitError || firebaseInitError,
+    isExternalHub: usingExternal,
   };
 }
 
@@ -204,20 +249,23 @@ async function testFirestoreConnection(): Promise<void> {
   }
 }
 async function testHubFirestoreConnection(): Promise<void> {
-  if (hubInitError) return;
+  if (!resolvedHubConfig.hasExplicitExternalConfig || hubFallbackToPrimary || hubInitError) return;
   try {
     await getDocFromServer(doc(dbHub, 'test', 'connection'));
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error(
-        `[HQTest dbHub] Firestore client for ${resolvedHubConfig.projectId} is offline.`
+      hubFallbackToPrimary = true;
+      console.warn(
+        `[HQTest dbHub] External Hub (${resolvedHubConfig.projectId}) không phản hồi, chuyển sang dùng Firestore chính (${resolvedConfig.projectId}).`
       );
     }
   }
 }
 if (typeof window !== 'undefined') {
   void testFirestoreConnection();
-  void testHubFirestoreConnection();
+  if (resolvedHubConfig.hasExplicitExternalConfig) {
+    void testHubFirestoreConnection();
+  }
 }
 
 export enum OperationType {

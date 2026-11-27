@@ -546,20 +546,66 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
   const body = root ? getDirectChildByLocal(root, 'body') || root : null;
 
   const markdownBlocks: string[] = [];
-  let currentSectionHeader: string | undefined;
+  let currentPartScopeHeader: string | undefined;
+  let currentMetaHeader: string | undefined;
+  let sawQuestionSincePartHeader = false;
+
+  const getCombinedSectionHeader = (): string | undefined => {
+    const parts = [currentPartScopeHeader, currentMetaHeader].filter(Boolean);
+    return parts.length > 0 ? parts.join(' | ').slice(0, 200) : undefined;
+  };
 
   const updateSectionHeader = (text: string) => {
     const clean = text.replace(/\*\*|\*|<u>|<\/u>|<s>|<\/s>/gi, '').trim();
     if (!clean) return;
-    if (
-      /(?:PHẦN\s+(?:III|II|I|3|2|1)\b|MÃ\s*ĐỀ\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN|^(?:[\-–—*_\s]*)ĐÁP\s*ÁN\b|HƯỚNG\s*DẪN\s*CHẤM|TRẮC\s*NGHIỆM\s+(?:4|NHIỀU)\s+(?:LỰA\s+CHỌN|PHƯƠNG\s+ÁN)|ĐÚNG\s*[-–\/]?\s*SAI|TRẢ\s*LỜI\s*NGẮN)/i.test(
+
+    // End-of-exam marker resets stale exam-body part scope so answer section starts fresh
+    if (/^[\-–—*_\s|]*HẾT[\-–—*_\s|]*$/i.test(clean)) {
+      currentPartScopeHeader = undefined;
+      currentMetaHeader = undefined;
+      sawQuestionSincePartHeader = false;
+      return;
+    }
+
+    const isExplicitPartHeader =
+      /(?:(?:PHẦN|PHAN|MỤC|MUC)\s+(?:III|II|I|Ⅲ|Ⅱ|Ⅰ|3|2|1)\b|^(?:III|II|I)\.\s*(?:TRẮC\s*NGHIỆM|CÂU\s+TRẮC\s*NGHIỆM|ĐÚNG\s*[-–\/]?\s*SAI|TRẢ\s*LỜI\s*NGẮN)|TRẮC\s*NGHIỆM\s+(?:4|BỐN|NHIỀU)\s+(?:LỰA\s+CHỌN|PHƯƠNG\s+ÁN)|ĐÚNG\s*[-–\/]?\s*SAI|TRẢ\s*LỜI\s*NGẮN)/i.test(
         clean
-      )
-    ) {
-      currentSectionHeader = clean.slice(0, 160);
-    } else if (/^(?:Câu|Bài)\s+\d+\s*[.:–—\-]\s*\S/i.test(clean) && clean.length > 25) {
+      );
+    const isVariantCodeHeader = /\bMÃ\s*ĐỀ(?:\s*THI)?\s*[:\-–]?\s*[A-Z0-9]{2,6}\b/i.test(clean);
+    const isGenericAnswerBanner =
+      /^(?:[\-–—*_\s]*)(?:BẢNG\s+ĐÁP\s*ÁN|ĐÁP\s*ÁN(?:\s+VÀ\s+HƯỚNG\s*DẪN\s*CHẤM)?|HƯỚNG\s*DẪN\s*CHẤM)\b/i.test(
+        clean
+      );
+
+    if (isExplicitPartHeader) {
+      currentPartScopeHeader = clean.slice(0, 160);
+      sawQuestionSincePartHeader = false;
+      if (isVariantCodeHeader) {
+        currentMetaHeader = clean.slice(0, 80);
+      }
+      return;
+    }
+
+    if (isVariantCodeHeader) {
+      currentMetaHeader = clean.slice(0, 120);
+      return;
+    }
+
+    if (isGenericAnswerBanner) {
+      // If exam questions occurred since the last PHẦN header, this "ĐÁP ÁN" starts the answer block -> clear stale exam-body PHẦN
+      if (sawQuestionSincePartHeader) {
+        currentPartScopeHeader = undefined;
+        sawQuestionSincePartHeader = false;
+      }
+      currentMetaHeader = clean.slice(0, 120);
+      return;
+    }
+
+    if (/^(?:Câu|CÂU|Bài|BÀI)\s+\d+\s*[.:)–—\-]\s*\S/.test(clean) && clean.length > 20) {
       // Real exam question stem — prevent data tables inside questions from inheriting PHẦN I/II/III
-      currentSectionHeader = undefined;
+      currentPartScopeHeader = undefined;
+      currentMetaHeader = undefined;
+      sawQuestionSincePartHeader = true;
     }
   };
 
@@ -612,7 +658,7 @@ export function parseDocumentXml(xml: string, imageMap: Map<string, string>): Do
             id: `tbl_docx_${tables.length + 1}`,
             sourceType: 'docx_html',
             rows: structuredRows,
-            surroundingHeader: currentSectionHeader,
+            surroundingHeader: getCombinedSectionHeader(),
           });
         }
       }

@@ -276,12 +276,12 @@ const SAMPLE_PART1_QUESTIONS: Question[] = [
     level: 'nhan_biet',
     content: 'Kim loại nào sau đây có tính dẫn điện tốt nhất?',
     options: [
-      { id: 'A', text: 'Ag.', isCorrect: true },
-      { id: 'B', text: 'Cu.', isCorrect: false },
-      { id: 'C', text: 'Au.', isCorrect: false },
+      { id: 'A', text: 'Cu.', isCorrect: false },
+      { id: 'B', text: 'Au.', isCorrect: false },
+      { id: 'C', text: 'Ag.', isCorrect: true },
       { id: 'D', text: 'Al.', isCorrect: false },
     ],
-    correctOptionId: 'A',
+    correctOptionId: 'C',
     explanation: 'Thứ tự độ dẫn điện giảm dần của kim loại: Ag > Cu > Au > Al > Fe. Do đó Ag dẫn điện tốt nhất.',
     authorId: 'template',
     createdAt: '',
@@ -289,7 +289,28 @@ const SAMPLE_PART1_QUESTIONS: Question[] = [
   },
   {
     id: 'tpl_p1_2',
-    code: 'HH12-TH-02',
+    code: 'HH11-NB-02',
+    type: 'part1_single_choice',
+    grade: '11',
+    topic: 'hoa_vo_co',
+    chapterName: 'Cân bằng hóa học',
+    level: 'nhan_biet',
+    content: 'Trong dung dịch nước ở 25 °C, tích số ion của nước là [H+].[OH-] = 10^{-14}. Dung dịch có môi trường kiềm (base) khi nào?',
+    options: [
+      { id: 'A', text: '[H+] > 10^{-7} M.', isCorrect: false },
+      { id: 'B', text: '[OH-] > 10^{-7} M.', isCorrect: true },
+      { id: 'C', text: '[H+] = [OH-].', isCorrect: false },
+      { id: 'D', text: '[OH-] < 10^{-7} M.', isCorrect: false },
+    ],
+    correctOptionId: 'B',
+    explanation: 'Ở 25 °C, dung dịch có môi trường kiềm (pH > 7) khi [OH-] > 10^{-7} M và [H+] < 10^{-7} M.',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p1_3',
+    code: 'HH12-TH-03',
     type: 'part1_single_choice',
     grade: '12',
     topic: 'hoa_huu_co',
@@ -298,19 +319,82 @@ const SAMPLE_PART1_QUESTIONS: Question[] = [
     content: 'Phát biểu nào sau đây đúng khi nói về tính chất hóa học của ester?',
     options: [
       { id: 'A', text: 'Phản ứng thủy phân ester trong môi trường acid là phản ứng một chiều.', isCorrect: false },
-      { id: 'B', text: 'Phản ứng thủy phân ester trong môi trường kiềm (xà phòng hóa) là phản ứng một chiều.', isCorrect: true },
-      { id: 'C', text: 'Tất cả các ester đều tham gia phản ứng tráng bạc với thuốc thử Tollens.', isCorrect: false },
-      { id: 'D', text: 'Ester luôn tan tốt trong nước nhờ tạo liên kết hydrogen bền vững với nước.', isCorrect: false },
+      { id: 'B', text: 'Tất cả các ester đều tham gia phản ứng tráng bạc với thuốc thử Tollens.', isCorrect: false },
+      { id: 'C', text: 'Ester luôn tan tốt trong nước nhờ tạo liên kết hydrogen bền vững với nước.', isCorrect: false },
+      { id: 'D', text: 'Phản ứng thủy phân ester trong môi trường kiềm (xà phòng hóa) là phản ứng một chiều.', isCorrect: true },
     ],
-    correctOptionId: 'B',
+    correctOptionId: 'D',
     explanation: 'Thủy phân ester trong môi trường acid là phản ứng thuận nghịch, còn trong môi trường kiềm (xà phòng hóa) là phản ứng một chiều.',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
   },
   {
-    id: 'tpl_p1_3',
-    code: 'HH12-VD-03',
+    id: 'tpl_p1_4',
+    code: 'HH11-TH-04',
+    type: 'part1_single_choice',
+    grade: '11',
+    topic: 'hoa_vo_co',
+    chapterName: 'Cân bằng hóa học',
+    level: 'thong_hieu',
+    content: 'Dung dịch HCl 0,01 M (coi HCl điện li hoàn toàn) có nồng độ ion [H+] và giá trị pH lần lượt là',
+    options: [
+      { id: 'A', text: '[H+] = 10^{-1} M và pH = 1.', isCorrect: false },
+      { id: 'B', text: '[H+] = 10^{-3} M và pH = 3.', isCorrect: false },
+      { id: 'C', text: '[H+] = 10^{-2} M và pH = 2.', isCorrect: true },
+      { id: 'D', text: '[H+] = 10^{-12} M và pH = 12.', isCorrect: false },
+    ],
+    correctOptionId: 'C',
+    explanation: 'HCl là acid mạnh điện li hoàn toàn nên [H+] = 0,01 M = 10^{-2} M => pH = -lg[H+] = 2.',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p1_5',
+    code: 'HH12-NB-05',
+    type: 'part1_single_choice',
+    grade: '12',
+    topic: 'hoa_huu_co',
+    chapterName: 'Carbohydrate',
+    level: 'nhan_biet',
+    content: 'Công thức phân tử của saccharose là',
+    options: [
+      { id: 'A', text: 'C_{12}H_{22}O_{11}.', isCorrect: true },
+      { id: 'B', text: 'C_6H_{12}O_6.', isCorrect: false },
+      { id: 'C', text: '(C_6H_{10}O_5)_n.', isCorrect: false },
+      { id: 'D', text: 'C_2H_4O_2.', isCorrect: false },
+    ],
+    correctOptionId: 'A',
+    explanation: 'Saccharose thuộc loại disaccharide có công thức phân tử là C_{12}H_{22}O_{11}.',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p1_6',
+    code: 'HH12-TH-06',
+    type: 'part1_single_choice',
+    grade: '12',
+    topic: 'hoa_huu_co',
+    chapterName: 'Hợp chất chứa nitrogen',
+    level: 'thong_hieu',
+    content: 'Chất nào sau đây thuộc loại amine bậc hai?',
+    options: [
+      { id: 'A', text: 'CH_3NH_2.', isCorrect: false },
+      { id: 'B', text: 'CH_3-NH-CH_3.', isCorrect: true },
+      { id: 'C', text: '(CH_3)_3N.', isCorrect: false },
+      { id: 'D', text: 'C_6H_5NH_2.', isCorrect: false },
+    ],
+    correctOptionId: 'B',
+    explanation: 'Dimethylamine (CH_3-NH-CH_3) có 2 nguyên tử hydrogen của NH_3 bị thay thế bởi gốc hydrocarbon nên là amine bậc hai.',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p1_7',
+    code: 'HH12-VD-07',
     type: 'part1_single_choice',
     grade: '12',
     topic: 'hoa_vo_co',
@@ -330,14 +414,35 @@ const SAMPLE_PART1_QUESTIONS: Question[] = [
     updatedAt: '',
   },
   {
-    id: 'tpl_p1_4',
-    code: 'HH12-VDC-04',
+    id: 'tpl_p1_8',
+    code: 'HH11-VD-08',
+    type: 'part1_single_choice',
+    grade: '11',
+    topic: 'hoa_vo_co',
+    chapterName: 'Cân bằng hóa học',
+    level: 'van_dung',
+    content: 'Trộn 100 mL dung dịch NaOH 0,1 M với 100 mL dung dịch HCl 0,06 M, thu được 200 mL dung dịch X. Nồng độ [OH-] trong dung dịch X là',
+    options: [
+      { id: 'A', text: '0,01 M.', isCorrect: false },
+      { id: 'B', text: '0,04 M.', isCorrect: false },
+      { id: 'C', text: '0,05 M.', isCorrect: false },
+      { id: 'D', text: '0,02 M.', isCorrect: true },
+    ],
+    correctOptionId: 'D',
+    explanation: 'n(OH-) = 0,01 mol; n(H+) = 0,006 mol => n(OH- dư) = 0,004 mol => [OH-] = 0,004 / 0,2 = 0,02 M.',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p1_9',
+    code: 'HH12-VDC-09',
     type: 'part1_single_choice',
     grade: '12',
     topic: 'hoa_huu_co',
     chapterName: 'Ester – Lipid',
     level: 'van_dung_cao',
-    content: 'Hỗn hợp E gồm hai ester mạch hở X và Y (M_X < M_Y) đều đơn chức, đồng phân của nhau không chứa nhóm chức khác. Đun nóng 14,8 gam E cần vừa đủ 200 mL dung dịch NaOH 1M, thu được hỗn hợp muối và hỗn hợp hai alcohol kế tiếp nhau trong dãy đồng đẳng. Công thức phân tử của hai ester X, Y là',
+    content: 'Hỗn hợp E gồm hai ester mạch hở X và Y (M_X < M_Y) đều đơn chức, đồng phân của nhau, không chứa nhóm chức khác. Đun nóng 14,8 gam E cần vừa đủ 200 mL dung dịch NaOH 1 M, thu được hỗn hợp muối và hỗn hợp hai alcohol kế tiếp nhau trong dãy đồng đẳng. Công thức phân tử của hai ester X, Y là',
     options: [
       { id: 'A', text: 'C_3H_6O_2.', isCorrect: true },
       { id: 'B', text: 'C_4H_8O_2.', isCorrect: false },
@@ -346,6 +451,27 @@ const SAMPLE_PART1_QUESTIONS: Question[] = [
     ],
     correctOptionId: 'A',
     explanation: 'n(E) = n(NaOH) = 0,2 mol => M(E) = 14,8 / 0,2 = 74 g/mol => C_3H_6O_2 (gồm HCOOC_2H_5 và CH_3COOCH_3).',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p1_10',
+    code: 'HH12-VDC-10',
+    type: 'part1_single_choice',
+    grade: '12',
+    topic: 'hoa_huu_co',
+    chapterName: 'Carbohydrate',
+    level: 'van_dung_cao',
+    content: 'Thủy phân hoàn toàn 17,1 gam saccharose trong môi trường acid (hiệu suất 80%), thu được dung dịch X. Trung hòa acid dư trong X rồi cho tác dụng với lượng dư dung dịch AgNO_3 trong NH_3 (chứa phức chất [Ag(NH_3)_2]+), đun nóng thu được m gam Ag. Giá trị của m là',
+    options: [
+      { id: 'A', text: '21,60.', isCorrect: false },
+      { id: 'B', text: '17,28.', isCorrect: true },
+      { id: 'C', text: '8,64.', isCorrect: false },
+      { id: 'D', text: '10,80.', isCorrect: false },
+    ],
+    correctOptionId: 'B',
+    explanation: 'n(saccharose) = 17,1 / 342 = 0,05 mol; hiệu suất 80% => n(glucose) = n(fructose) = 0,04 mol => n(Ag) = 4 × 0,04 = 0,16 mol => m(Ag) = 17,28 gam.',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
@@ -370,13 +496,13 @@ const SAMPLE_PART2_QUESTIONS: Question[] = [
       },
       {
         id: 'b',
-        statement: 'Saccharose thuộc loại disaccharide, được cấu tạo từ 1 đơn vị α-glucose và 1 đơn vị β-fructose.',
-        correctAnswer: true,
+        statement: 'Cả glucose và saccharose đều tham gia phản ứng tráng bạc với thuốc thử Tollens.',
+        correctAnswer: false,
       },
       {
         id: 'c',
-        statement: 'Cả glucose và saccharose đều tham gia phản ứng tráng bạc với thuốc thử Tollens.',
-        correctAnswer: false,
+        statement: 'Saccharose thuộc loại disaccharide, được cấu tạo từ 1 đơn vị α-glucose và 1 đơn vị β-fructose.',
+        correctAnswer: true,
       },
       {
         id: 'd',
@@ -384,7 +510,7 @@ const SAMPLE_PART2_QUESTIONS: Question[] = [
         correctAnswer: true,
       },
     ],
-    explanation: 'Saccharose không còn nhóm -OH hemiacetal tự do nên không tham gia phản ứng tráng bạc (ý c sai).',
+    explanation: 'Saccharose không còn nhóm -OH hemiacetal tự do nên không tham gia phản ứng tráng bạc (ý b sai).',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
@@ -469,7 +595,7 @@ const SAMPLE_PART2_QUESTIONS: Question[] = [
     topic: 'hoa_vo_co',
     chapterName: 'Pin điện và điện phân',
     level: 'van_dung_cao',
-    content: 'Điện phân 200 mL dung dịch hỗn hợp CuSO_4 0,5M và NaCl 0,5M với điện cực trơ, màng ngăn xốp, cường độ dòng điện I = 5 A trong thời gian t = 3860 giây (giả sử hiệu suất điện phân đạt 100%, hằng số Faraday F = 96500 C/mol).',
+    content: 'Điện phân 200 mL dung dịch hỗn hợp CuSO_4 0,5 M và NaCl 0,5 M với điện cực trơ, màng ngăn xốp, cường độ dòng điện I = 5 A trong thời gian t = 3860 giây (giả sử hiệu suất điện phân đạt 100%, hằng số Faraday F = 96500 C/mol).',
     statements: [
       {
         id: 'a',
@@ -478,21 +604,21 @@ const SAMPLE_PART2_QUESTIONS: Question[] = [
       },
       {
         id: 'b',
-        statement: 'Tại cathode, toàn bộ ion Cu^{2+} bị khử hoàn toàn tạo 6,4 gam kim loại Cu bám lên điện cực.',
-        correctAnswer: true,
-      },
-      {
-        id: 'c',
         statement: 'Tại anode, chỉ có khí Cl_2 thoát ra trong suốt quá trình điện phân.',
         correctAnswer: false,
       },
       {
+        id: 'c',
+        statement: 'Tại cathode, toàn bộ ion Cu^{2+} bị khử hoàn toàn tạo 6,4 gam kim loại Cu bám lên điện cực.',
+        correctAnswer: true,
+      },
+      {
         id: 'd',
-        statement: 'Dung dịch sau điện phân có môi trường acid (pH < 7) do sự điện phân nước ở anode sinh ra ion [H+].',
+        statement: 'Dung dịch sau điện phân có [H+] > [OH-] (pH < 7) do sự điện phân nước ở anode sinh ra ion [H+].',
         correctAnswer: true,
       },
     ],
-    explanation: 'n_e = I.t/F = 0,2 mol; n(Cl^-) = 0,1 mol nên Cl^- hết sau khi trao đổi 0,1 mol e, tiếp theo H_2O bị oxi hóa ở anode sinh O_2 và [H+] (ý c sai).',
+    explanation: 'n_e = I.t/F = 0,2 mol; n(Cl^-) = 0,1 mol nên Cl^- hết sau khi trao đổi 0,1 mol e, tiếp theo H_2O bị oxi hóa ở anode sinh O_2 và [H+] (ý b sai).',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
@@ -506,38 +632,38 @@ const SAMPLE_PART3_QUESTIONS: Question[] = [
     type: 'part3_short_answer',
     grade: '12',
     topic: 'hoa_huu_co',
-    chapterName: 'Ester – Lipid',
+    chapterName: 'Carboxylic acid',
     level: 'nhan_biet',
-    content: 'Số nguyên tử carbon trong một phân tử ethyl acetate (CH_3COOC_2H_5) là bao nhiêu?',
+    content: 'Cho 0,025 mol acetic acid (CH_3COOH) tác dụng hoàn toàn với dung dịch NaHCO_3 dư, thu được bao nhiêu gam khí CO_2?',
     shortAnswerConfig: {
-      acceptableAnswers: ['4'],
+      acceptableAnswers: ['1,1', '1.1'],
       isNumeric: true,
-      numericValue: 4,
-      tolerance: 0,
-      unit: 'nguyên tử',
+      numericValue: 1.1,
+      tolerance: 0.05,
+      unit: 'gam',
     },
-    explanation: 'Ethyl acetate có công thức phân tử C_4H_8O_2 nên có 4 nguyên tử carbon.',
+    explanation: 'n(CO_2) = n(CH_3COOH) = 0,025 mol => m(CO_2) = 0,025 × 44 = 1,1 gam.',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
   },
   {
     id: 'tpl_p3_2',
-    code: 'HH12-SA-TH-02',
+    code: 'HH11-SA-TH-02',
     type: 'part3_short_answer',
-    grade: '12',
-    topic: 'hoa_huu_co',
-    chapterName: 'Ester – Lipid',
+    grade: '11',
+    topic: 'hoa_vo_co',
+    chapterName: 'Cân bằng hóa học',
     level: 'thong_hieu',
-    content: 'Thủy phân hoàn toàn 1 mol chất béo tristearin ((C_{17}H_{35}COO)_3C_3H_5) trong dung dịch NaOH đun nóng cần tối đa bao nhiêu mol NaOH?',
+    content: 'Trung hòa hoàn toàn 200 mL dung dịch HCl có [H+] = 0,1 M cần dùng vừa đủ bao nhiêu gam NaOH rắn?',
     shortAnswerConfig: {
-      acceptableAnswers: ['3'],
+      acceptableAnswers: ['0,8', '0.8'],
       isNumeric: true,
-      numericValue: 3,
-      tolerance: 0,
-      unit: 'mol',
+      numericValue: 0.8,
+      tolerance: 0.05,
+      unit: 'gam',
     },
-    explanation: 'Tristearin là triester của glycerol nên 1 mol tristearin phản ứng tối đa với 3 mol NaOH.',
+    explanation: 'n(H+) = 0,2 × 0,1 = 0,02 mol => n(NaOH) = 0,02 mol => m(NaOH) = 0,02 × 40 = 0,8 gam.',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
@@ -547,39 +673,81 @@ const SAMPLE_PART3_QUESTIONS: Question[] = [
     code: 'HH12-SA-VD-03',
     type: 'part3_short_answer',
     grade: '12',
-    topic: 'hoa_huu_co',
-    chapterName: 'Ester – Lipid',
+    topic: 'hoa_vo_co',
+    chapterName: 'Đại cương về kim loại',
     level: 'van_dung',
-    content: 'Đun nóng 8,8 gam ethyl acetate (CH_3COOC_2H_5) với dung dịch NaOH dư đến khi phản ứng xảy ra hoàn toàn. Khối lượng muối CH_3COONa thu được là bao nhiêu gam? (Làm tròn đến phần mười).',
+    content: 'Cho 4,76 gam kim loại Fe tác dụng hoàn toàn với dung dịch HCl dư, thu được bao nhiêu lít khí H_2 (ở điều kiện chuẩn, 1 mol khí chiếm 24,79 lít)? (Làm tròn kết quả đến hàng phần trăm).',
     shortAnswerConfig: {
-      acceptableAnswers: ['8,2', '8.2'],
+      acceptableAnswers: ['2,11', '2.11'],
       isNumeric: true,
-      numericValue: 8.2,
+      numericValue: 2.11,
       tolerance: 0.05,
-      unit: 'gam',
+      unit: 'lít',
     },
-    explanation: 'n(CH_3COOC_2H_5) = 8,8 / 88 = 0,1 mol => m(CH_3COONa) = 0,1 × 82 = 8,2 gam.',
+    explanation: 'n(Fe) = 4,76 / 56 = 0,085 mol => n(H_2) = 0,085 mol => V(H_2) = 0,085 × 24,79 = 2,10715 ≈ 2,11 lít.',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
   },
   {
     id: 'tpl_p3_4',
-    code: 'HH12-SA-VDC-04',
+    code: 'HH12-SA-VD-04',
+    type: 'part3_short_answer',
+    grade: '12',
+    topic: 'hoa_vo_co',
+    chapterName: 'Pin điện và điện phân',
+    level: 'van_dung',
+    content: 'Điện phân dung dịch CuSO_4 dư với điện cực trơ, cường độ dòng điện I = 5 A trong thời gian t = 3860 giây (hiệu suất 100%, F = 96500 C/mol). Khối lượng kim loại Cu thu được ở cathode là bao nhiêu gam?',
+    shortAnswerConfig: {
+      acceptableAnswers: ['6,4', '6.4'],
+      isNumeric: true,
+      numericValue: 6.4,
+      tolerance: 0.05,
+      unit: 'gam',
+    },
+    explanation: 'n_e = 5 × 3860 / 96500 = 0,2 mol => n(Cu) = 0,1 mol => m(Cu) = 0,1 × 64 = 6,4 gam.',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p3_5',
+    code: 'HH12-SA-VDC-05',
     type: 'part3_short_answer',
     grade: '12',
     topic: 'hoa_huu_co',
     chapterName: 'Carbohydrate',
     level: 'van_dung_cao',
-    content: 'Lên men hoàn toàn 18 gam glucose (C_6H_{12}O_6) thành ethanol với hiệu suất 80%. Hấp thụ toàn bộ khí CO_2 sinh ra vào dung dịch Ca(OH)_2 dư, đồng thời tính khối lượng ethanol (C_2H_5OH) thu được theo đơn vị gam? (Làm tròn đến hai chữ số thập phân).',
+    content: 'Cho 9,0 gam glucose (C_6H_{12}O_6) tác dụng với lượng dư dung dịch AgNO_3 trong NH_3 đun nóng (hiệu suất phản ứng đạt 50%). Khối lượng kim loại Ag thu được là bao nhiêu gam?',
     shortAnswerConfig: {
-      acceptableAnswers: ['7,36', '7.36'],
+      acceptableAnswers: ['5,4', '5.4'],
       isNumeric: true,
-      numericValue: 7.36,
+      numericValue: 5.4,
       tolerance: 0.05,
       unit: 'gam',
     },
-    explanation: 'n(glucose) = 0,1 mol => n(C_2H_5OH) = 2 × 0,1 × 0,8 = 0,16 mol => m = 0,16 × 46 = 7,36 gam.',
+    explanation: 'n(glucose) = 9,0 / 180 = 0,05 mol => n(Ag) = 2 × 0,05 × 0,5 = 0,05 mol => m(Ag) = 0,05 × 108 = 5,4 gam.',
+    authorId: 'template',
+    createdAt: '',
+    updatedAt: '',
+  },
+  {
+    id: 'tpl_p3_6',
+    code: 'HH12-SA-NB-06',
+    type: 'part3_short_answer',
+    grade: '12',
+    topic: 'hoa_huu_co',
+    chapterName: 'Ester – Lipid',
+    level: 'nhan_biet',
+    content: 'Thủy phân hoàn toàn 1 mol chất béo tristearin ((C_{17}H_{35}COO)_3C_3H_5) trong dung dịch NaOH đun nóng cần tối đa bao nhiêu mol NaOH?',
+    shortAnswerConfig: {
+      acceptableAnswers: ['3'],
+      isNumeric: true,
+      numericValue: 3,
+      tolerance: 0,
+      unit: 'mol',
+    },
+    explanation: 'Tristearin là triester của glycerol nên 1 mol tristearin phản ứng tối đa với 3 mol NaOH.',
     authorId: 'template',
     createdAt: '',
     updatedAt: '',
@@ -625,9 +793,10 @@ function buildTemplateExamWrapper(params: {
 
 /**
  * 1. File Word mẫu TỔNG HỢP chuẩn cấu trúc 3 phần môn Hóa học GDPT 2018.
- * Gồm đầy đủ 4 câu cho mỗi phần minh họa đủ cả 4 mức độ [NB], [TH], [VD], [VDC].
+ * Gồm đầy đủ 10 câu Phần I, 4 câu Phần II, 6 câu Phần III minh họa đủ 4 mức độ [NB], [TH], [VD], [VDC]
+ * và các bảng đáp án chuẩn hóa 100% tương thích bộ bóc tách HQTest.
  */
-export async function downloadStandardChemistryWordTemplate(): Promise<void> {
+export function buildStandardChemistryWordTemplateDoc(): Document {
   const sampleQuestions: Question[] = [
     ...SAMPLE_PART1_QUESTIONS,
     ...SAMPLE_PART2_QUESTIONS,
@@ -641,18 +810,24 @@ export async function downloadStandardChemistryWordTemplate(): Promise<void> {
     questions: sampleQuestions,
   });
 
-  await exportPrintReadyExamWithAnswersDocx(
+  return buildPrintReadyExamWithAnswersDoc(
     templateExam,
     'TRƯỜNG THPT CHUYÊN NGUYỄN BỈNH KHIÊM',
-    'De_Mau_Chuan_GDPT2018_HoaHoc_HQTest.docx',
     {
       includeLevelTags: true,
       showLevelGuideBox: true,
+      showAlternativeAnswerFormatNotes: true,
       headerSubtitle: '(Mẫu tổng hợp 03 phần — Đủ 4 mức độ [NB], [TH], [VD], [VDC])',
       guideExtraHint:
-        'Mẫu tổng hợp gồm Phần I (Trắc nghiệm 4 lựa chọn), Phần II (Đúng/Sai 4 ý a, b, c, d — gắn thẻ đầu câu lớn) và Phần III (Trả lời ngắn).',
+        'Mẫu tổng hợp gồm Phần I (10 câu Trắc nghiệm 4 lựa chọn), Phần II (4 câu Đúng/Sai 4 ý a, b, c, d) và Phần III (6 câu Trả lời ngắn) kèm bảng đáp án chuẩn ở cuối tệp.',
     }
   );
+}
+
+export async function downloadStandardChemistryWordTemplate(): Promise<void> {
+  const doc = buildStandardChemistryWordTemplateDoc();
+  const blob = await Packer.toBlob(doc);
+  saveAs(blob, 'De_Mau_Chuan_GDPT2018_HoaHoc_HQTest.docx');
 }
 
 /**
@@ -673,9 +848,10 @@ export async function downloadSingleChoiceWordTemplate(): Promise<void> {
     {
       includeLevelTags: true,
       showLevelGuideBox: true,
+      showAlternativeAnswerFormatNotes: true,
       headerSubtitle: '(Mẫu Phần I · Trắc nghiệm 4 lựa chọn A, B, C, D)',
       guideExtraHint:
-        'Đặt thẻ [NB], [TH], [VD], [VDC] ngay sau "Câu 1.", "Câu 2."... Các đáp án A., B., C., D. trình bày rõ ràng kèm bảng đáp án ở cuối file.',
+        'Đặt thẻ [NB], [TH], [VD], [VDC] ngay sau "Câu 1.", "Câu 2."... Các đáp án A., B., C., D. trình bày rõ ràng kèm bảng đáp án lưới ngang ở cuối file.',
     }
   );
 }
@@ -698,6 +874,7 @@ export async function downloadTrueFalseWordTemplate(): Promise<void> {
     {
       includeLevelTags: true,
       showLevelGuideBox: true,
+      showAlternativeAnswerFormatNotes: true,
       headerSubtitle: '(Mẫu Phần II · Trắc nghiệm Đúng/Sai 4 ý a, b, c, d)',
       guideExtraHint:
         'Với dạng Đúng/Sai, gắn 1 thẻ mức độ chung ngay đầu câu hỏi lớn (VD: Câu 2. [TH] Cho thí nghiệm điều chế ethyl acetate...) và liệt kê các ý a), b), c), d) bên dưới.',
@@ -723,9 +900,10 @@ export async function downloadShortAnswerWordTemplate(): Promise<void> {
     {
       includeLevelTags: true,
       showLevelGuideBox: true,
+      showAlternativeAnswerFormatNotes: true,
       headerSubtitle: '(Mẫu Phần III · Trả lời ngắn / Điền khuyết)',
       guideExtraHint:
-        'Gắn thẻ [NB], [TH], [VD], [VDC] ngay đầu mỗi câu hỏi trả lời ngắn/điền khuyết và ghi đáp án số (hỗ trợ dấu phẩy hoặc dấu chấm) trong bảng đáp án cuối file.',
+        'Gắn thẻ [NB], [TH], [VD], [VDC] ngay đầu mỗi câu hỏi trả lời ngắn và ghi đáp án số/thập phân tối đa 4 ký tự trong bảng lưới ngang ở cuối file.',
     }
   );
 }
@@ -733,22 +911,224 @@ export async function downloadShortAnswerWordTemplate(): Promise<void> {
 export interface WordExportOptions {
   includeLevelTags?: boolean;
   showLevelGuideBox?: boolean;
+  showAlternativeAnswerFormatNotes?: boolean;
   headerSubtitle?: string;
   guideExtraHint?: string;
   templateNote?: string;
 }
 
 /**
- * Xuất 01 đề thi hoàn chỉnh ra file Word (.docx) chuẩn in ấn A4, giữ nguyên công thức hóa học
- * (subscript/superscript) và đính kèm trang Hướng dẫn chấm + Bảng đáp án 3 phần ở cuối tệp.
+ * Helper tạo bảng đáp án dạng lưới ngang (Hàng 1: Câu | 1 | 2 | ..., Hàng 2: Đáp án | ...).
+ * Tự động ngắt thành từng block 10 cột nếu số câu lớn hơn 10 để in đẹp trên khổ A4.
  */
-export async function exportPrintReadyExamWithAnswersDocx(
+function buildHorizontalAnswerGridTable(
+  items: { num: number; answer: string }[],
+  maxColsPerBlock = 10
+): Table {
+  const rows: TableRow[] = [];
+  for (let start = 0; start < items.length; start += maxColsPerBlock) {
+    const chunk = items.slice(start, start + maxColsPerBlock);
+    const questionRowCells = [
+      new TableCell({
+        shading: { type: ShadingType.CLEAR, fill: 'E2E8F0' },
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [txt('Câu', { bold: true, size: SIZE_11 })],
+          }),
+        ],
+      }),
+      ...chunk.map(
+        (item) =>
+          new TableCell({
+            shading: { type: ShadingType.CLEAR, fill: 'E2E8F0' },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [txt(`${item.num}`, { bold: true, size: SIZE_11 })],
+              }),
+            ],
+          })
+      ),
+    ];
+
+    const answerRowCells = [
+      new TableCell({
+        shading: { type: ShadingType.CLEAR, fill: 'F8FAFC' },
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [txt('Đáp án', { bold: true, size: SIZE_11 })],
+          }),
+        ],
+      }),
+      ...chunk.map(
+        (item) =>
+          new TableCell({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [txt(item.answer, { bold: true, size: SIZE_11 })],
+              }),
+            ],
+          })
+      ),
+    ];
+
+    rows.push(new TableRow({ children: questionRowCells }));
+    rows.push(new TableRow({ children: answerRowCells }));
+  }
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: ALL_BORDERS,
+    rows,
+  });
+}
+
+/**
+ * Helper tạo bảng đáp án Phần II dạng chuẩn 5 cột:
+ * Tiêu đề cột: [ Câu | a) | b) | c) | d) ]
+ * Các hàng:    [ 1   | Đ  | S  | Đ  | Đ  ]
+ */
+function buildPart2FiveColumnTable(part2: Question[]): Table {
+  const p2Rows = [
+    new TableRow({
+      children: ['Câu', 'a)', 'b)', 'c)', 'd)'].map(
+        (lbl) =>
+          new TableCell({
+            shading: { type: ShadingType.CLEAR, fill: 'E2E8F0' },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [txt(lbl, { bold: true, size: SIZE_11 })],
+              }),
+            ],
+          })
+      ),
+    }),
+    ...part2.map((q, idx) => {
+      const map = new Map((q.statements || []).map((s) => [s.id.toLowerCase(), s.correctAnswer]));
+      return new TableRow({
+        children: [
+          new TableCell({
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [txt(`${idx + 1}`, { bold: true, size: SIZE_11 })],
+              }),
+            ],
+          }),
+          ...(['a', 'b', 'c', 'd'] as const).map(
+            (key) =>
+              new TableCell({
+                children: [
+                  new Paragraph({
+                    alignment: AlignmentType.CENTER,
+                    children: [
+                      txt(map.has(key) ? (map.get(key) ? 'Đ' : 'S') : '—', {
+                        bold: true,
+                        size: SIZE_11,
+                      }),
+                    ],
+                  }),
+                ],
+              })
+          ),
+        ],
+      });
+    }),
+  ];
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: ALL_BORDERS,
+    rows: p2Rows,
+  });
+}
+
+/**
+ * Helper tạo bảng đáp án Phần II dạng ma trận ngang (mẫu thay thế):
+ * Cột: [ Câu | 1 | 2 | 3 | ... ]
+ * Dòng: a), b), c), d)
+ */
+function buildPart2TransposedMatrixTable(part2: Question[]): Table {
+  const headerRow = new TableRow({
+    children: [
+      new TableCell({
+        shading: { type: ShadingType.CLEAR, fill: 'F1F5F9' },
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.CENTER,
+            children: [txt('Câu', { bold: true, size: SIZE_11 })],
+          }),
+        ],
+      }),
+      ...part2.map(
+        (_, idx) =>
+          new TableCell({
+            shading: { type: ShadingType.CLEAR, fill: 'F1F5F9' },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [txt(`${idx + 1}`, { bold: true, size: SIZE_11 })],
+              }),
+            ],
+          })
+      ),
+    ],
+  });
+
+  const subRows = (['a', 'b', 'c', 'd'] as const).map(
+    (subKey) =>
+      new TableRow({
+        children: [
+          new TableCell({
+            shading: { type: ShadingType.CLEAR, fill: 'F8FAFC' },
+            children: [
+              new Paragraph({
+                alignment: AlignmentType.CENTER,
+                children: [txt(`${subKey})`, { bold: true, size: SIZE_11 })],
+              }),
+            ],
+          }),
+          ...part2.map((q) => {
+            const st = (q.statements || []).find((s) => s.id.toLowerCase() === subKey);
+            return new TableCell({
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    txt(st ? (st.correctAnswer ? 'Đ' : 'S') : '—', {
+                      bold: true,
+                      size: SIZE_11,
+                    }),
+                  ],
+                }),
+              ],
+            });
+          }),
+        ],
+      })
+  );
+
+  return new Table({
+    width: { size: 100, type: WidthType.PERCENTAGE },
+    borders: ALL_BORDERS,
+    rows: [headerRow, ...subRows],
+  });
+}
+
+/**
+ * Xây dựng đối tượng Document (.docx) hoàn chỉnh chuẩn in ấn A4 với bảng đáp án chuẩn hóa 3 phần.
+ */
+export function buildPrintReadyExamWithAnswersDoc(
   exam: Exam,
   schoolName = 'TRƯỜNG THPT CHUYÊN NGUYỄN BỈNH KHIÊM',
-  customFileName?: string,
   options?: WordExportOptions
-): Promise<void> {
+): Document {
   const includeLevelTags = Boolean(options?.includeLevelTags);
+  const showAltFormatNotes = Boolean(options?.showAlternativeAnswerFormatNotes);
   const part1 = exam.questions.filter(
     (q) => q.type === 'part1_single_choice' || q.type === 'part1_multiple_choice'
   );
@@ -909,159 +1289,112 @@ export async function exportPrintReadyExamWithAnswersDocx(
     })
   );
 
+  // 1. PHẦN I: TRẮC NGHIỆM (Bảng lưới ngang chuẩn)
   if (part1.length > 0) {
     children.push(
       new Paragraph({
-        spacing: { before: 80, after: 60 },
+        spacing: { before: 100, after: 60 },
         children: [
-          txt(
-            `PHẦN I (Mỗi câu đúng đạt ${exam.rules?.part1ScorePerQuestion ?? 0.25} điểm):`,
-            { bold: true, size: SIZE_11 }
-          ),
+          txt('PHẦN I: TRẮC NGHIỆM', { bold: true, size: SIZE_11 }),
+          txt(` (Mỗi câu đúng đạt ${exam.rules?.part1ScorePerQuestion ?? 0.25} điểm)`, {
+            italics: true,
+            size: SIZE_10,
+            color: '475569',
+          }),
         ],
       })
     );
-    const p1HeaderCells = [
-      new TableCell({
-        shading: { type: ShadingType.CLEAR, fill: 'E2E8F0' },
-        children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt('Câu', { bold: true, size: SIZE_11 })] })],
-      }),
-      ...part1.map(
-        (_, i) =>
-          new TableCell({
-            shading: { type: ShadingType.CLEAR, fill: 'E2E8F0' },
-            children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(`${i + 1}`, { bold: true, size: SIZE_11 })] })],
-          })
-      ),
-    ];
-    const p1AnswerCells = [
-      new TableCell({
-        children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt('Đáp án', { bold: true, size: SIZE_11 })] })],
-      }),
-      ...part1.map((q) => {
-        const ans =
-          q.correctOptionId ||
-          q.options?.find((o) => o.isCorrect)?.id ||
-          '—';
-        return new TableCell({
-          children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(ans, { bold: true, size: SIZE_11 })] })],
-        });
-      }),
-    ];
-    children.push(
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: ALL_BORDERS,
-        rows: [new TableRow({ children: p1HeaderCells }), new TableRow({ children: p1AnswerCells })],
-      })
-    );
+
+    const p1Items = part1.map((q, i) => ({
+      num: i + 1,
+      answer: q.correctOptionId || q.options?.find((o) => o.isCorrect)?.id || '—',
+    }));
+    children.push(buildHorizontalAnswerGridTable(p1Items, 10));
+
+    if (showAltFormatNotes) {
+      children.push(
+        new Paragraph({
+          spacing: { before: 60, after: 80 },
+          children: [
+            txt(
+              'Ghi chú: Ngoài bảng lưới ngang trên, HQTest cũng hỗ trợ dạng bảng 2 cột dọc với tiêu đề [ Câu | Đáp án ] (mỗi dòng 1 câu, ví dụ: hàng tiêu đề "Câu | Đáp án", các hàng tiếp theo liệt kê số thứ tự câu ở cột trái và chữ cái A/B/C/D ở cột phải).',
+              { italics: true, size: SIZE_10, color: '334155' }
+            ),
+          ],
+        })
+      );
+    }
   }
 
+  // 2. PHẦN II: ĐÚNG SAI (Bảng chuẩn 5 cột + Mẫu ma trận ngang thay thế cho file mẫu)
   if (part2.length > 0) {
     children.push(
       new Paragraph({
         spacing: { before: 140, after: 60 },
         children: [
-          txt('PHẦN II (Đúng/Sai — Thang điểm lũy tiến Bộ GD&ĐT: 1 ý=0,1đ; 2 ý=0,25đ; 3 ý=0,5đ; 4 ý=1,0đ):', {
-            bold: true,
-            size: SIZE_11,
+          txt('PHẦN II: ĐÚNG SAI', { bold: true, size: SIZE_11 }),
+          txt(' (Thang điểm lũy tiến Bộ GD&ĐT: 1 ý = 0,1đ; 2 ý = 0,25đ; 3 ý = 0,5đ; 4 ý = 1,0đ)', {
+            italics: true,
+            size: SIZE_10,
+            color: '475569',
           }),
         ],
       })
     );
-    const p2Rows = [
-      new TableRow({
-        children: ['Câu', 'Ý a', 'Ý b', 'Ý c', 'Ý d'].map(
-          (lbl) =>
-            new TableCell({
-              shading: { type: ShadingType.CLEAR, fill: 'E2E8F0' },
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(lbl, { bold: true, size: SIZE_11 })] })],
-            })
-        ),
-      }),
-      ...part2.map((q, idx) => {
-        const map = new Map((q.statements || []).map((s) => [s.id.toLowerCase(), s.correctAnswer]));
-        return new TableRow({
+
+    children.push(buildPart2FiveColumnTable(part2));
+
+    if (showAltFormatNotes) {
+      children.push(
+        new Paragraph({
+          spacing: { before: 80, after: 40 },
           children: [
-            new TableCell({
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(`Câu ${idx + 1}`, { bold: true, size: SIZE_11 })] })],
-            }),
-            ...(['a', 'b', 'c', 'd'] as const).map(
-              (key) =>
-                new TableCell({
-                  children: [
-                    new Paragraph({
-                      alignment: AlignmentType.CENTER,
-                      children: [
-                        txt(map.has(key) ? (map.get(key) ? 'Đúng' : 'Sai') : '—', {
-                          bold: true,
-                          size: SIZE_11,
-                        }),
-                      ],
-                    }),
-                  ],
-                })
+            txt(
+              'Ghi chú — Mẫu ma trận ngang thay thế (HQTest cũng hỗ trợ bảng có Cột [Câu | 1 | 2 | 3 | ...], Dòng [a), b), c), d)] với cùng giá trị Đ/S):',
+              { italics: true, size: SIZE_10, color: '334155' }
             ),
           ],
-        });
-      }),
-    ];
-    children.push(
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: ALL_BORDERS,
-        rows: p2Rows,
-      })
-    );
+        })
+      );
+      children.push(buildPart2TransposedMatrixTable(part2));
+    }
   }
 
+  // 3. PHẦN III: TRẢ LỜI NGẮN (Bảng lưới ngang chuẩn, giá trị số/thập phân tối đa 4 ký tự)
   if (part3.length > 0) {
     children.push(
       new Paragraph({
         spacing: { before: 140, after: 60 },
         children: [
-          txt(`PHẦN III (Trả lời ngắn — Mỗi câu đúng đạt ${exam.rules?.part3ScorePerQuestion ?? 0.25} điểm):`, {
-            bold: true,
-            size: SIZE_11,
+          txt('PHẦN III: TRẢ LỜI NGẮN', { bold: true, size: SIZE_11 }),
+          txt(` (Mỗi câu đúng đạt ${exam.rules?.part3ScorePerQuestion ?? 0.25} điểm)`, {
+            italics: true,
+            size: SIZE_10,
+            color: '475569',
           }),
         ],
       })
     );
-    const p3Rows = [
-      new TableRow({
-        children: ['Câu', 'Đáp án chuẩn', 'Đơn vị / Ghi chú'].map(
-          (lbl) =>
-            new TableCell({
-              shading: { type: ShadingType.CLEAR, fill: 'E2E8F0' },
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(lbl, { bold: true, size: SIZE_11 })] })],
-            })
-        ),
-      }),
-      ...part3.map((q, idx) => {
-        const primary = q.shortAnswerConfig?.acceptableAnswers?.[0] || '—';
-        const unit = q.shortAnswerConfig?.unit || '';
-        return new TableRow({
+
+    const p3Items = part3.map((q, i) => ({
+      num: i + 1,
+      answer: q.shortAnswerConfig?.acceptableAnswers?.[0] || '—',
+    }));
+    children.push(buildHorizontalAnswerGridTable(p3Items, 10));
+
+    if (showAltFormatNotes) {
+      children.push(
+        new Paragraph({
+          spacing: { before: 60, after: 80 },
           children: [
-            new TableCell({
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(`Câu ${idx + 1}`, { bold: true, size: SIZE_11 })] })],
-            }),
-            new TableCell({
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(primary, { bold: true, size: SIZE_11 })] })],
-            }),
-            new TableCell({
-              children: [new Paragraph({ alignment: AlignmentType.CENTER, children: [txt(unit || '—', { size: SIZE_11 })] })],
-            }),
+            txt(
+              'Ghi chú: Giá trị đáp án Phần III chỉ gồm số nguyên hoặc số thập phân tối đa 4 ký tự (bao gồm cả dấu phẩy/chấm thập phân hoặc dấu âm, VD: 1,1; 0,8; 2,11; 6,4; 5,4; 3).',
+              { italics: true, size: SIZE_10, color: '334155' }
+            ),
           ],
-        });
-      }),
-    ];
-    children.push(
-      new Table({
-        width: { size: 100, type: WidthType.PERCENTAGE },
-        borders: ALL_BORDERS,
-        rows: p3Rows,
-      })
-    );
+        })
+      );
+    }
   }
 
   // Lời giải tóm tắt nếu có
@@ -1086,7 +1419,7 @@ export async function exportPrintReadyExamWithAnswersDocx(
     });
   }
 
-  const doc = new Document({
+  return new Document({
     sections: [
       {
         properties: {
@@ -1110,7 +1443,19 @@ export async function exportPrintReadyExamWithAnswersDocx(
       },
     ],
   });
+}
 
+/**
+ * Xuất 01 đề thi hoàn chỉnh ra file Word (.docx) chuẩn in ấn A4, giữ nguyên công thức hóa học
+ * (subscript/superscript) và đính kèm trang Hướng dẫn chấm + Bảng đáp án 3 phần ở cuối tệp.
+ */
+export async function exportPrintReadyExamWithAnswersDocx(
+  exam: Exam,
+  schoolName = 'TRƯỜNG THPT CHUYÊN NGUYỄN BỈNH KHIÊM',
+  customFileName?: string,
+  options?: WordExportOptions
+): Promise<void> {
+  const doc = buildPrintReadyExamWithAnswersDoc(exam, schoolName, options);
   const blob = await Packer.toBlob(doc);
   const fileName = customFileName || `${sanitizeFileSlug(exam.title)}_HQTest.docx`;
   saveAs(blob, fileName);

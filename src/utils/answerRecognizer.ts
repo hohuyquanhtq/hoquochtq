@@ -272,9 +272,9 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
         }
       }
 
-      // 2. Inline Part I: "1.B", "1: B", "1 - B", "Câu 1: B"
-      const inlineMatches = [...line.matchAll(/(?:Câu\s+)?(\d+)[\s.:\-–—)]+([A-D])\b/gi)];
-      if (inlineMatches.length > 0) {
+      // 2. Inline Part I: "1.B", "1: B", "1 - B", "Câu 1: B" (strictly uppercase A-D so Part II "1 a Đ" never leaks into Part I)
+      const inlineMatches = [...line.matchAll(/(?:(?:Câu|CÂU)\s+)?(\d+)[\s.:\-–—)]+([A-D])(?=$|[\s,;.)\]\|])/g)];
+      if (inlineMatches.length > 0 && !/^(?:Câu\s+)?\d+\s+[a-d]\s+(?:Đúng|Sai|True|False|[ĐSTF])\b/i.test(line)) {
         inlineMatches.forEach(m => {
           const qNum = parseInt(m[1], 10);
           const opt = m[2].toUpperCase();
@@ -287,67 +287,67 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
 
     // --- PART II PARSING ---
     if (currentSection === 'part2' || !currentSection) {
-      // 1. TRANSPOSED MATRIX TABLE:
+      // 1. TRANSPOSED MATRIX TABLE (supports Đ/S, T/F, Đúng/Sai, True/False):
       // Header: "Câu 1 2 3 4" (columns are question numbers)
-      // Followed by:
-      // "a) S Đ Đ Đ"
-      // "b) Đ Đ Đ Đ"
-      // "c) Đ S Đ Đ"
-      // "d) S Đ S S"
+      // Followed by: "a) S Đ Đ Đ", "b) Đ Đ Đ Đ", "c) Đ S Đ Đ", "d) S Đ S S"
       const transHeaderMatch = line.match(/^Câu(?:\s*:)?\s+([\d\s]+)$/i);
-      if (transHeaderMatch && i + 4 <= lines.length) {
+      if (transHeaderMatch && i + 4 < lines.length) {
         const colNumbers = transHeaderMatch[1].trim().split(/\s+/).map(n => parseInt(n, 10)).filter(n => !isNaN(n));
-        
-        // Peek next 4 lines to see if they start with a), b), c), d)
+
         const rowA = lines[i + 1];
         const rowB = lines[i + 2];
         const rowC = lines[i + 3];
         const rowD = lines[i + 4];
 
-        const matchA = rowA?.match(/^a\)?\s+([ĐS\s]{1,})/i);
-        const matchB = rowB?.match(/^b\)?\s+([ĐS\s]{1,})/i);
-        const matchC = rowC?.match(/^c\)?\s+([ĐS\s]{1,})/i);
-        const matchD = rowD?.match(/^d\)?\s+([ĐS\s]{1,})/i);
+        const tfTokenRe = /^(?:Đúng|Sai|True|False|[ĐSTF])$/i;
+        const tfIsTrue = (t?: string) => !!t && /^(?:Đ|ĐÚNG|TRUE|T)$/i.test(t.trim());
+
+        const matchA = rowA?.match(/^a[\).:\s]+(.+)$/i);
+        const matchB = rowB?.match(/^b[\).:\s]+(.+)$/i);
+        const matchC = rowC?.match(/^c[\).:\s]+(.+)$/i);
+        const matchD = rowD?.match(/^d[\).:\s]+(.+)$/i);
 
         if (colNumbers.length > 0 && matchA && matchB && matchC && matchD) {
-          const tokensA = matchA[1].trim().split(/\s+/).filter(t => /^[ĐS]$/i.test(t));
-          const tokensB = matchB[1].trim().split(/\s+/).filter(t => /^[ĐS]$/i.test(t));
-          const tokensC = matchC[1].trim().split(/\s+/).filter(t => /^[ĐS]$/i.test(t));
-          const tokensD = matchD[1].trim().split(/\s+/).filter(t => /^[ĐS]$/i.test(t));
+          const tokensA = matchA[1].trim().split(/\s+/).filter(t => tfTokenRe.test(t));
+          const tokensB = matchB[1].trim().split(/\s+/).filter(t => tfTokenRe.test(t));
+          const tokensC = matchC[1].trim().split(/\s+/).filter(t => tfTokenRe.test(t));
+          const tokensD = matchD[1].trim().split(/\s+/).filter(t => tfTokenRe.test(t));
 
           if (tokensA.length === colNumbers.length && tokensB.length === colNumbers.length) {
             colNumbers.forEach((colNum, colIdx) => {
-              matrix.part2.set(colNum, {
-                statements: {
-                  a: tokensA[colIdx] ? tokensA[colIdx].toUpperCase() === 'Đ' : false,
-                  b: tokensB[colIdx] ? tokensB[colIdx].toUpperCase() === 'Đ' : false,
-                  c: tokensC[colIdx] ? tokensC[colIdx].toUpperCase() === 'Đ' : false,
-                  d: tokensD[colIdx] ? tokensD[colIdx].toUpperCase() === 'Đ' : false,
-                },
-                source: 'answer_table',
-                notes: 'Bảng ma trận chuyển vị (cột là số câu)',
-              });
+              if (!matrix.part2.has(colNum)) {
+                matrix.part2.set(colNum, {
+                  statements: {
+                    a: tfIsTrue(tokensA[colIdx]),
+                    b: tfIsTrue(tokensB[colIdx]),
+                    c: tfIsTrue(tokensC[colIdx]),
+                    d: tfIsTrue(tokensD[colIdx]),
+                  },
+                  source: 'answer_table',
+                  notes: 'Bảng ma trận chuyển vị (cột là số câu)',
+                });
+              }
             });
-            i += 4; // skip 4 sub-rows
+            i += 4;
             continue;
           }
         }
       }
 
-      // 2. STANDARD ROW-WISE TABLE:
-      // Row has question number followed by 4 True/False tokens:
-      // "1 S Đ Đ S" or "1: S Đ Đ S" or "Câu 1: S Đ Đ S"
-      const rowWiseMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]+([ĐS][\sĐS]{3,})$/i);
+      // 2. STANDARD ROW-WISE TABLE (supports Đ/S, T/F, Đúng/Sai, True/False):
+      // "1 S Đ Đ S" or "1: T F F T" or "Câu 1: Đúng Sai Đúng Sai"
+      const rowWiseMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]+((?:(?:Đúng|Sai|True|False|[ĐSTF])\s*){4,})$/i);
       if (rowWiseMatch) {
         const qNum = parseInt(rowWiseMatch[1], 10);
-        const tokens = rowWiseMatch[2].trim().split(/\s+/).filter(t => /^[ĐS]$/i.test(t));
-        if (tokens.length >= 4) {
+        const tokens = rowWiseMatch[2].trim().split(/\s+/).filter(t => /^(?:Đúng|Sai|True|False|[ĐSTF])$/i.test(t));
+        const tfIsTrue = (t: string) => /^(?:Đ|ĐÚNG|TRUE|T)$/i.test(t.trim());
+        if (tokens.length >= 4 && !matrix.part2.has(qNum)) {
           matrix.part2.set(qNum, {
             statements: {
-              a: tokens[0].toUpperCase() === 'Đ',
-              b: tokens[1].toUpperCase() === 'Đ',
-              c: tokens[2].toUpperCase() === 'Đ',
-              d: tokens[3].toUpperCase() === 'Đ',
+              a: tfIsTrue(tokens[0]),
+              b: tfIsTrue(tokens[1]),
+              c: tfIsTrue(tokens[2]),
+              d: tfIsTrue(tokens[3]),
             },
             source: 'answer_table',
             notes: 'Bảng theo dòng',
@@ -356,12 +356,39 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
         }
       }
 
-      // 3. MULTILINE True/False:
-      // Line i: "Câu 1:"
-      // Line i+1: "a) Đúng"
-      // Line i+2: "b) Sai"
-      // Line i+3: "c) Đúng"
-      // Line i+4: "d) Sai"
+      // 3. MULTILINE & MERGED-CELL True/False:
+      // Supports both:
+      //   "Câu 1:" + "a) Đúng" / "b) Sai" / "c) Đúng" / "d) Sai"
+      //   AND flattened merged-cell rows: "1 a Đ" + "b S" + "c S" + "d Đ"
+      const mergedFirstRowMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]+\(?([a-d])[\)\].:\-–—\s]+(Đúng|Sai|True|False|Đ|S|T|F)(?=$|[\s,;.)\]\|])/i);
+      if (mergedFirstRowMatch) {
+        const qNum = parseInt(mergedFirstRowMatch[1], 10);
+        const tfMap: Record<string, boolean> = {
+          [mergedFirstRowMatch[2].toLowerCase()]: /^(?:Đ|ĐÚNG|TRUE|T)$/i.test(mergedFirstRowMatch[3].trim()),
+        };
+        let step = 0;
+        for (let nextR = i + 1; nextR < Math.min(lines.length, i + 6); nextR++) {
+          const nextL = lines[nextR];
+          const subMatch = nextL.match(/^(?:\(?([a-d])[\)\].:\-–—\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S|T|F)(?=$|[\s,;.)\]\|])/i);
+          if (subMatch) {
+            const sub = (subMatch[1] || subMatch[2]).toLowerCase();
+            tfMap[sub] = /^(?:Đ|ĐÚNG|TRUE|T)$/i.test(subMatch[3].trim());
+            step++;
+          } else {
+            break;
+          }
+        }
+        if (Object.keys(tfMap).length >= 2 && !matrix.part2.has(qNum)) {
+          matrix.part2.set(qNum, {
+            statements: tfMap,
+            source: 'answer_table',
+            notes: 'Bảng gộp ô (merged cell)',
+          });
+          i += step;
+          continue;
+        }
+      }
+
       const multiQMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]*$/i);
       if (multiQMatch && i + 1 < lines.length) {
         const qNum = parseInt(multiQMatch[1], 10);
@@ -370,10 +397,10 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
 
         for (let nextR = i + 1; nextR < Math.min(lines.length, i + 6); nextR++) {
           const nextL = lines[nextR];
-          const subMatch = nextL.match(/^(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)(?=$|[\s,;.)\]\|])/i);
+          const subMatch = nextL.match(/^(?:\(?([a-d])[\)\].:\-–—\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S|T|F)(?=$|[\s,;.)\]\|])/i);
           if (subMatch) {
             const sub = (subMatch[1] || subMatch[2]).toLowerCase();
-            const val = /^(Đ|ĐÚNG|TRUE|T|D)$/i.test(subMatch[3].trim());
+            const val = /^(?:Đ|ĐÚNG|TRUE|T|D)$/i.test(subMatch[3].trim());
             tfMap[sub] = val;
             step++;
           } else {
@@ -381,7 +408,7 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
           }
         }
 
-        if (Object.keys(tfMap).length >= 2) {
+        if (Object.keys(tfMap).length >= 2 && !matrix.part2.has(qNum)) {
           matrix.part2.set(qNum, {
             statements: tfMap,
             source: 'answer_table',
@@ -392,17 +419,17 @@ function parseAnswerKeySectionLines(lines: string[], matrix: SectionAnswersMatri
         }
       }
 
-      // 4. INLINE True/False:
-      // "Câu 1: a-S, b-Đ, c-Đ, d-S" or "Câu 1: a) Đ; b) S; c) Đ; d) S" or "Câu 1: a. Đúng, b. Sai..."
+      // 4. INLINE True/False (supports Đ/S, T/F, Đúng/Sai, True/False):
+      // "Câu 1: a-S, b-Đ, c-Đ, d-S" or "Câu 1: a) T; b) F; c) T; d) F"
       const inlineQNumMatch = line.match(/^(?:Câu\s+)?(\d+)[\s.:\-–—]+/i);
       if (inlineQNumMatch) {
         const qNum = parseInt(inlineQNumMatch[1], 10);
-        const pairs = [...line.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)(?=$|[\s,;.)\]\|])/gi)];
-        if (pairs.length >= 2) {
+        const pairs = [...line.matchAll(/(?:\(?([a-d])[\)\].:\-–—\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S|T|F)(?=$|[\s,;.)\]\|])/gi)];
+        if (pairs.length >= 2 && !matrix.part2.has(qNum)) {
           const tfMap: Record<string, boolean> = {};
           pairs.forEach(p => {
             const sub = (p[1] || p[2]).toLowerCase();
-            const val = /^(Đ|ĐÚNG|TRUE|T|D)$/i.test(p[3].trim());
+            const val = /^(?:Đ|ĐÚNG|TRUE|T|D)$/i.test(p[3].trim());
             tfMap[sub] = val;
           });
           matrix.part2.set(qNum, {

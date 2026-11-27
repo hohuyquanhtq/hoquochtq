@@ -13,7 +13,7 @@ import {
   where,
 } from 'firebase/firestore';
 import {
-  dbHub,
+  getActiveHubDb,
   hubInitError,
   stripUndefinedDeep,
   handleFirestoreError,
@@ -264,7 +264,7 @@ export async function fetchHubClassesByOwner(
   if (hubInitError || !ownerId) return [];
 
   const classMap = new Map<string, Classroom>();
-  const classesCol = collection(dbHub, HUB_CLASSES_COLLECTION);
+  const classesCol = collection(getActiveHubDb(), HUB_CLASSES_COLLECTION);
 
   try {
     const snap = await getDocs(query(classesCol, where('ownerId', '==', ownerId)));
@@ -317,44 +317,49 @@ export async function fetchHubLearningProfilesByClassCodes(
   const normalizedCodes = Array.from(
     new Set(classCodes.map((c) => normalizeHubClassCode(c)).filter(Boolean))
   );
-  const profilesCol = collection(dbHub, HUB_LEARNING_PROFILES_COLLECTION);
+  const codeSet = new Set(normalizedCodes);
+  const profilesCol = collection(getActiveHubDb(), HUB_LEARNING_PROFILES_COLLECTION);
   const profileMap = new Map<string, HubLearningProfile>();
 
-  // Firestore `in` supports max 10 values per query
-  const chunks: string[][] = [];
-  for (let i = 0; i < normalizedCodes.length; i += 10) {
-    chunks.push(normalizedCodes.slice(i, i + 10));
-  }
-
-  await Promise.all(
-    chunks.map(async (chunk) => {
-      try {
-        const snap = await getDocs(
-          chunk.length === 1
-            ? query(profilesCol, where('classCode', '==', chunk[0]))
-            : query(profilesCol, where('classCode', 'in', chunk))
-        );
-        snap.docs.forEach((d) => {
-          const mapped = mapDocToHubLearningProfile(d.id, d.data() as Record<string, unknown>);
-          profileMap.set(d.id, mapped);
-        });
-      } catch (err) {
-        logHubFirestoreWarning(err, OperationType.LIST, HUB_LEARNING_PROFILES_COLLECTION);
-      }
-    })
-  );
-
-  // Fallback by ownerId if classCodes was empty
-  if (normalizedCodes.length === 0 && ownerId) {
+  // Prefer ownerId-scoped query first so non-admin teachers satisfy firestore.rules list constraints
+  if (ownerId) {
     try {
       const snap = await getDocs(query(profilesCol, where('ownerId', '==', ownerId)));
       snap.docs.forEach((d) => {
         const mapped = mapDocToHubLearningProfile(d.id, d.data() as Record<string, unknown>);
-        profileMap.set(d.id, mapped);
+        if (codeSet.size === 0 || codeSet.has(normalizeHubClassCode(mapped.classCode))) {
+          profileMap.set(d.id, mapped);
+        }
       });
     } catch (err) {
       logHubFirestoreWarning(err, OperationType.LIST, HUB_LEARNING_PROFILES_COLLECTION);
     }
+  }
+
+  // Query by classCode chunks if no ownerId or if external hub profiles lack ownerId
+  if (!ownerId || (normalizedCodes.length > 0 && profileMap.size === 0)) {
+    const chunks: string[][] = [];
+    for (let i = 0; i < normalizedCodes.length; i += 10) {
+      chunks.push(normalizedCodes.slice(i, i + 10));
+    }
+
+    await Promise.all(
+      chunks.map(async (chunk) => {
+        try {
+          const snap = await getDocs(
+            chunk.length === 1
+              ? query(profilesCol, where('classCode', '==', chunk[0]))
+              : query(profilesCol, where('classCode', 'in', chunk))
+          );
+          snap.docs.forEach((d) => {
+            const mapped = mapDocToHubLearningProfile(d.id, d.data() as Record<string, unknown>);
+            profileMap.set(d.id, mapped);
+          });
+        } catch {
+          // Ignore secondary fallback permission errors for non-admin teachers
+        }
+      })
+    );
   }
 
   // Always sort ascending by `stt`
@@ -372,7 +377,7 @@ export async function syncClassroomToHub(
 
   const nowIso = new Date().toISOString();
   const docId = cls.source === 'hub' && cls.id ? cls.id : normalizedCode;
-  const ref = doc(dbHub, HUB_CLASSES_COLLECTION, docId);
+  const ref = doc(getActiveHubDb(), HUB_CLASSES_COLLECTION, docId);
   try {
     await setDoc(
       ref,
@@ -410,7 +415,7 @@ export async function deleteClassroomFromHub(cls: Classroom): Promise<boolean> {
   let deleted = false;
   for (const id of candidateIds) {
     try {
-      await deleteDoc(doc(dbHub, HUB_CLASSES_COLLECTION, id));
+      await deleteDoc(doc(getActiveHubDb(), HUB_CLASSES_COLLECTION, id));
       deleted = true;
     } catch (err) {
       logHubFirestoreWarning(err, OperationType.DELETE, `${HUB_CLASSES_COLLECTION}/${id}`);
@@ -433,7 +438,7 @@ export async function saveHubStudentProfile(params: {
   const stt = parseSttNumber(params.stt);
   const docId = buildHubProfileDocId(normalizedCode, stt);
   const nowIso = new Date().toISOString();
-  const ref = doc(dbHub, HUB_LEARNING_PROFILES_COLLECTION, docId);
+  const ref = doc(getActiveHubDb(), HUB_LEARNING_PROFILES_COLLECTION, docId);
 
   try {
     const existingSnap = await getDoc(ref).catch(() => null);
@@ -481,7 +486,7 @@ export async function saveHubStudentProfile(params: {
 export async function deleteHubStudentProfile(docId: string): Promise<boolean> {
   if (hubInitError || !docId) return false;
   try {
-    await deleteDoc(doc(dbHub, HUB_LEARNING_PROFILES_COLLECTION, docId));
+    await deleteDoc(doc(getActiveHubDb(), HUB_LEARNING_PROFILES_COLLECTION, docId));
     return true;
   } catch (err) {
     logHubFirestoreWarning(err, OperationType.DELETE, `${HUB_LEARNING_PROFILES_COLLECTION}/${docId}`);
@@ -499,7 +504,7 @@ export async function fetchStudentHubProfilesByUid(
 ): Promise<HubLearningProfile[]> {
   if (hubInitError || !studentUid) return [];
 
-  const profilesCol = collection(dbHub, HUB_LEARNING_PROFILES_COLLECTION);
+  const profilesCol = collection(getActiveHubDb(), HUB_LEARNING_PROFILES_COLLECTION);
   const found = new Map<string, HubLearningProfile>();
 
   try {
@@ -551,13 +556,14 @@ export async function linkStudentUidToHubProfile(params: {
   const stt = parseSttNumber(params.stt);
   const docId = buildHubProfileDocId(normalizedCode, stt);
   const nowIso = new Date().toISOString();
-  const profileRef = doc(dbHub, HUB_LEARNING_PROFILES_COLLECTION, docId);
+  const activeHubDb = getActiveHubDb();
+  const profileRef = doc(activeHubDb, HUB_LEARNING_PROFILES_COLLECTION, docId);
 
   try {
     let className = normalizedCode;
     let ownerId: string | undefined;
     try {
-      const clsSnap = await getDoc(doc(dbHub, HUB_CLASSES_COLLECTION, normalizedCode));
+      const clsSnap = await getDoc(doc(activeHubDb, HUB_CLASSES_COLLECTION, normalizedCode));
       if (clsSnap.exists()) {
         const clsData = clsSnap.data() as Record<string, unknown>;
         className = String(clsData.className || clsData.name || normalizedCode);
@@ -670,7 +676,7 @@ export async function recordExamResultToHubProfile(params: {
     }
 
     const docId = buildHubProfileDocId(profile.classCode, profile.stt);
-    const profileRef = doc(dbHub, HUB_LEARNING_PROFILES_COLLECTION, docId);
+    const profileRef = doc(getActiveHubDb(), HUB_LEARNING_PROFILES_COLLECTION, docId);
     const nowIso = new Date().toISOString();
 
     const testResultEntry: HubTestResult = {
@@ -691,7 +697,6 @@ export async function recordExamResultToHubProfile(params: {
       await updateDoc(
         profileRef,
         stripUndefinedDeep({
-          studentUid,
           testResults: arrayUnion(testResultEntry),
           xp: increment(xpEarned),
           updatedAt: nowIso,
@@ -776,7 +781,7 @@ export async function awardPlaygroundRewardToHubProfile(params: {
     }
 
     const docId = buildHubProfileDocId(profile.classCode, profile.stt);
-    const profileRef = doc(dbHub, HUB_LEARNING_PROFILES_COLLECTION, docId);
+    const profileRef = doc(getActiveHubDb(), HUB_LEARNING_PROFILES_COLLECTION, docId);
     const nowIso = new Date().toISOString();
 
     const testResultEntry: HubTestResult = {
@@ -803,7 +808,6 @@ export async function awardPlaygroundRewardToHubProfile(params: {
       : undefined;
 
     const updatePayload = stripUndefinedDeep({
-      studentUid,
       testResults: arrayUnion(testResultEntry),
       xp: increment(xpEarned),
       ...(badgeEntry ? { badges: arrayUnion(badgeEntry) } : {}),
@@ -821,6 +825,7 @@ export async function awardPlaygroundRewardToHubProfile(params: {
           classCode: profile.classCode,
           className: profile.className || profile.classCode,
           stt: profile.stt,
+          studentUid,
           studentId: studentUid,
           studentName: profile.studentName || params.studentName || 'Học sinh',
           ...(studentEmail ? { studentEmail: studentEmail.trim().toLowerCase() } : {}),

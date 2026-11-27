@@ -5,6 +5,63 @@
 
 import { RawDocumentTable, ExtractedAnswerItem } from './types';
 import type { AnswerTableCandidate } from '../../types';
+import { removeDiacritics } from '../sectionDetector';
+
+export type AnswerTableSectionScope = 'part1' | 'part2' | 'part3' | null;
+
+/**
+ * Resolves the explicit exam section scope ('part1' | 'part2' | 'part3' | null)
+ * from the text header immediately preceding a table (and optional Row-0 banner title).
+ * Ensures Part I, Part II, and Part III answer tables stay strictly namespaced.
+ */
+export function detectTableSectionScope(
+  surroundingHeader?: string,
+  rows?: string[][]
+): AnswerTableSectionScope {
+  let bannerText = '';
+  if (rows && rows.length > 0) {
+    const firstNonEmpty = rows[0].map(c => stripCellFormatting(c)).filter(Boolean);
+    if (firstNonEmpty.length === 1) {
+      bannerText = firstNonEmpty[0];
+    }
+  }
+
+  const combined = [surroundingHeader || '', bannerText].filter(Boolean).join(' ');
+  if (!combined.trim()) return null;
+
+  const norm = removeDiacritics(combined);
+
+  // Check Part III first so "trac nghiem tra loi ngan" never matches Part I
+  if (
+    /\b(?:phan|muc)\s*(?:iii|3)\b/i.test(norm) ||
+    /\biii\.\s*(?:trac\s+nghiem\s+)?tra\s+loi\s+ngan\b/i.test(norm) ||
+    /\b(?:tra\s+loi\s+ngan|dien\s+khuyet)\b/i.test(norm)
+  ) {
+    return 'part3';
+  }
+
+  // Check Part II next so "trac nghiem dung sai" never matches Part I
+  if (
+    /\b(?:phan|muc)\s*(?:ii|2)\b/i.test(norm) ||
+    /\bii\.\s*(?:trac\s+nghiem\s+)?dung\s*[-–\/]?\s*sai\b/i.test(norm) ||
+    /\b(?:dung\s*[-–—\/\s]+sai|dung\/sai|true\s*\/\s*false)\b/i.test(norm)
+  ) {
+    return 'part2';
+  }
+
+  // Check Part I
+  if (
+    /\b(?:phan|muc)\s*(?:i|1)\b/i.test(norm) ||
+    /\bi\.\s*(?:cau\s+)?trac\s+nghiem\b/i.test(norm) ||
+    /\b(?:trac\s+nghiem\s+(?:4|bon|nhieu)\s+(?:lua\s+chon|phuong\s+an)|nhieu\s+phuong\s+an|4\s+lua\s+chon|mot\s+lua\s+chon)\b/i.test(
+      norm
+    )
+  ) {
+    return 'part1';
+  }
+
+  return null;
+}
 
 /**
  * Strips inline HTML tags (<b>, <u>, <sub>, <sup>, etc.) and Markdown emphasis markers from a table cell
@@ -238,10 +295,12 @@ export function buildAnswerTableCandidates(
   const answerLikeTables: RawDocumentTable[] = [];
 
   for (const tbl of tables) {
+    const scope = detectTableSectionScope(tbl.surroundingHeader, tbl.rows);
     const flatText = `${tbl.surroundingHeader || ''} ${tbl.rows.slice(0, 2).map(r => r.join(' ')).join(' ')}`;
     const hasAnswerMarkers =
       isLikelyPart2Matrix(tbl.rows) ||
       isLikelyPart2RowWise(tbl.rows) ||
+      isLikelyPart2VerticalMerged(tbl.rows, scope === 'part2') ||
       detectVerticalAnswerTable(tbl.rows, tbl.surroundingHeader).questions.length >= 1 ||
       detectHorizontalHeaderAnswerPairs(tbl.rows, tbl.surroundingHeader).questions.length >= 1 ||
       /(?:ĐÁP\s*ÁN|MÃ\s*ĐỀ|CÂU\s+1\b)/i.test(flatText);
@@ -285,10 +344,18 @@ export function buildAnswerTableCandidates(
     };
   }
 
-  // Case 2: Multiple conflicting horizontal Part I tables with overlapping Q1..QN
+  // Case 2: Multiple conflicting Part I tables with overlapping Q1..QN (strictly excluding Part II / Part III tables)
   const p1TableInfos: { tbl: RawDocumentTable; qs: number[]; p1Count: number }[] = [];
   for (const tbl of answerLikeTables) {
-    if (isLikelyPart2Matrix(tbl.rows) || isLikelyPart2RowWise(tbl.rows)) continue;
+    const scope = detectTableSectionScope(tbl.surroundingHeader, tbl.rows);
+    if (scope === 'part2' || scope === 'part3') continue;
+    if (
+      isLikelyPart2Matrix(tbl.rows) ||
+      isLikelyPart2RowWise(tbl.rows) ||
+      isLikelyPart2VerticalMerged(tbl.rows, false)
+    ) {
+      continue;
+    }
     const tempP1 = new Map<number, ExtractedAnswerItem>();
     const tempP2 = new Map<string, ExtractedAnswerItem>();
     const tempP3 = new Map<number, ExtractedAnswerItem>();
@@ -528,7 +595,7 @@ interface TableMatchResult {
 
 /**
  * Shared recorder for extracted (questionNumber, rawAnswer) pairs from both vertical and horizontal tables.
- * Handles Part I & Part III routing, exact decimal preservation, duplicate tracking, and empty-cell tracking.
+ * Enforces strict namespace isolation per section scope so Part I, Part II, and Part III never cross-pollute.
  */
 function applyExtractedQuestionAnswerPairs(
   questions: number[],
@@ -538,10 +605,19 @@ function applyExtractedQuestionAnswerPairs(
   isPart3Hint: boolean,
   part1Map: Map<number, ExtractedAnswerItem>,
   part3Map: Map<number, ExtractedAnswerItem>,
-  trackers?: TableProcessTrackers
+  trackers?: TableProcessTrackers,
+  strictScope: AnswerTableSectionScope = null
 ): { matchedPart1: boolean; matchedPart3: boolean } {
   let matchedPart1 = false;
   let matchedPart3 = false;
+
+  // Hard guard: Part II tables must NEVER write to Part I or Part III maps/diagnostics
+  if (strictScope === 'part2') {
+    return { matchedPart1: false, matchedPart3: false };
+  }
+
+  const allowPart1 = strictScope !== 'part3' && !isPart3Hint && !isPart3Table;
+  const allowPart3 = strictScope !== 'part1';
 
   for (let i = 0; i < questions.length; i++) {
     const qNum = questions[i];
@@ -549,7 +625,7 @@ function applyExtractedQuestionAnswerPairs(
     const cleanAnsToken = stripCellFormatting(rawAnsToken);
     const choice = normalizeChoice(rawAnsToken);
 
-    if (choice && !isPart3Hint && !isPart3Table) {
+    if (choice && allowPart1) {
       matchedPart1 = true;
       if (trackers) {
         const prevList = trackers.part1SeenAnswers.get(qNum) || [];
@@ -571,7 +647,7 @@ function applyExtractedQuestionAnswerPairs(
           teacherVerified: false,
         });
       }
-    } else if (isPart1Table && !isPart3Hint && !isPart3Table) {
+    } else if ((isPart1Table || strictScope === 'part1') && allowPart1) {
       // Confirmed Part I answer table, but this cell is blank or invalid -> record missing/invalid warning
       matchedPart1 = true;
       if (trackers) {
@@ -580,10 +656,10 @@ function applyExtractedQuestionAnswerPairs(
           trackers.part1InvalidCells.push({ questionNumber: qNum, rawValue: cleanAnsToken });
         }
       }
-    } else {
+    } else if (allowPart3) {
       // Part III short answer (supports integers, decimals with ',' or '.', negative numbers, multi-digit values)
       const parsed = normalizeShortAnswer(cleanAnsToken);
-      if (parsed.normalizedValue && (isPart3Hint || isPart3Table || (!choice && !isPart1Table))) {
+      if (parsed.normalizedValue && (strictScope === 'part3' || isPart3Hint || isPart3Table || (!choice && !isPart1Table))) {
         matchedPart3 = true;
         if (trackers) {
           const prevList = trackers.part3SeenAnswers.get(qNum) || [];
@@ -608,7 +684,7 @@ function applyExtractedQuestionAnswerPairs(
             teacherVerified: false,
           });
         }
-      } else if (!cleanAnsToken && (isPart3Hint || isPart3Table)) {
+      } else if (!cleanAnsToken && (strictScope === 'part3' || isPart3Hint || isPart3Table)) {
         // Confirmed Part III table with an empty answer cell -> record missing warning
         matchedPart3 = true;
         if (trackers) {
@@ -622,7 +698,11 @@ function applyExtractedQuestionAnswerPairs(
 }
 
 /**
- * Analyzes a single 2D table grid (handling transposed matrices, vertical answer tables, horizontal headers, generic key-value grids)
+ * Analyzes a single 2D table grid with strict namespace isolation per exam part:
+ * - PHẦN I  -> answersPart1 (part1Map) only
+ * - PHẦN II -> answersPart2 (part2Map) only (transposed matrix, row-wise, vertical merged-cell, inline)
+ * - PHẦN III -> answersPart3 (part3Map) only
+ * Never checks or reports duplicate question numbers across different parts.
  */
 function processTable(
   table: RawDocumentTable,
@@ -637,35 +717,52 @@ function processTable(
     return { matchedPart1: false, matchedPart2: false, matchedPart3: false };
   }
 
-  const headerSnippet = (table.surroundingHeader || '').toUpperCase();
-  const isPart3Hint = /\b(?:PHẦN|PHAN)\s*(?:III|3)\b|TRẢ\s*LỜI\s*NGẮN/i.test(headerSnippet);
-  const isPart2Hint = !isPart3Hint && /\b(?:PHẦN|PHAN)\s*(?:II|2)\b|ĐÚNG\s*[-–\/]?\s*SAI/i.test(headerSnippet);
-  const isPart1Hint = !isPart3Hint && !isPart2Hint && /\b(?:PHẦN|PHAN)\s*(?:I|1)\b|TRẮC\s*NGHIỆM/i.test(headerSnippet);
+  const explicitScope = detectTableSectionScope(table.surroundingHeader, rows);
+  const isPart3Hint = explicitScope === 'part3';
+  const isPart2Hint = explicitScope === 'part2';
+  const isPart1Hint = explicitScope === 'part1';
 
   // Determine whether a headerless continuation table is allowed from the immediately preceding table
   const allowHeaderlessContinuation =
-    prevMatchedSection === 'part3'
-      ? !isPart1Hint && !isPart2Hint
-      : prevMatchedSection === 'part1'
-      ? !isPart2Hint && !isPart3Hint
-      : false;
-  const effectivePart3Hint = isPart3Hint || (prevMatchedSection === 'part3' && !isPart1Hint && !isPart2Hint);
+    explicitScope === null && (prevMatchedSection === 'part1' || prevMatchedSection === 'part3');
+  const effectivePart3Hint = isPart3Hint || (explicitScope === null && prevMatchedSection === 'part3');
 
-  // --- CASE A: PART II TRANSPOSED MATRIX (Most complex & common in GDPT 2018 exams) ---
-  if (isLikelyPart2Matrix(rows)) {
-    parsePart2TransposedMatrix(rows, part2Map);
-    return { matchedPart1: false, matchedPart2: true, matchedPart3: false };
+  // --- STRICT SCOPE: PART II (ĐÚNG / SAI) ---
+  // Handle ALL Part II layouts first when scope is 'part2' OR when table structure clearly matches Part II (and not explicitly Part I/III)
+  if (explicitScope !== 'part1' && explicitScope !== 'part3') {
+    // CASE A1: PART II TRANSPOSED MATRIX (columns = Câu 1, 2, 3...; rows = a, b, c, d)
+    if (isLikelyPart2Matrix(rows)) {
+      parsePart2TransposedMatrix(rows, part2Map);
+      return { matchedPart1: false, matchedPart2: true, matchedPart3: false };
+    }
+
+    // CASE A2: PART II ROW-WISE TABLE (rows = Câu 1, 2...; columns = a, b, c, d)
+    if (isLikelyPart2RowWise(rows)) {
+      parsePart2RowWise(rows, part2Map);
+      return { matchedPart1: false, matchedPart2: true, matchedPart3: false };
+    }
+
+    // CASE A3: PART II VERTICAL / MERGED-CELL TABLE (e.g. [Câu (vMerge/rowspan) | Ý a/b/c/d | Đáp án Đ/S/T/F] or [Câu | a) Đ])
+    if (isLikelyPart2VerticalMerged(rows, isPart2Hint)) {
+      const beforeP2 = part2Map.size;
+      parsePart2VerticalMerged(rows, part2Map);
+      if (part2Map.size > beforeP2 || isPart2Hint) {
+        return { matchedPart1: false, matchedPart2: part2Map.size > beforeP2, matchedPart3: false };
+      }
+    }
+
+    // If header explicitly marks this table as PHẦN II, NEVER let it bleed into Part I or Part III!
+    if (isPart2Hint) {
+      const beforeP2 = part2Map.size;
+      parsePart2VerticalMerged(rows, part2Map);
+      if (part2Map.size === beforeP2) {
+        parseGenericKeyValTable(rows, part1Map, part2Map, part3Map, false, true, false, trackers);
+      }
+      return { matchedPart1: false, matchedPart2: part2Map.size > beforeP2, matchedPart3: false };
+    }
   }
 
-  // --- CASE A2: PART II ROW-WISE TABLE ---
-  if (isLikelyPart2RowWise(rows)) {
-    parsePart2RowWise(rows, part2Map);
-    return { matchedPart1: false, matchedPart2: true, matchedPart3: false };
-  }
-
-  // --- CASE B1: VERTICAL ANSWER TABLE (2 columns or multi-pair [Câu | Đáp án], single or multiple consecutive tables) ---
-  // Must run BEFORE horizontal detection so 2-column vertical tables (| Câu | Đáp án | + | 1 | 4 |, | 2 | 88 |)
-  // are never misparsed horizontally across adjacent rows!
+  // --- CASE B1: VERTICAL ANSWER TABLE (Part I or Part III, single or multi-pair [Câu | Đáp án]) ---
   const verticalPairs = detectVerticalAnswerTable(rows, table.surroundingHeader, allowHeaderlessContinuation);
   if (verticalPairs.questions.length > 0) {
     const { matchedPart1, matchedPart3 } = applyExtractedQuestionAnswerPairs(
@@ -676,12 +773,13 @@ function processTable(
       effectivePart3Hint,
       part1Map,
       part3Map,
-      trackers
+      trackers,
+      explicitScope
     );
     return { matchedPart1, matchedPart2: false, matchedPart3 };
   }
 
-  // --- CASE B2: HORIZONTAL ANSWER TABLE (2-row, wrapped multi-row, and multiple consecutive separate Word tables) ---
+  // --- CASE B2: HORIZONTAL ANSWER TABLE (Part I or Part III: 2-row, wrapped multi-row, or consecutive tables) ---
   const horizontalPairs = detectHorizontalHeaderAnswerPairs(
     rows,
     table.surroundingHeader,
@@ -696,12 +794,13 @@ function processTable(
       effectivePart3Hint,
       part1Map,
       part3Map,
-      trackers
+      trackers,
+      explicitScope
     );
     return { matchedPart1, matchedPart2: false, matchedPart3 };
   }
 
-  // --- CASE C: GENERIC KEY-VALUE GRID FALLBACK ---
+  // --- CASE C: GENERIC KEY-VALUE GRID FALLBACK (strictly respecting explicitScope) ---
   const beforeP1Size = part1Map.size;
   const beforeP2Size = part2Map.size;
   const beforeP3Size = part3Map.size;
@@ -722,12 +821,23 @@ function processTable(
   };
 }
 
+function skipOptionalBannerRow(rows: string[][]): string[][] {
+  if (rows.length >= 2) {
+    const row0NonEmpty = rows[0].map(c => stripCellFormatting(c)).filter(Boolean);
+    if (row0NonEmpty.length === 1 && rows[1].filter(c => stripCellFormatting(c).length > 0).length >= 2) {
+      return rows.slice(1);
+    }
+  }
+  return rows;
+}
+
 /**
  * Checks if table is a GDPT 2018 Part II Transposed Matrix:
  * Header has question numbers 1, 2, 3, 4 (or similar),
- * and consecutive rows start with a, b, c, d and contain Đ/S values.
+ * and consecutive rows start with a, b, c, d and contain Đ/S (or T/F, Đúng/Sai) values.
  */
-function isLikelyPart2Matrix(rows: string[][]): boolean {
+function isLikelyPart2Matrix(rawRows: string[][]): boolean {
+  const rows = skipOptionalBannerRow(rawRows);
   if (rows.length < 5) return false;
 
   // Check header row for question numbers
@@ -750,7 +860,7 @@ function isLikelyPart2Matrix(rows: string[][]): boolean {
     const row = rows[r];
     if (row.length === 0) continue;
     const firstClean = stripCellFormatting(row[0]).toLowerCase();
-    const subMatch = firstClean.match(/^\(?([a-d])\)?[.:]?$/);
+    const subMatch = firstClean.match(/^(?:(?:ý|lệnh)\s+)?\(?([a-d])\)?[.:]?$/i);
     if (subMatch) {
       labels.push(subMatch[1]);
     }
@@ -775,14 +885,14 @@ function isLikelyPart2Matrix(rows: string[][]): boolean {
  * Column represents Question Number (Câu 1, Câu 2...)
  * Row represents Statement Sub-Question (a, b, c, d)
  */
-function parsePart2TransposedMatrix(rows: string[][], part2Map: Map<string, ExtractedAnswerItem>) {
+function parsePart2TransposedMatrix(rawRows: string[][], part2Map: Map<string, ExtractedAnswerItem>) {
+  const rows = skipOptionalBannerRow(rawRows);
   const headerRow = rows[0];
   const colQuestions: { colIdx: number; qNum: number }[] = [];
 
   for (let c = 1; c < headerRow.length; c++) {
-    const rawCell = headerRow[c];
-    const qNum = parseInt(rawCell.replace(/\D/g, ''), 10);
-    if (!isNaN(qNum) && qNum > 0) {
+    const qNum = extractQuestionNumberCell(headerRow[c]);
+    if (qNum !== null) {
       colQuestions.push({ colIdx: c, qNum });
     }
   }
@@ -795,15 +905,11 @@ function parsePart2TransposedMatrix(rows: string[][], part2Map: Map<string, Extr
 
     // Detect row sub-label
     let sub: 'a' | 'b' | 'c' | 'd' | undefined;
-    const firstCell = row[0].toLowerCase().trim();
-    for (const s of standardSubs) {
-      if (firstCell.startsWith(s) || firstCell.includes(`${s})`) || firstCell === s) {
-        sub = s;
-        break;
-      }
-    }
-
-    if (!sub && r - 1 < standardSubs.length) {
+    const firstCell = stripCellFormatting(row[0]).toLowerCase();
+    const subMatch = firstCell.match(/^(?:(?:ý|lệnh)\s+)?\(?([a-d])\)?[.:]?$/i);
+    if (subMatch) {
+      sub = subMatch[1].toLowerCase() as 'a' | 'b' | 'c' | 'd';
+    } else if (r - 1 < standardSubs.length) {
       sub = standardSubs[r - 1];
     }
 
@@ -825,7 +931,7 @@ function parsePart2TransposedMatrix(rows: string[][], part2Map: Map<string, Extr
             correctAnswer: tfVal,
             acceptedAnswers: [tfVal, tfVal === 'Đ' ? 'Đúng' : 'Sai'],
             source: 'table',
-            confidence: 0.99, // Matrix parsing is high fidelity
+            confidence: 0.99,
             sourceSnippet: `Câu ${qNum} [${sub}] -> ${tfVal} (từ ma trận bảng)`,
             validationStatus: 'verified',
             teacherVerified: false,
@@ -839,9 +945,10 @@ function parsePart2TransposedMatrix(rows: string[][], part2Map: Map<string, Extr
 /**
  * Checks if table is a GDPT 2018 Part II Row-wise Table:
  * Header has sub-question labels (a, b, c, d),
- * and rows start with question numbers (1, 2...) followed by True/False tokens.
+ * and rows start with question numbers (1, 2...) followed by True/False tokens (Đ/S, T/F, Đúng/Sai).
  */
-function isLikelyPart2RowWise(rows: string[][]): boolean {
+function isLikelyPart2RowWise(rawRows: string[][]): boolean {
+  const rows = skipOptionalBannerRow(rawRows);
   if (rows.length < 2) return false;
   const header = rows[0];
   if (header.length < 4) return false;
@@ -854,7 +961,7 @@ function isLikelyPart2RowWise(rows: string[][]): boolean {
   const headerSubs = header
     .slice(1)
     .map(c => {
-      const m = stripCellFormatting(c).toLowerCase().match(/^\(?([a-d])\)?[.:]?$/);
+      const m = stripCellFormatting(c).toLowerCase().match(/^(?:(?:ý|lệnh)\s+)?\(?([a-d])\)?[.:]?$/i);
       return m ? m[1] : '';
     });
   const hasSubsInHeader = headerSubs.filter(s => ['a', 'b', 'c', 'd'].includes(s)).length >= 2;
@@ -881,20 +988,18 @@ function isLikelyPart2RowWise(rows: string[][]): boolean {
  * Row represents Question Number (Câu 1, Câu 2...)
  * Column represents Statement Sub-Question (a, b, c, d)
  */
-function parsePart2RowWise(rows: string[][], part2Map: Map<string, ExtractedAnswerItem>) {
+function parsePart2RowWise(rawRows: string[][], part2Map: Map<string, ExtractedAnswerItem>) {
+  const rows = skipOptionalBannerRow(rawRows);
   const standardSubs: ('a' | 'b' | 'c' | 'd')[] = ['a', 'b', 'c', 'd'];
   const header = rows[0];
   const colSubs: ('a' | 'b' | 'c' | 'd' | undefined)[] = [];
 
   for (let c = 1; c < header.length; c++) {
-    const cell = header[c].toLowerCase();
-    let matchedSub: 'a' | 'b' | 'c' | 'd' | undefined;
-    for (const s of standardSubs) {
-      if (cell.startsWith(s) || cell.includes(`${s})`) || cell === s) {
-        matchedSub = s;
-        break;
-      }
-    }
+    const cell = stripCellFormatting(header[c]).toLowerCase();
+    const subMatch = cell.match(/^(?:(?:ý|lệnh)\s+)?\(?([a-d])\)?[.:]?$/i);
+    let matchedSub: 'a' | 'b' | 'c' | 'd' | undefined = subMatch
+      ? (subMatch[1].toLowerCase() as 'a' | 'b' | 'c' | 'd')
+      : undefined;
     if (!matchedSub && c - 1 < standardSubs.length) {
       matchedSub = standardSubs[c - 1];
     }
@@ -903,8 +1008,8 @@ function parsePart2RowWise(rows: string[][], part2Map: Map<string, ExtractedAnsw
 
   for (let r = 1; r < rows.length; r++) {
     const row = rows[r];
-    const qNum = parseInt(row[0].replace(/\D/g, ''), 10);
-    if (isNaN(qNum) || qNum <= 0) continue;
+    const qNum = extractQuestionNumberCell(row[0]);
+    if (qNum === null) continue;
 
     for (let c = 1; c < row.length; c++) {
       const sub = colSubs[c - 1] || (c - 1 < standardSubs.length ? standardSubs[c - 1] : undefined);
@@ -928,6 +1033,350 @@ function parsePart2RowWise(rows: string[][], part2Map: Map<string, ExtractedAnsw
           teacherVerified: false,
         });
       }
+    }
+  }
+}
+
+/**
+ * Extracts a strict Part II sub-question letter ('a' | 'b' | 'c' | 'd') from a table cell
+ * e.g. "a", "a)", "(b)", "c.", "Ý d", "Lệnh a"
+ */
+function extractPart2SubLetterCell(cell: string): 'a' | 'b' | 'c' | 'd' | null {
+  const clean = stripCellFormatting(cell);
+  if (!clean) return null;
+  const m = clean.match(/^(?:(?:ý|lệnh(?:\s+hỏi)?|mệnh\s+đề)\s+)?[\(\[]?([a-d])[\)\].:–—\-]?$/i);
+  return m ? (m[1].toLowerCase() as 'a' | 'b' | 'c' | 'd') : null;
+}
+
+/**
+ * Extracts combined question+sub-statement cell like "1a", "1.a", "1) a", "Câu 1a", "Câu 1 ý b"
+ */
+function extractCombinedQuestionSubCell(cell: string): { qNum: number; sub: 'a' | 'b' | 'c' | 'd' } | null {
+  const clean = stripCellFormatting(cell);
+  if (!clean) return null;
+  const m = clean.match(/^(?:câu\s*)?(\d{1,3})\s*(?:[.\-–—\/)\s]|ý\s*)+\(?([a-d])\)?[.:]?$/i) ||
+    clean.match(/^(?:câu\s*)?(\d{1,3})([a-d])\)?[.:]?$/i);
+  if (!m) return null;
+  const qNum = parseInt(m[1], 10);
+  if (isNaN(qNum) || qNum <= 0 || qNum > 200) return null;
+  return { qNum, sub: m[2].toLowerCase() as 'a' | 'b' | 'c' | 'd' };
+}
+
+/**
+ * Extracts a single "a) Đ" / "b - S" / "c: True" / "d F" pair from one cell
+ */
+function extractSingleSubTfPair(cell: string): { sub: 'a' | 'b' | 'c' | 'd'; val: 'Đ' | 'S' } | null {
+  const clean = stripCellFormatting(cell);
+  if (!clean) return null;
+  const m = clean.match(/^(?:(?:ý|lệnh)\s+)?\(?([a-d])[\)\].:\-–—\s]+(Đúng|Sai|True|False|Đ|S|T|F|D)\s*$/i);
+  if (!m) return null;
+  const val = normalizeTrueFalse(m[2]);
+  if (!val) return null;
+  return { sub: m[1].toLowerCase() as 'a' | 'b' | 'c' | 'd', val };
+}
+
+/**
+ * Strict True/False check excluding ambiguous bare 'D' (which could be Part I choice D)
+ * unless used inside an explicitly Part II scoped table
+ */
+function isUnambiguousTrueFalseCell(cell: string, allowBareD: boolean): boolean {
+  const clean = stripCellFormatting(cell)
+    .toUpperCase()
+    .replace(/[^A-ZĐ\u00C0-\u1EF9]/gi, '');
+  if (!clean) return false;
+  if (['Đ', 'ĐÚNG', 'DUNG', 'TRUE', 'T', 'S', 'SAI', 'FALSE', 'F'].includes(clean)) return true;
+  if (allowBareD && clean === 'D') return true;
+  return false;
+}
+
+function isPart2SubColumnHeader(cell: string): boolean {
+  const norm = removeDiacritics(stripCellFormatting(cell)).replace(/[:.\-–—()]/g, ' ').replace(/\s+/g, ' ').trim();
+  return /^(?:y|lenh|lenh hoi|menh de|y hoi|noi dung|phan|muc|cau con)$/.test(norm);
+}
+
+/**
+ * Detects column triples (qCol, subCol, ansCol) for vertical merged-cell Part II tables,
+ * supporting both single-group [Câu | Ý | Đáp án] and multi-group [Câu | Ý | Đáp án | Câu | Ý | Đáp án].
+ */
+function detectPart2VerticalMergedTriples(
+  rows: string[][],
+  explicitPart2Scope: boolean
+): { headerRowIdx: number; triples: { qCol: number; subCol: number; ansCol: number }[] } {
+  const empty = { headerRowIdx: -1, triples: [] };
+  if (rows.length < 2) return empty;
+
+  const maxCols = Math.max(...rows.map(r => r.length));
+  if (maxCols < 3) return empty;
+
+  // Mode 1: Check Row 0 for explicit header [Câu | Ý/Lệnh hỏi | Đáp án] (single or repeated side-by-side)
+  const header = rows[0];
+  const headerTriples: { qCol: number; subCol: number; ansCol: number }[] = [];
+  for (let c = 0; c < header.length - 2; c++) {
+    const h0 = stripCellFormatting(header[c]);
+    const h1 = stripCellFormatting(header[c + 1]);
+    const h2 = stripCellFormatting(header[c + 2]);
+    if (isQuestionRowLabel(h0) && (isPart2SubColumnHeader(h1) || !h1) && isAnswerRowLabel(h2)) {
+      headerTriples.push({ qCol: c, subCol: c + 1, ansCol: c + 2 });
+      c += 2;
+    }
+  }
+  if (headerTriples.length > 0) {
+    // Verify at least 2 data rows actually match (subLetter a-d + True/False value)
+    let matchedRows = 0;
+    for (const { subCol, ansCol } of headerTriples) {
+      for (let r = 1; r < rows.length; r++) {
+        const sub = extractPart2SubLetterCell(rows[r][subCol] || '');
+        const tf = isUnambiguousTrueFalseCell(rows[r][ansCol] || '', explicitPart2Scope);
+        if (sub && tf) matchedRows++;
+      }
+    }
+    if (matchedRows >= 2) {
+      return { headerRowIdx: 0, triples: headerTriples };
+    }
+  }
+
+  // Mode 2: Headerless or custom-header 3+ column scan (look for columns where subCol has a/b/c/d and ansCol has Đ/S/T/F)
+  const startRow =
+    isQuestionRowLabel(rows[0][0] || '') || isAnswerRowLabel(rows[0][rows[0].length - 1] || '') ? 1 : 0;
+  const inferredTriples: { qCol: number; subCol: number; ansCol: number }[] = [];
+
+  for (let subCol = 1; subCol < maxCols - 1; subCol++) {
+    let subHits = 0;
+    let tfHits = 0;
+    let choiceABCHits = 0;
+    const ansCol = subCol + 1;
+    const qCol = subCol - 1;
+
+    for (let r = startRow; r < rows.length; r++) {
+      const subCell = rows[r][subCol] || '';
+      const ansCell = rows[r][ansCol] || '';
+      const sub = extractPart2SubLetterCell(subCell);
+      if (sub) {
+        subHits++;
+        const cleanAns = stripCellFormatting(ansCell);
+        if (/^[A-C]$/i.test(cleanAns)) choiceABCHits++;
+        if (isUnambiguousTrueFalseCell(cleanAns, explicitPart2Scope)) tfHits++;
+      }
+    }
+
+    if (subHits >= 2 && tfHits >= 2 && choiceABCHits === 0) {
+      // Confirm qCol has at least one question number
+      const hasQNum = rows.slice(startRow).some(r => extractQuestionNumberCell(r[qCol] || '') !== null);
+      if (hasQNum) {
+        inferredTriples.push({ qCol, subCol, ansCol });
+        subCol += 2; // advance past consumed triple
+      }
+    }
+  }
+
+  if (inferredTriples.length > 0) {
+    return { headerRowIdx: startRow === 1 ? 0 : -1, triples: inferredTriples };
+  }
+
+  return empty;
+}
+
+/**
+ * Checks whether a table is a vertical / merged-cell Part II answer table:
+ * - [Câu (merged across 4 rows) | Ý (a,b,c,d) | Đáp án (Đ/S, T/F, Đúng/Sai)]
+ * - [Câu (merged across 4 rows) | Đáp án ("a) Đ", "b) S", ...)]
+ * - [Câu (merged or unmerged) | Đáp án ("a-Đ, b-S, c-S, d-Đ" or "Đ - S - S - Đ")]
+ * - [1a | Đ], [1b | S], [1c | S], [1d | Đ]
+ * - [Câu 1 | ], [a | Đ], [b | S], [c | S], [d | Đ]
+ */
+function isLikelyPart2VerticalMerged(rawRows: string[][], explicitPart2Scope: boolean): boolean {
+  const rows = skipOptionalBannerRow(rawRows);
+  if (rows.length < 2) return false;
+
+  // Check 3+ col vertical merged triples: [Câu | Ý | Đáp án]
+  if (detectPart2VerticalMergedTriples(rows, explicitPart2Scope).triples.length > 0) {
+    return true;
+  }
+
+  // Check 2-col (or multi-pair) vertical merged / inline / combined-key Part II layouts
+  let singleSubTfHits = 0;
+  let inlineMultiHits = 0;
+  let combinedQSubHits = 0;
+  let stackedSubTfHits = 0;
+  let choiceABCHits = 0;
+
+  const startRow = isQuestionRowLabel(rows[0][0] || '') ? 1 : 0;
+  for (let r = startRow; r < rows.length; r++) {
+    const row = rows[r];
+    for (let c = 0; c < row.length - 1; c++) {
+      const left = stripCellFormatting(row[c]);
+      const right = stripCellFormatting(row[c + 1]);
+      if (!left && !right) continue;
+
+      // Pattern: "1a | Đ" or "Câu 1b | F"
+      if (extractCombinedQuestionSubCell(left) && isUnambiguousTrueFalseCell(right, explicitPart2Scope)) {
+        combinedQSubHits++;
+        continue;
+      }
+
+      // Pattern: "a | Đ" (under a "Câu 1" row)
+      if (extractPart2SubLetterCell(left) && isUnambiguousTrueFalseCell(right, explicitPart2Scope)) {
+        stackedSubTfHits++;
+        continue;
+      }
+
+      // Pattern: "1 | a) Đ" or "" (merged) | "b) S"
+      if (extractSingleSubTfPair(right)) {
+        singleSubTfHits++;
+        continue;
+      }
+
+      // Pattern: "1 | a-Đ, b-S, c-S, d-Đ" or "1 | Đ - S - S - Đ" or "1 | T, F, F, T"
+      if (extractQuestionNumberCell(left) !== null && right) {
+        if (/^[A-C]$/i.test(right)) {
+          choiceABCHits++;
+        } else if (countPart2InlineTokens(right, explicitPart2Scope) >= 2) {
+          inlineMultiHits++;
+        }
+      }
+    }
+  }
+
+  if (choiceABCHits > 0 && !explicitPart2Scope) return false;
+  return singleSubTfHits >= 2 || inlineMultiHits >= 1 || combinedQSubHits >= 2 || stackedSubTfHits >= 2;
+}
+
+/**
+ * Counts how many Part II True/False sub-answers can be parsed from an inline cell string
+ */
+function countPart2InlineTokens(cell: string, allowBareD: boolean): number {
+  const clean = stripCellFormatting(cell);
+  if (!clean) return 0;
+  const labeled = [
+    ...clean.matchAll(/(?:\(?([a-d])[\)\].:\-–—\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S|T|F)(?=$|[\s,;.)\]\|])/gi),
+  ];
+  if (labeled.length >= 2) return labeled.length;
+
+  // Positional 4-token sequence e.g. "Đ - S - S - Đ", "T, F, F, T", "Đúng / Sai / Đúng / Sai"
+  const tokens = clean.split(/[\s,;\/\-–—]+/).filter(Boolean);
+  if (tokens.length === 4 && tokens.every(t => isUnambiguousTrueFalseCell(t, allowBareD))) {
+    return 4;
+  }
+  return 0;
+}
+
+/**
+ * Parses ALL vertical / merged-cell Part II table layouts while tracking `currentQuestionNumber`
+ * across vertically merged (`<w:vMerge/>` / `rowspan`) empty cells in the "Câu" column.
+ */
+function parsePart2VerticalMerged(rawRows: string[][], part2Map: Map<string, ExtractedAnswerItem>) {
+  const rows = skipOptionalBannerRow(rawRows);
+  if (rows.length < 2) return;
+
+  const setPart2Answer = (qNum: number, sub: 'a' | 'b' | 'c' | 'd', tfVal: 'Đ' | 'S', snippet: string) => {
+    const key = `${qNum}-${sub}`;
+    part2Map.set(key, {
+      id: `II.${qNum}${sub}`,
+      section: 'part2',
+      questionNumber: qNum,
+      subQuestion: sub,
+      answerType: 'true_false',
+      correctAnswer: tfVal,
+      acceptedAnswers: [tfVal, tfVal === 'Đ' ? 'Đúng' : 'Sai'],
+      source: 'table',
+      confidence: 0.99,
+      sourceSnippet: snippet,
+      validationStatus: 'verified',
+      teacherVerified: false,
+    });
+  };
+
+  // Strategy 1: 3+ column vertical merged triples [Câu | Ý | Đáp án] (single or multi-group)
+  const { headerRowIdx, triples } = detectPart2VerticalMergedTriples(rows, true);
+  if (triples.length > 0) {
+    for (const { qCol, subCol, ansCol } of triples) {
+      let currentQNum: number | null = null;
+      for (let r = headerRowIdx + 1; r < rows.length; r++) {
+        const row = rows[r];
+        const qCell = qCol < row.length ? row[qCol] : '';
+        const subCell = subCol < row.length ? row[subCol] : '';
+        const ansCell = ansCol < row.length ? row[ansCol] : '';
+
+        // Skip repeated header rows inside the table
+        if (isQuestionRowLabel(qCell) && isAnswerRowLabel(ansCell)) continue;
+
+        // Update currentQuestionNumber whenever a non-empty question number appears;
+        // otherwise keep remembering currentQNum across merged cells!
+        const parsedQ = extractQuestionNumberCell(qCell);
+        if (parsedQ !== null) {
+          currentQNum = parsedQ;
+        }
+
+        const sub = extractPart2SubLetterCell(subCell);
+        const tfVal = normalizeTrueFalse(ansCell);
+        if (currentQNum !== null && sub && tfVal) {
+          setPart2Answer(currentQNum, sub, tfVal, `Câu ${currentQNum} [${sub}] -> ${tfVal} (bảng cột gộp)`);
+        }
+      }
+    }
+    return;
+  }
+
+  // Strategy 2: 2-column (or side-by-side 2-col pairs) with merged Câu cells, combined 1a|Đ, stacked a|Đ, or inline answers
+  const startRow = isQuestionRowLabel(rows[0][0] || '') ? 1 : 0;
+  const maxCols = Math.max(...rows.map(r => r.length));
+  const pairStarts: number[] = [];
+  for (let c = 0; c < maxCols - 1; c += 2) {
+    pairStarts.push(c);
+  }
+
+  for (const colStart of pairStarts) {
+    let currentQNum: number | null = null;
+    for (let r = startRow; r < rows.length; r++) {
+      const row = rows[r];
+      const left = colStart < row.length ? stripCellFormatting(row[colStart]) : '';
+      const right = colStart + 1 < row.length ? stripCellFormatting(row[colStart + 1]) : '';
+      if (!left && !right) continue;
+      if (isQuestionRowLabel(left) && isAnswerRowLabel(right)) continue;
+
+      // Case 2a: Combined "1a | Đ"
+      const combined = extractCombinedQuestionSubCell(left);
+      if (combined) {
+        currentQNum = combined.qNum;
+        const tfVal = normalizeTrueFalse(right);
+        if (tfVal) {
+          setPart2Answer(combined.qNum, combined.sub, tfVal, `Câu ${combined.qNum} [${combined.sub}] -> ${tfVal}`);
+        }
+        continue;
+      }
+
+      // Case 2b: Question number cell (either starts a merged span or standalone header row)
+      const parsedQ = extractQuestionNumberCell(left);
+      if (parsedQ !== null) {
+        currentQNum = parsedQ;
+      }
+
+      // Case 2c: Stacked sub-letter in left col ("a | Đ", "b | S") inheriting currentQNum
+      const leftSub = extractPart2SubLetterCell(left);
+      if (leftSub && currentQNum !== null) {
+        const tfVal = normalizeTrueFalse(right);
+        if (tfVal) {
+          setPart2Answer(currentQNum, leftSub, tfVal, `Câu ${currentQNum} [${leftSub}] -> ${tfVal} (bảng dọc)`);
+          continue;
+        }
+      }
+
+      if (currentQNum === null || !right) continue;
+
+      // Case 2d: Single sub-answer in right col ("a) Đ", "b - S") with merged Câu in left col
+      const singlePair = extractSingleSubTfPair(right);
+      if (singlePair) {
+        setPart2Answer(
+          currentQNum,
+          singlePair.sub,
+          singlePair.val,
+          `Câu ${currentQNum} [${singlePair.sub}] -> ${singlePair.val} (bảng gộp ô)`
+        );
+        continue;
+      }
+
+      // Case 2e: Multi-statement inline answer in right col ("a-Đ, b-S, c-S, d-Đ" or "Đ - S - S - Đ" or "T, F, F, T")
+      parsePart2InlineString(currentQNum, right, part2Map, 'table');
     }
   }
 }
@@ -1422,6 +1871,7 @@ function parseGenericKeyValTable(
     for (let c = 0; c < row.length - 1; c++) {
       const cellText = stripCellFormatting(row[c]);
       const nextCell = row[c + 1] ? stripCellFormatting(row[c + 1]) : '';
+      const afterNextCell = row[c + 2] ? stripCellFormatting(row[c + 2]) : '';
 
       // Match "Câu 1" or "1"
       const qMatch = cellText.match(/^(?:Câu\s*)?(\d+)(?:\s*[:.\-–])?$/i);
@@ -1431,6 +1881,42 @@ function parseGenericKeyValTable(
 
         const qNum = parseInt(qMatch[1], 10);
         if (qNum <= 0 || qNum > 200) continue;
+
+        // Guard: if nextCell is a lowercase Part II sub-question letter (a/b/c/d) followed by Đ/S/T/F, never treat as Part I choice!
+        if (
+          /^\(?[a-d]\)?[.:]?$/.test(nextCell) &&
+          isUnambiguousTrueFalseCell(afterNextCell, isPart2Hint)
+        ) {
+          const sub = extractPart2SubLetterCell(nextCell);
+          const tfVal = normalizeTrueFalse(afterNextCell);
+          if (sub && tfVal && !isPart1Hint && !isPart3Hint) {
+            const key = `${qNum}-${sub}`;
+            part2Map.set(key, {
+              id: `II.${qNum}${sub}`,
+              section: 'part2',
+              questionNumber: qNum,
+              subQuestion: sub,
+              answerType: 'true_false',
+              correctAnswer: tfVal,
+              acceptedAnswers: [tfVal, tfVal === 'Đ' ? 'Đúng' : 'Sai'],
+              source: 'table',
+              confidence: 0.96,
+              sourceSnippet: `Câu ${qNum} [${sub}] -> ${tfVal}`,
+              validationStatus: 'verified',
+              teacherVerified: false,
+            });
+            c += 2;
+            continue;
+          }
+        }
+
+        // Strict Part II scope: ONLY parse Part II answers, never touch Part I or Part III
+        if (isPart2Hint) {
+          parsePart2InlineString(qNum, nextCell, part2Map, 'table');
+          c++;
+          continue;
+        }
+
         const choice = normalizeChoice(nextCell);
 
         if (choice && !isPart3Hint) {
@@ -1454,11 +1940,12 @@ function parseGenericKeyValTable(
             });
           }
           c++; // skip consumed answer cell
-        } else if (isPart2Hint) {
-          // Part II inline: e.g. "a-Đ, b-S, c-Đ, d-Đ"
-          parsePart2InlineString(qNum, nextCell, part2Map, 'table');
-          c++;
-        } else if (nextCell && !isProseCell(nextCell) && (isShortAnswerToken(nextCell) || (isPart3Hint && nextCell.length <= 15))) {
+        } else if (
+          !isPart1Hint &&
+          nextCell &&
+          !isProseCell(nextCell) &&
+          (isShortAnswerToken(nextCell) || (isPart3Hint && nextCell.length <= 15))
+        ) {
           const parsed = normalizeShortAnswer(nextCell);
           if (parsed.normalizedValue && (isPart3Hint || !choice)) {
             if (trackers) {
@@ -1492,7 +1979,9 @@ function parseGenericKeyValTable(
 }
 
 /**
- * Parses inline string representation for Part II (e.g. "a - Đ, b - S, c - Đ, d - Đ")
+ * Parses inline string representation for Part II:
+ * - Labeled: "a - Đ, b - S, c - Đ, d - Đ", "a) T; b) F; c) True; d) False", "a. Đúng, b. Sai..."
+ * - Positional 4-token: "Đ - S - S - Đ", "T, F, F, T", "Đúng / Sai / Đúng / Sai"
  */
 function parsePart2InlineString(
   qNum: number,
@@ -1500,35 +1989,72 @@ function parsePart2InlineString(
   part2Map: Map<string, ExtractedAnswerItem>,
   source: 'table' | 'text'
 ) {
-  // Matches "a) Đúng", "a) Đ", "a. S", "a - Đ", "a: Sai", "a Đ", "(a) Đúng"
-  const matches = [...text.matchAll(/(?:\(?([a-d])[\)\].:\-–\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S)(?=$|[\s,;.)\]\|])/gi)];
-  for (const m of matches) {
-    const sub = (m[1] || m[2]).toLowerCase() as 'a' | 'b' | 'c' | 'd';
-    const val = normalizeTrueFalse(m[3]);
-    if (val) {
-      const key = `${qNum}-${sub}`;
-      if (!part2Map.has(key) || part2Map.get(key)!.confidence < 0.90) {
-        part2Map.set(key, {
-          id: `II.${qNum}${sub}`,
-          section: 'part2',
-          questionNumber: qNum,
-          subQuestion: sub,
-          answerType: 'true_false',
-          correctAnswer: val,
-          acceptedAnswers: [val, val === 'Đ' ? 'Đúng' : 'Sai'],
-          source: source,
-          confidence: source === 'table' ? 0.95 : 0.90,
-          sourceSnippet: `Câu ${qNum} [${sub}] -> ${val}`,
-          validationStatus: 'verified',
-          teacherVerified: false,
-        });
+  const matches = [
+    ...text.matchAll(
+      /(?:\(?([a-d])[\)\].:\-–—\s]+|\b([a-d])\s+)(Đúng|Sai|True|False|Đ|S|T|F)(?=$|[\s,;.)\]\|])/gi
+    ),
+  ];
+
+  if (matches.length > 0) {
+    for (const m of matches) {
+      const sub = (m[1] || m[2]).toLowerCase() as 'a' | 'b' | 'c' | 'd';
+      const val = normalizeTrueFalse(m[3]);
+      if (val) {
+        const key = `${qNum}-${sub}`;
+        if (!part2Map.has(key) || part2Map.get(key)!.confidence < 0.90) {
+          part2Map.set(key, {
+            id: `II.${qNum}${sub}`,
+            section: 'part2',
+            questionNumber: qNum,
+            subQuestion: sub,
+            answerType: 'true_false',
+            correctAnswer: val,
+            acceptedAnswers: [val, val === 'Đ' ? 'Đúng' : 'Sai'],
+            source: source,
+            confidence: source === 'table' ? 0.95 : 0.90,
+            sourceSnippet: `Câu ${qNum} [${sub}] -> ${val}`,
+            validationStatus: 'verified',
+            teacherVerified: false,
+          });
+        }
       }
     }
+    return;
+  }
+
+  // Fallback: positional 4-token sequence without explicit a, b, c, d letters (e.g. "Đ - S - S - Đ" or "T, F, F, T")
+  const tokens = stripCellFormatting(text).split(/[\s,;\/\-–—]+/).filter(Boolean);
+  const subs: ('a' | 'b' | 'c' | 'd')[] = ['a', 'b', 'c', 'd'];
+  if (tokens.length === 4 && tokens.every(t => isUnambiguousTrueFalseCell(t, source === 'table'))) {
+    tokens.forEach((tok, idx) => {
+      const val = normalizeTrueFalse(tok);
+      const sub = subs[idx];
+      if (val) {
+        const key = `${qNum}-${sub}`;
+        if (!part2Map.has(key) || part2Map.get(key)!.confidence < 0.90) {
+          part2Map.set(key, {
+            id: `II.${qNum}${sub}`,
+            section: 'part2',
+            questionNumber: qNum,
+            subQuestion: sub,
+            answerType: 'true_false',
+            correctAnswer: val,
+            acceptedAnswers: [val, val === 'Đ' ? 'Đúng' : 'Sai'],
+            source: source,
+            confidence: source === 'table' ? 0.94 : 0.88,
+            sourceSnippet: `Câu ${qNum} [${sub}] -> ${val}`,
+            validationStatus: 'verified',
+            teacherVerified: false,
+          });
+        }
+      }
+    });
   }
 }
 
 /**
- * Parses unstructured or inline text lists (e.g. "1.A  2.B  3.C", "Câu 1: A", etc.)
+ * Parses unstructured or inline text lists strictly scoped by section headers
+ * (e.g. "1.A  2.B  3.C", "Câu 1: A", etc.) without bleeding across Part I / II / III.
  */
 function processTextLists(
   text: string,
@@ -1557,41 +2083,47 @@ function processTextLists(
   const p2Block = extractSectionSubstringByRegex(answerFocusText, p2Start, [...p3Start, ...solStart]);
   const p3Block = extractSectionSubstringByRegex(answerFocusText, p3Start, solStart);
 
-  // --- Part 1 inline regex ---
-  const p1Text = p1Block || answerFocusText;
-  // Match patterns like: "1.A", "1 - B", "Câu 1: C", "Câu 1. D"
-  const p1Matches = [...p1Text.matchAll(/(?:^|\s|[,;|])(?:Câu\s*)?(\d+)\s*[:.\-–]\s*([A-D])(?=[,\s;|]|$)/gi)];
-  for (const m of p1Matches) {
-    const qNum = parseInt(m[1], 10);
-    const choice = normalizeChoice(m[2]);
-    if (choice && !part1Map.has(qNum)) {
-      part1Map.set(qNum, {
-        id: `I.${qNum}`,
-        section: 'part1',
-        questionNumber: qNum,
-        answerType: 'choice',
-        correctAnswer: choice,
-        source: 'text',
-        confidence: 0.90,
-        sourceSnippet: m[0].trim(),
-        validationStatus: 'verified',
-        teacherVerified: false,
-      });
+  // --- Part 1 inline regex (strictly uppercase A-D so lowercase Part II sub-labels a/b/c/d never match) ---
+  const p1Text = p1Block || (part1Map.size === 0 && !p2Block && !p3Block ? answerFocusText : '');
+  if (p1Text) {
+    const p1Matches = [...p1Text.matchAll(/(?:^|\s|[,;|])(?:(?:Câu|CÂU)\s*)?(\d+)\s*[:.\-–]\s*([A-D])(?=[,\s;|]|$)/g)];
+    for (const m of p1Matches) {
+      const qNum = parseInt(m[1], 10);
+      const choice = normalizeChoice(m[2]);
+      if (choice && !part1Map.has(qNum)) {
+        part1Map.set(qNum, {
+          id: `I.${qNum}`,
+          section: 'part1',
+          questionNumber: qNum,
+          answerType: 'choice',
+          correctAnswer: choice,
+          source: 'text',
+          confidence: 0.90,
+          sourceSnippet: m[0].trim(),
+          validationStatus: 'verified',
+          teacherVerified: false,
+        });
+      }
     }
   }
 
   // --- Part 2 inline regex ---
-  const p2Text = p2Block || text;
-  // Patterns like: "Câu 1: a - Đ, b - S, c - Đ, d - Đ" or "Câu 1. a) Đ; b) S..." or multiline
-  const p2QuestionBlocks = [...p2Text.matchAll(/(?:^|\n|[,;])\s*(?:Câu\s*)?(\d+)[\s.:\-–]+([\s\S]*?)(?=(?:(?:^|\n|[,;])\s*(?:Câu\s*)?\d+[\s.:\-–]+)|$|PHẦN|HƯỚNG\s*DẪN)/gi)];
-  for (const qBlock of p2QuestionBlocks) {
-    const qNum = parseInt(qBlock[1], 10);
-    const body = qBlock[2];
-    parsePart2InlineString(qNum, body, part2Map, 'text');
+  const p2Text = p2Block || (part2Map.size === 0 ? answerFocusText : '');
+  if (p2Text) {
+    const p2QuestionBlocks = [
+      ...p2Text.matchAll(
+        /(?:^|\n|[,;])\s*(?:Câu\s*)?(\d+)[\s.:\-–]+([\s\S]*?)(?=(?:(?:^|\n|[,;])\s*(?:Câu\s*)?\d+[\s.:\-–]+)|$|PHẦN|HƯỚNG\s*DẪN)/gi
+      ),
+    ];
+    for (const qBlock of p2QuestionBlocks) {
+      const qNum = parseInt(qBlock[1], 10);
+      const body = qBlock[2];
+      parsePart2InlineString(qNum, body, part2Map, 'text');
+    }
   }
 
   // --- Part 3 inline regex ---
-  const p3Text = p3Block || text;
+  const p3Text = p3Block || (part3Map.size === 0 && !p1Block && !p2Block ? answerFocusText : '');
   if (p3Text) {
     const p3Matches = [
       ...p3Text.matchAll(

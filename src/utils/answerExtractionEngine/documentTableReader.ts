@@ -75,21 +75,44 @@ export function extractTablesFromHtml(html: string): RawDocumentTable[] {
   const tableMatches = [...html.matchAll(/<table[^>]*>([\s\S]*?)<\/table>/gi)];
 
   let lastTableEnd = 0;
-  let lastSectionHeader: string | undefined;
+  let lastPartHeader: string | undefined;
+  let lastMetaHeader: string | undefined;
 
   tableMatches.forEach((tMatch, tIdx) => {
     const tableHtml = tMatch[1];
     const rows: string[][] = [];
     const trMatches = [...tableHtml.matchAll(/<tr[^>]*>([\s\S]*?)<\/tr>/gi)];
 
+    // Track active vertical rowspans per column slot so merged "Câu" cells keep columns aligned
+    const activeRowSpans = new Map<number, number>();
+
     trMatches.forEach(trMatch => {
       const rowContent = trMatch[1];
       const cells: string[] = [];
-      const tdMatches = [...rowContent.matchAll(/<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/gi)];
+      const tdMatches = [...rowContent.matchAll(/<t[dh]([^>]*)>([\s\S]*?)<\/t[dh]>/gi)];
+
+      let colIdx = 0;
+      const fillPendingSpans = () => {
+        while ((activeRowSpans.get(colIdx) || 0) > 0) {
+          cells.push('');
+          const rem = (activeRowSpans.get(colIdx) || 1) - 1;
+          if (rem > 0) activeRowSpans.set(colIdx, rem);
+          else activeRowSpans.delete(colIdx);
+          colIdx++;
+        }
+      };
 
       tdMatches.forEach(tdMatch => {
+        fillPendingSpans();
+
+        const attrs = tdMatch[1] || '';
+        const rowSpanMatch = attrs.match(/\browspan\s*=\s*["']?(\d+)/i);
+        const colSpanMatch = attrs.match(/\bcolspan\s*=\s*["']?(\d+)/i);
+        const rowSpan = rowSpanMatch ? Math.max(1, Math.min(50, parseInt(rowSpanMatch[1], 10))) : 1;
+        const colSpan = colSpanMatch ? Math.max(1, Math.min(20, parseInt(colSpanMatch[1], 10))) : 1;
+
         // Clean cell content, handling internal <p>, <br>, and html entities
-        const cellText = tdMatch[1]
+        const cellText = tdMatch[2]
           .replace(/<br\s*\/?>/gi, ' ')
           .replace(/<\/p>\s*<p[^>]*>/gi, ' ')
           .replace(/<[^>]+>/g, ' ')
@@ -99,8 +122,17 @@ export function extractTablesFromHtml(html: string): RawDocumentTable[] {
           .replace(/&gt;/gi, '>')
           .replace(/\s+/g, ' ')
           .trim();
-        cells.push(cellText);
+
+        for (let k = 0; k < colSpan; k++) {
+          cells.push(k === 0 ? cellText : '');
+          if (rowSpan > 1) {
+            activeRowSpans.set(colIdx + k, rowSpan - 1);
+          }
+        }
+        colIdx += colSpan;
       });
+
+      fillPendingSpans();
 
       if (cells.length > 0 && cells.some(c => c.length > 0)) {
         rows.push(cells);
@@ -109,26 +141,47 @@ export function extractTablesFromHtml(html: string): RawDocumentTable[] {
 
     const matchStart = tMatch.index || 0;
     const betweenHtml = html.substring(lastTableEnd, matchStart);
-    const betweenText = betweenHtml.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\s+/g, ' ').trim();
-    const headerMatches = [
+    const betweenText = betweenHtml
+      .replace(/<\/(?:p|div|h[1-6]|li)>/gi, '\n')
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/[ \t]+/g, ' ')
+      .trim();
+
+    const partMatches = [
       ...betweenText.matchAll(
-        /(?:PHẦN\s+(?:III|II|I|3|2|1)\b[^.\n]*|MÃ\s*ĐỀ\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN[^.\n]*|ĐÁP\s*ÁN[^.\n]*|HƯỚNG\s*DẪN\s*CHẤM[^.\n]*)/gi
+        /(?:(?:PHẦN|PHAN|MỤC|MUC)\s+(?:III|II|I|Ⅲ|Ⅱ|Ⅰ|3|2|1)\b[^\n]*|(?:TRẮC\s*NGHIỆM\s+(?:4|BỐN|NHIỀU)\s+(?:LỰA\s+CHỌN|PHƯƠNG\s+ÁN)|ĐÚNG\s*[-–\/]?\s*SAI|TRẢ\s*LỜI\s*NGẮN)[^\n]*)/gi
       ),
     ];
-    if (headerMatches.length > 0) {
-      lastSectionHeader = headerMatches[headerMatches.length - 1][0].trim().slice(0, 160);
-    } else if (betweenText.length > 120) {
-      // Significant prose appeared between tables without a section header; don't blindly inherit stale headers
-      lastSectionHeader = undefined;
+    const metaMatches = [
+      ...betweenText.matchAll(
+        /(?:MÃ\s*ĐỀ(?:\s*THI)?\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN[^\n]*|HƯỚNG\s*DẪN\s*CHẤM[^\n]*)/gi
+      ),
+    ];
+
+    if (partMatches.length > 0) {
+      lastPartHeader = partMatches[partMatches.length - 1][0].trim().slice(0, 160);
+    } else if (/HẾT/i.test(betweenText) || betweenText.length > 220) {
+      // Significant prose or HẾT marker without a new PHẦN header resets stale scope
+      lastPartHeader = undefined;
     }
+
+    if (metaMatches.length > 0) {
+      lastMetaHeader = metaMatches[metaMatches.length - 1][0].trim().slice(0, 120);
+    } else if (betweenText.length > 220) {
+      lastMetaHeader = undefined;
+    }
+
     lastTableEnd = matchStart + tMatch[0].length;
+    const combinedHeader = [lastPartHeader, lastMetaHeader].filter(Boolean).join(' | ').slice(0, 200) || undefined;
 
     if (rows.length > 0) {
       tables.push({
         id: `tbl_${tIdx + 1}`,
         sourceType: 'docx_html',
         rows,
-        surroundingHeader: lastSectionHeader,
+        surroundingHeader: combinedHeader,
       });
     }
   });
@@ -240,12 +293,23 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
 
   let currentMarkdownRows: string[][] = [];
   let hasSeenSeparatorInCurrentTable = false;
-  let lastMarkdownSectionHeader: string | undefined;
+  let lastMarkdownPartHeader: string | undefined;
+  let lastMarkdownMetaHeader: string | undefined;
 
-  const isSectionHeaderLine = (l: string): boolean =>
-    /(?:PHẦN\s+(?:III|II|I|3|2|1)\b|MÃ\s*ĐỀ\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN|ĐÁP\s*ÁN|HƯỚNG\s*DẪN\s*CHẤM|TRẢ\s*LỜI\s*NGẮN|ĐÚNG\s*[-–\/]?\s*SAI)/i.test(
+  const isPartHeaderLine = (l: string): boolean =>
+    /(?:(?:PHẦN|PHAN|MỤC|MUC)\s+(?:III|II|I|Ⅲ|Ⅱ|Ⅰ|3|2|1)\b|^(?:III|II|I)\.\s*(?:TRẮC\s*NGHIỆM|ĐÚNG\s*[-–\/]?\s*SAI|TRẢ\s*LỜI\s*NGẮN)|TRẮC\s*NGHIỆM\s+(?:4|BỐN|NHIỀU)\s+(?:LỰA\s+CHỌN|PHƯƠNG\s+ÁN)|TRẢ\s*LỜI\s*NGẮN|ĐÚNG\s*[-–\/]?\s*SAI)/i.test(
       l
     );
+
+  const isMetaHeaderLine = (l: string): boolean =>
+    /(?:MÃ\s*ĐỀ(?:\s*THI)?\s*[:\-–]?\s*[A-Z0-9]+|BẢNG\s+ĐÁP\s*ÁN|^(?:[\-–—*_\s]*)ĐÁP\s*ÁN\b|HƯỚNG\s*DẪN\s*CHẤM)/i.test(
+      l
+    );
+
+  const getCombinedMarkdownHeader = (): string | undefined => {
+    const parts = [lastMarkdownPartHeader, lastMarkdownMetaHeader].filter(Boolean);
+    return parts.length > 0 ? parts.join(' | ').slice(0, 200) : undefined;
+  };
 
   const flushMarkdownTable = () => {
     if (currentMarkdownRows.length > 0) {
@@ -253,7 +317,7 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
         id: `tbl_md_${tables.length + 1}`,
         sourceType: 'markdown',
         rows: currentMarkdownRows,
-        surroundingHeader: lastMarkdownSectionHeader,
+        surroundingHeader: getCombinedMarkdownHeader(),
       });
     }
     currentMarkdownRows = [];
@@ -263,7 +327,7 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i];
 
-    // Blank line ends the current Markdown table without resetting lastMarkdownSectionHeader
+    // Blank line ends the current Markdown table without resetting lastMarkdownPartHeader
     if (!line) {
       flushMarkdownTable();
       continue;
@@ -292,17 +356,21 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
       currentMarkdownRows.push(cells);
     } else {
       flushMarkdownTable();
-      if (isSectionHeaderLine(line)) {
-        lastMarkdownSectionHeader = line.replace(/\*\*|\*|<u>|<\/u>/gi, '').trim().slice(0, 160);
-      } else {
-        const strippedLine = line.replace(/\*\*|\*|<u>|<\/u>|<s>|<\/s>/gi, '').trim();
-        if (
-          (strippedLine.length > 100 && !/^[\-–—*_\s]+$/.test(strippedLine)) ||
-          (/^(?:Câu|Bài)\s+\d+\s*[.:–—\-]\s*\S/i.test(strippedLine) && strippedLine.length > 25)
-        ) {
-          // Long non-header paragraph or exam question stem resets stale section context
-          lastMarkdownSectionHeader = undefined;
-        }
+      const strippedLine = line.replace(/\*\*|\*|<u>|<\/u>|<s>|<\/s>/gi, '').trim();
+      if (/^[\-–—*_\s|]*HẾT[\-–—*_\s|]*$/i.test(strippedLine)) {
+        lastMarkdownPartHeader = undefined;
+        lastMarkdownMetaHeader = undefined;
+      } else if (isPartHeaderLine(strippedLine)) {
+        lastMarkdownPartHeader = strippedLine.slice(0, 160);
+      } else if (isMetaHeaderLine(strippedLine)) {
+        lastMarkdownMetaHeader = strippedLine.slice(0, 120);
+      } else if (
+        (strippedLine.length > 100 && !/^[\-–—*_\s]+$/.test(strippedLine)) ||
+        (/^(?:Câu|CÂU|Bài|BÀI)\s+\d+\s*[.:)–—\-]\s*\S/.test(strippedLine) && strippedLine.length > 20)
+      ) {
+        // Long non-header paragraph or exam question stem resets stale section context
+        lastMarkdownPartHeader = undefined;
+        lastMarkdownMetaHeader = undefined;
       }
     }
   }
@@ -374,14 +442,15 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
         }
       }
       
-      // Part II transposed matrix grid (peek next 4 lines for a, b, c, d)
+      // Part II transposed matrix grid (peek next 4 lines for a, b, c, d — supports Đ/S, T/F, Đúng/Sai, True/False)
       if (i + 4 < lines.length) {
         const next4 = lines.slice(i + 1, i + 5);
-        if (next4.every(l => /^[a-d]\)?\s+[ĐS\s]+/i.test(l))) {
+        if (next4.every(l => /^[a-d][\).:\s]+(?:(?:Đúng|Sai|True|False|[ĐSTF])\s*)+$/i.test(l))) {
           const matrixRows: string[][] = [['Câu', ...qNums]];
           next4.forEach(rowLine => {
             const rowLabel = rowLine[0].toLowerCase();
-            const tokens = rowLine.slice(rowLine.indexOf(')') + 1 || 2).trim().split(/\s+/).filter(t => /^[ĐS]$/i.test(t));
+            const rest = rowLine.replace(/^[a-d][\).:\s]+/i, '').trim();
+            const tokens = rest.split(/\s+/).filter(t => /^(?:Đúng|Sai|True|False|[ĐSTF])$/i.test(t));
             matrixRows.push([`${rowLabel})`, ...tokens]);
           });
           tables.push({
@@ -417,10 +486,10 @@ export function extractTablesFromText(text: string): RawDocumentTable[] {
       let j = i + 1;
       while (j < lines.length) {
         const rowLine = lines[j];
-        const rMatch = rowLine.match(/^(\d+)[\s.:\-–—]+([ĐS\s]{4,})$/i);
+        const rMatch = rowLine.match(/^(\d+)[\s.:\-–—]+((?:(?:Đúng|Sai|True|False|[ĐSTF])\s*){4,})$/i);
         if (rMatch) {
           const qNum = rMatch[1];
-          const tokens = rMatch[2].trim().split(/\s+/).filter(t => /^[ĐS]$/i.test(t));
+          const tokens = rMatch[2].trim().split(/\s+/).filter(t => /^(?:Đúng|Sai|True|False|[ĐSTF])$/i.test(t));
           if (tokens.length >= 4) {
             rowWiseRows.push([qNum, ...tokens.slice(0, 4)]);
             j++;
