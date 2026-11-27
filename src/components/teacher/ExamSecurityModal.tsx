@@ -219,17 +219,17 @@ export const ExamSecurityModal: React.FC<ExamSecurityModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+    <div className="fixed inset-0 z-[60] overflow-y-auto bg-slate-900/70 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
       <div className="bg-white w-full max-w-xl rounded-3xl shadow-2xl border border-slate-200 overflow-hidden my-auto max-h-[92vh] flex flex-col">
         {/* Header */}
-        <div className="bg-gradient-to-r from-slate-800 via-slate-900 to-indigo-950 px-6 py-4 text-white flex items-center justify-between shrink-0">
+        <div className="bg-[#0F172A] px-6 py-4 text-white flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
-            <div className="p-2.5 rounded-2xl bg-white/10">
-              <ShieldCheck className="w-5 h-5 text-blue-300" />
+            <div className="p-2.5 rounded-2xl bg-emerald-500/20">
+              <ShieldCheck className="w-5 h-5 text-emerald-400" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-blue-200">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-300">
                   Cấu hình bảo mật &amp; Đáp án
                 </span>
                 <span className="px-2 py-0.5 rounded bg-white/15 font-mono text-[10px] font-bold tracking-wider">

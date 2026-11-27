@@ -228,11 +228,11 @@ export const Header: React.FC<HeaderProps> = ({
           versionBadge="v2.0"
         />
       ) : (
-        /* === FIXED HEADER (H-16): Cố định trên cùng cho trang Giáo viên & Quản trị === */
-        <header className="fixed top-0 left-0 right-0 z-40 h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 transition-colors">
+        /* === FIXED HEADER (H-16, Z-50): Phong thủy Đen ánh xanh - Lục bảo - Vàng hổ phách === */
+        <header className="fixed top-0 left-0 right-0 z-50 h-16 bg-white dark:bg-slate-900 border-b border-slate-200 dark:border-slate-800 transition-colors">
           <div className="h-full px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-5">
-            {/* Cánh trái: Nút menu mobile + Logo Hóa học "HQTest - GDPT 2018" + Tiêu đề Dashboard */}
-            <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            {/* Cánh trái: Nút menu mobile + Logo Hóa học "HQTest PRO / Chương trình GDPT 2018" + Tiêu đề trang */}
+            <div className="flex items-center gap-2.5 sm:gap-3.5 min-w-0 flex-1">
               {onOpenMobileMenu && (
                 <button
                   type="button"
@@ -247,41 +247,51 @@ export const Header: React.FC<HeaderProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab(homeTab)}
-                title="HQTest - GDPT 2018 · Về trang tổng quan"
-                className="flex items-center gap-2.5 shrink-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40 rounded-xl"
+                title="HQTest PRO - Chương trình GDPT 2018 · Về trang tổng quan"
+                className="flex items-center gap-2.5 shrink-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40 rounded-xl text-left"
               >
-                <div className="w-9 h-9 rounded-xl bg-teal-600 group-hover:bg-teal-700 text-white flex items-center justify-center shrink-0 shadow-xs transition-colors">
+                <div className="relative w-9 h-9 rounded-xl bg-emerald-600 group-hover:bg-emerald-700 text-white flex items-center justify-center shrink-0 shadow-sm ring-1 ring-emerald-500/30 transition-colors">
                   <FlaskConical className="w-5 h-5" />
+                  <span
+                    aria-hidden="true"
+                    className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-500 ring-2 ring-white dark:ring-slate-900"
+                  />
                 </div>
-                <span className="text-sm sm:text-[15px] font-bold tracking-tight text-slate-900 dark:text-white whitespace-nowrap">
-                  HQTest <span className="text-teal-600 dark:text-teal-400 font-semibold">- GDPT 2018</span>
-                </span>
+                <div className="leading-tight min-w-0">
+                  <div className="text-sm sm:text-[15px] font-extrabold tracking-tight text-slate-900 dark:text-white whitespace-nowrap flex items-center gap-1">
+                    <span>HQTest</span>
+                    <span className="text-emerald-600 dark:text-emerald-400">PRO</span>
+                  </div>
+                  <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                    Chương trình GDPT 2018
+                  </div>
+                </div>
               </button>
 
               <span
                 aria-hidden="true"
-                className="hidden md:block h-5 w-px bg-slate-200 dark:bg-slate-700 shrink-0"
+                className="hidden md:block h-6 w-px bg-slate-200 dark:bg-slate-700 shrink-0"
               />
 
-              <h2 className="hidden md:block text-sm lg:text-base font-semibold text-slate-700 dark:text-slate-200 tracking-tight truncate min-w-0">
+              <h2 className="hidden md:block text-sm lg:text-[15px] font-semibold text-slate-700 dark:text-slate-200 tracking-tight truncate min-w-0">
                 {resolvedTitle}
               </h2>
             </div>
 
-            {/* Cánh phải: Chuông thông báo + Khối người dùng (Tên & Trường) + Badge phân quyền + Sửa hồ sơ + Đăng xuất */}
+            {/* Cánh phải: Chuông thông báo + Tên & Trường + Badge vai trò (Emerald / Amber) + Sửa hồ sơ + Đăng xuất */}
             <div className="flex items-center gap-2 sm:gap-3 shrink-0">
               {isGuest || !currentUser ? (
                 <button
                   type="button"
                   onClick={onRequestAuth}
-                  className="px-4 h-9 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold shadow-xs flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
+                  className="px-4 h-9 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold shadow-xs flex items-center gap-2 transition-colors whitespace-nowrap shrink-0"
                 >
                   <LogIn className="w-4 h-4 shrink-0" />
                   <span>Đăng nhập</span>
                 </button>
               ) : (
                 <div className="flex items-center gap-2 sm:gap-3">
-                  {/* Nút chuông thông báo kèm badge đỏ nếu có */}
+                  {/* Biểu tượng chuông thông báo kèm chấm đỏ trạng thái */}
                   <div className="relative" ref={notifContainerRef}>
                     <button
                       type="button"
@@ -289,18 +299,23 @@ export const Header: React.FC<HeaderProps> = ({
                       aria-label="Thông báo hệ thống"
                       aria-expanded={isNotificationOpen}
                       title="Thông báo"
-                      className="relative w-9 h-9 rounded-xl border border-slate-200/90 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white flex items-center justify-center transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+                      className="relative w-9 h-9 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 hover:text-slate-900 dark:hover:text-white flex items-center justify-center transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
                     >
                       <Bell className="w-4 h-4" />
-                      {notificationCount > 0 && (
+                      {notificationCount > 0 ? (
                         <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-rose-500 text-white text-[10px] font-bold leading-none flex items-center justify-center ring-2 ring-white dark:ring-slate-900 tabular-nums">
                           {notificationCount > 9 ? '9+' : notificationCount}
                         </span>
+                      ) : (
+                        <span
+                          aria-hidden="true"
+                          className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-rose-500 ring-2 ring-white dark:ring-slate-900"
+                        />
                       )}
                     </button>
 
                     {isNotificationOpen && (
-                      <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl overflow-hidden z-50">
+                      <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-xl overflow-hidden z-[60]">
                         <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
                           <span className="text-xs font-bold text-slate-800 dark:text-slate-100">
                             Thông báo ({notificationCount})
@@ -328,7 +343,7 @@ export const Header: React.FC<HeaderProps> = ({
                                   setIsNotificationOpen(false);
                                   if (item.targetTab) setActiveTab(item.targetTab);
                                 }}
-                                className="w-full px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800/70 transition-colors"
+                                className="w-full px-4 py-3 text-left hover:bg-emerald-50/50 dark:hover:bg-slate-800/70 transition-colors"
                               >
                                 <p className="text-xs font-semibold text-slate-800 dark:text-slate-100 line-clamp-1">
                                   {item.title}
@@ -346,9 +361,9 @@ export const Header: React.FC<HeaderProps> = ({
                     )}
                   </div>
 
-                  {/* Khối người dùng: Tên giáo viên & Trường đăng ký ở dòng dưới */}
+                  {/* Khối thông tin tài khoản: Tên giáo viên & Trường trực thuộc ở dòng dưới */}
                   <div className="hidden sm:flex flex-col items-end text-right leading-tight min-w-0">
-                    <span className="text-sm font-semibold text-slate-800 dark:text-slate-100 truncate max-w-[170px] lg:max-w-[230px]">
+                    <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate max-w-[170px] lg:max-w-[230px]">
                       {currentUser.name || currentUser.email}
                     </span>
                     <span className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 truncate max-w-[180px] lg:max-w-[260px]">
@@ -356,15 +371,17 @@ export const Header: React.FC<HeaderProps> = ({
                     </span>
                   </div>
 
-                  {/* Badge phân quyền theo màu sắc: Super Admin (Indigo/Purple) | Giáo viên (Emerald/Teal) */}
+                  {/* Badge vai trò phân biệt: Giáo viên (Emerald) | Super Admin (Amber vàng quyền lực) */}
                   <span
                     className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold whitespace-nowrap shrink-0 border ${
                       isCurrentSuperAdmin
-                        ? 'bg-indigo-50 text-indigo-700 border-indigo-200/80 dark:bg-indigo-950/70 dark:text-indigo-300 dark:border-indigo-800'
-                        : 'bg-emerald-50 text-emerald-700 border-emerald-200/80 dark:bg-emerald-950/70 dark:text-emerald-300 dark:border-emerald-800'
+                        ? 'bg-amber-50 text-amber-700 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300 dark:border-amber-700'
+                        : 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/60 dark:text-emerald-300 dark:border-emerald-800'
                     }`}
                   >
-                    {isCurrentSuperAdmin && <ShieldCheck className="w-3.5 h-3.5 shrink-0" />}
+                    {isCurrentSuperAdmin && (
+                      <ShieldCheck className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
+                    )}
                     <span>{roleBadgeLabel}</span>
                   </span>
 
@@ -380,7 +397,7 @@ export const Header: React.FC<HeaderProps> = ({
                       onClick={handleOpenProfile}
                       title="Chỉnh sửa hồ sơ cá nhân & Đổi mật khẩu"
                       aria-label="Chỉnh sửa hồ sơ cá nhân"
-                      className="w-9 h-9 rounded-xl border border-slate-200/90 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 hover:text-teal-700 dark:hover:text-teal-400 flex items-center justify-center transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-500/40"
+                      className="w-9 h-9 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-slate-700 hover:border-emerald-200 text-slate-600 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-400 flex items-center justify-center transition-colors shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/40"
                     >
                       <Edit2 className="w-4 h-4" />
                     </button>
@@ -391,7 +408,7 @@ export const Header: React.FC<HeaderProps> = ({
                         onClick={() => void onLogout()}
                         title="Đăng xuất khỏi tài khoản"
                         aria-label="Đăng xuất"
-                        className="h-9 px-3 rounded-xl border border-slate-200/90 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:border-rose-200 dark:hover:border-rose-800 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/30"
+                        className="h-9 px-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:bg-rose-50 dark:hover:bg-rose-950/50 hover:border-rose-200 dark:hover:border-rose-800 text-slate-600 dark:text-slate-300 hover:text-rose-600 dark:hover:text-rose-400 text-xs sm:text-sm font-medium inline-flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-500/30"
                       >
                         <LogOut className="w-4 h-4 shrink-0" />
                         <span className="hidden md:inline">Đăng xuất</span>
@@ -407,11 +424,11 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Profile & Change Password Modal */}
       {isProfileModalOpen && currentUser && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-[60] bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
-            <div className="px-5 py-4 bg-slate-900 text-white flex items-center justify-between gap-3">
+            <div className="px-5 py-4 bg-[#0F172A] text-white flex items-center justify-between gap-3">
               <div className="flex items-center gap-2.5 min-w-0">
-                <UserCircle2 className="w-5 h-5 text-teal-400 shrink-0" />
+                <UserCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
                 <div className="min-w-0">
                   <h3 className="font-bold text-base truncate">Tài khoản &amp; Bảo mật</h3>
                   <p className="text-[13px] text-slate-300 font-mono truncate">{currentUser.email}</p>
@@ -690,28 +707,28 @@ export const Header: React.FC<HeaderProps> = ({
   );
 };
 
-/* === FIXED FOOTER (H-10): Cố định đáy màn hình cho trang Giáo viên & Quản trị === */
+/* === FIXED FOOTER (H-10, Z-40): Cố định đáy màn hình cho trang Giáo viên & Quản trị === */
 export const WorkspaceFooter: React.FC = () => (
   <footer className="fixed bottom-0 left-0 right-0 z-40 h-10 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 transition-colors">
     <div className="h-full px-4 sm:px-6 flex items-center justify-between gap-3 text-[11px] sm:text-xs text-slate-600 dark:text-slate-400">
       {/* Cánh trái: Thông tin tác giả & đơn vị */}
       <p
         className="truncate min-w-0 font-medium text-slate-600 dark:text-slate-300"
-        title="Tác giả: Thầy Hồ Ngọc Quốc • Trường THPT chuyên Nguyễn Bỉnh Khiêm, thành phố Đà Nẵng"
+        title="Tác giả: Thầy Hồ Ngọc Quốc • Trường THPT chuyên Nguyễn Bỉnh Khiêm"
       >
         Tác giả:{' '}
         <strong className="font-semibold text-slate-800 dark:text-slate-100">
           Thầy Hồ Ngọc Quốc
         </strong>{' '}
-        • Trường THPT chuyên Nguyễn Bỉnh Khiêm, thành phố Đà Nẵng
+        • Trường THPT chuyên Nguyễn Bỉnh Khiêm
       </p>
 
-      {/* Cánh phải: Hỗ trợ kỹ thuật Hotline & Zalo */}
+      {/* Cánh phải: Cụm liên hệ kỹ thuật dạng link click được (Hotline & Zalo) */}
       <div className="flex items-center gap-2.5 sm:gap-3 shrink-0 whitespace-nowrap">
         <a
-          href="tel:0814.211.334"
-          className="inline-flex items-center gap-1 font-semibold text-teal-700 dark:text-teal-400 hover:text-teal-800 hover:underline underline-offset-2 transition-colors tabular-nums"
-          title="Gọi Hotline hỗ trợ kỹ thuật"
+          href="tel:0814211334"
+          className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400 hover:text-emerald-800 hover:underline underline-offset-2 transition-colors tabular-nums"
+          title="Gọi Điện thoại / Hotline hỗ trợ kỹ thuật"
         >
           <Phone className="w-3.5 h-3.5 shrink-0" />
           <span className="hidden md:inline text-slate-500 dark:text-slate-400 font-normal">
@@ -728,7 +745,7 @@ export const WorkspaceFooter: React.FC = () => (
           href="https://zalo.me/0917180981"
           target="_blank"
           rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 font-semibold text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 hover:underline underline-offset-2 transition-colors tabular-nums"
+          className="inline-flex items-center gap-1 font-semibold text-sky-600 dark:text-sky-400 hover:text-sky-700 hover:underline underline-offset-2 transition-colors tabular-nums"
           title="Nhắn Zalo hỗ trợ kỹ thuật"
         >
           <MessageCircle className="w-3.5 h-3.5 shrink-0" />

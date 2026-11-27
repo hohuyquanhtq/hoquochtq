@@ -170,33 +170,33 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
   };
 
   const renderSidebarContent = (collapsedMode: boolean) => (
-    <div className="h-full flex flex-col bg-slate-900 text-slate-100 border-r border-slate-800 select-none">
+    <div className="h-full flex flex-col bg-[#0F172A] text-slate-100 border-r border-slate-800/90 select-none">
       {/* Brand Header */}
       <div
-        className={`h-[70px] shrink-0 border-b border-slate-800 flex items-center ${
+        className={`h-[64px] shrink-0 border-b border-slate-800/90 flex items-center ${
           collapsedMode ? 'justify-center px-2' : 'justify-between px-4'
         } gap-2`}
       >
         <button
           type="button"
           onClick={() => handleNavClick(isSuperAdmin ? 'admin_dashboard' : 'dashboard')}
-          title="QUIZ PRO - Trang tổng quan"
-          className={`flex items-center gap-3 text-left min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 rounded-xl ${
+          title="HQTest PRO - Trang tổng quan"
+          className={`flex items-center gap-3 text-left min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 rounded-xl ${
             collapsedMode ? 'justify-center p-1' : 'flex-1'
           }`}
         >
-          <div className="w-10 h-10 rounded-xl bg-teal-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:bg-teal-500 transition-colors">
+          <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-sm group-hover:bg-emerald-500 transition-colors">
             <FlaskConical className="w-5 h-5" />
           </div>
           {!collapsedMode && (
             <div className="min-w-0">
               <div className="flex items-center gap-1.5">
-                <span className="text-xl font-extrabold tracking-tight text-white whitespace-nowrap">
-                  QUIZ <span className="text-teal-400">PRO</span>
+                <span className="text-lg font-extrabold tracking-tight text-white whitespace-nowrap">
+                  HQTest <span className="text-emerald-400">PRO</span>
                 </span>
               </div>
-              <p className="text-[13px] font-medium text-slate-400 truncate">
-                {APP_CONFIG.APP_NAME} · GDPT 2018
+              <p className="text-[11px] font-medium text-slate-400 truncate">
+                Chương trình GDPT 2018
               </p>
             </div>
           )}
@@ -219,7 +219,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
             onClick={onToggleCollapse}
             aria-label="Thu gọn thanh điều hướng"
             title="Thu gọn sidebar"
-            className="hidden lg:flex min-h-[38px] min-w-[38px] items-center justify-center rounded-lg text-slate-400 hover:bg-slate-800 hover:text-white transition-colors shrink-0"
+            className="hidden lg:flex min-h-[36px] min-w-[36px] items-center justify-center rounded-lg text-slate-400 hover:bg-emerald-500/10 hover:text-emerald-300 transition-colors shrink-0"
           >
             <PanelLeftClose className="w-4 h-4" />
           </button>
@@ -254,6 +254,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
               {group.items.map((item) => {
                 const Icon = item.icon;
                 const isActive = item.matchTabs.includes(activeTab);
+                const isFolderItem = item.id === 'exam_manager';
                 return (
                   <button
                     key={item.id}
@@ -263,15 +264,19 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
                     aria-current={isActive ? 'page' : undefined}
                     className={`w-full flex items-center ${
                       collapsedMode ? 'justify-center px-2' : 'gap-3 px-3.5'
-                    } min-h-[44px] py-2.5 rounded-xl text-[15px] transition-colors text-left min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-400 ${
+                    } min-h-[42px] py-2.5 rounded-xl text-[14px] transition-all text-left min-w-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
                       isActive
-                        ? 'bg-teal-600 text-white font-semibold shadow-sm'
-                        : 'text-slate-300 font-medium hover:bg-slate-800 hover:text-white'
+                        ? 'bg-emerald-600 text-white font-semibold shadow-sm'
+                        : 'text-slate-300 font-medium hover:bg-emerald-500/10 hover:text-emerald-200'
                     }`}
                   >
                     <Icon
-                      className={`w-5 h-5 shrink-0 ${
-                        isActive ? 'text-white' : 'text-slate-400'
+                      className={`w-[18px] h-[18px] shrink-0 ${
+                        isActive
+                          ? 'text-white'
+                          : isFolderItem
+                          ? 'text-amber-500'
+                          : 'text-slate-400'
                       }`}
                     />
                     {!collapsedMode && (
@@ -286,7 +291,7 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
       </nav>
 
       {/* Sidebar Footer */}
-      <div className="p-3 border-t border-slate-800 space-y-2.5 shrink-0 bg-slate-900">
+      <div className="p-3 border-t border-slate-800/90 space-y-2.5 shrink-0 bg-[#0F172A]">
         <button
           type="button"
           onClick={() => {
@@ -296,16 +301,16 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
           title={collapsedMode ? 'Kiến trúc kỹ thuật hệ thống' : undefined}
           className={`w-full flex items-center ${
             collapsedMode ? 'justify-center px-2' : 'gap-2.5 px-3.5'
-          } min-h-[42px] rounded-xl border border-slate-700 bg-slate-800/80 hover:bg-slate-800 hover:border-teal-500/60 text-slate-200 hover:text-white text-sm font-medium transition-colors`}
+          } min-h-[40px] rounded-xl border border-slate-800 bg-slate-900/80 hover:bg-emerald-500/10 hover:border-emerald-500/50 text-slate-200 hover:text-white text-xs font-semibold transition-colors`}
         >
-          <FlaskConical className="w-4 h-4 text-teal-400 shrink-0" />
+          <FlaskConical className="w-4 h-4 text-amber-400 shrink-0" />
           {!collapsedMode && <span className="truncate whitespace-nowrap">Kiến trúc kỹ thuật</span>}
         </button>
 
         {!collapsedMode && (
-          <div className="px-2 flex items-center justify-between text-[13px] text-slate-400">
+          <div className="px-2 flex items-center justify-between text-[11px] text-slate-400">
             <span>{APP_CONFIG.APP_NAME}</span>
-            <span className="tabular-nums">v{APP_CONFIG.APP_VERSION}</span>
+            <span className="tabular-nums text-amber-400/90 font-semibold">v{APP_CONFIG.APP_VERSION}</span>
           </div>
         )}
       </div>
@@ -323,11 +328,11 @@ export const WorkspaceSidebar: React.FC<WorkspaceSidebarProps> = ({
         {renderSidebarContent(isCollapsed)}
       </aside>
 
-      {/* Mobile / Tablet Slide-over Drawer */}
+      {/* Mobile / Tablet Slide-over Drawer (z-[60] nằm trên Fixed Header z-50) */}
       {isMobileOpen && (
-        <div className="fixed inset-0 z-50 lg:hidden flex">
+        <div className="fixed inset-0 z-[60] lg:hidden flex">
           <div
-            className="fixed inset-0 bg-slate-950/60 backdrop-blur-xs"
+            className="fixed inset-0 bg-slate-950/65 backdrop-blur-xs"
             onClick={onCloseMobile}
             aria-hidden="true"
           />

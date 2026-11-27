@@ -582,7 +582,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
     }
   };
 
-  /* === TÁI CẤU TRÚC LAYOUT: Cây thư mục phân cấp chuẩn lưới 8px === */
+  /* === TÁI CẤU TRÚC LAYOUT: Cây thư mục phân cấp chuẩn lưới 8px (Icon Folder Vàng Hổ Phách) === */
   const renderTreeNodes = (nodes: FolderTreeNode[], depth: number): React.ReactNode =>
     nodes.map((node) => {
       const isSelected = currentFolderId === node.folder.id;
@@ -596,7 +596,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             style={{ paddingLeft: `${8 + depth * 16}px` }}
             className={`group flex items-center justify-between gap-2 pr-2.5 py-2 rounded-xl cursor-pointer text-[13px] transition-all duration-150 ${
               isSelected
-                ? 'bg-teal-50/90 text-teal-800 font-semibold ring-1 ring-inset ring-teal-200/80'
+                ? 'bg-emerald-50/90 text-emerald-800 font-semibold ring-1 ring-inset ring-emerald-200/80'
                 : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900 font-medium'
             }`}
           >
@@ -618,9 +618,9 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 )}
               </button>
               {isSelected ? (
-                <FolderOpen className="w-4 h-4 text-teal-600 shrink-0" />
+                <FolderOpen className="w-4 h-4 text-amber-500 shrink-0" />
               ) : (
-                <FolderIcon className="w-4 h-4 text-slate-400 group-hover:text-teal-600 shrink-0 transition-colors" />
+                <FolderIcon className="w-4 h-4 text-amber-500 shrink-0 transition-colors" />
               )}
               <span className="truncate">{node.folder.name}</span>
             </div>
@@ -628,7 +628,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             <div className="flex items-center gap-1 shrink-0">
               <span
                 className={`text-[11px] font-semibold tabular-nums px-1.5 py-0.5 rounded-md ${
-                  isSelected ? 'bg-teal-100/80 text-teal-800' : 'text-slate-400'
+                  isSelected ? 'bg-emerald-100/90 text-emerald-800' : 'text-slate-400'
                 }`}
               >
                 {node.recursiveExamCount}
@@ -641,7 +641,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                     openCreateFolderModal(node.folder.id);
                   }}
                   title="Tạo thư mục con"
-                  className="p-1 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-400 hover:text-teal-700 hover:bg-white transition-all"
+                  className="p-1 rounded-lg opacity-0 group-hover:opacity-100 focus:opacity-100 text-slate-400 hover:text-emerald-700 hover:bg-white transition-all"
                 >
                   <Plus className="w-3.5 h-3.5" />
                 </button>
@@ -735,21 +735,26 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
     const isMenuOpen = openMenuExamId === exam.id;
 
     return (
-      /* === TÁI CẤU TRÚC LAYOUT: Exam Card phong cách SaaS hiện đại === */
+      /* === TÁI CẤU TRÚC LAYOUT: Exam Card phong thủy (Emerald Primary · Amber Accent · Sky Link) === */
       <article
         key={exam.id}
-        className="group/card bg-white border border-slate-200/80 rounded-2xl p-5 sm:p-6 shadow-sm hover:shadow-md hover:border-slate-300/80 transition-all duration-200 flex flex-col justify-between w-full gap-4"
+        className="group/card bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm hover:shadow-md hover:border-emerald-300/90 transition-all duration-200 flex flex-col justify-between w-full gap-4"
       >
         <div className="w-full space-y-3.5 min-w-0">
-          {/* Hàng đầu Card: Bên trái gom Mã phòng + Khối lớp + Badge trạng thái; Bên phải là nút Chia sẻ nhanh & Dropdown 3 chấm (...) */}
+          {/* Header Card: Tag khối lớp + Mã phòng (font-mono) + Badge trạng thái (dot pulse khi mở) + Menu 3 chấm (...) */}
           <div className="flex items-start justify-between gap-3">
             <div className="flex flex-wrap items-center gap-2 min-w-0">
+              {/* Tag khối lớp */}
+              <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-amber-50/90 border border-amber-200/80 text-xs font-semibold text-amber-800">
+                {GRADE_LABELS[exam.grade] || `Lớp ${exam.grade}`}
+              </span>
+
               {/* Mã phòng bấm để sao chép nhanh */}
               <button
                 type="button"
                 onClick={() => handleCopyCode(unifiedCode)}
                 title={`Nhấn để sao chép mã phòng ${unifiedCode}`}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100/90 hover:bg-teal-50 text-slate-700 hover:text-teal-800 text-xs font-mono font-semibold tracking-wider transition-colors"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-800 hover:text-emerald-800 text-xs font-mono font-semibold tracking-wider transition-colors"
               >
                 <span>{unifiedCode}</span>
                 {isCopied ? (
@@ -759,28 +764,23 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 )}
               </button>
 
-              {/* Tag khối lớp */}
-              <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-slate-50 border border-slate-200/70 text-xs font-medium text-slate-600">
-                {GRADE_LABELS[exam.grade] || `Lớp ${exam.grade}`}
-              </span>
-
-              {/* Badge trạng thái pastel (bấm để đóng/mở phòng thi) */}
+              {/* Badge trạng thái (Đang mở: nền xanh emerald nhạt + dot pulse; Đang đóng: xám) */}
               <button
                 type="button"
                 onClick={() => onTogglePublish(exam.id)}
                 title={exam.isPublished ? 'Nhấn để đóng phòng thi' : 'Nhấn để mở phòng thi'}
                 className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap ${
                   exam.isPublished
-                    ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100/80 ring-1 ring-inset ring-emerald-200/70'
-                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80 ring-1 ring-inset ring-slate-200/70'
+                    ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100/80 border border-emerald-200/80'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200/80 border border-slate-200/80'
                 }`}
               >
                 <span
-                  className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                    exam.isPublished ? 'bg-emerald-500' : 'bg-slate-400'
+                  className={`w-2 h-2 rounded-full shrink-0 ${
+                    exam.isPublished ? 'bg-emerald-500 animate-pulse' : 'bg-slate-400'
                   }`}
                 />
-                <span>{exam.isPublished ? 'Đang mở' : 'Đã đóng'}</span>
+                <span>{exam.isPublished ? 'Đang mở' : 'Đang đóng'}</span>
               </button>
 
               {/* Trạng thái Kho Thành phố (nếu đã đề xuất/duyệt) */}
@@ -795,8 +795,8 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
 
               {/* Nhãn thư mục khi đang tìm kiếm toàn cục hoặc chế độ online */}
               {(isSearching || mode === 'online') && (
-                <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 truncate max-w-[220px] pl-0.5">
-                  <FolderIcon className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                <span className="inline-flex items-center gap-1 text-xs font-medium text-slate-600 truncate max-w-[220px] pl-0.5">
+                  <FolderIcon className="w-3.5 h-3.5 text-amber-500 shrink-0" />
                   <span className="truncate">{folderLabel}</span>
                 </span>
               )}
@@ -814,7 +814,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   else setActiveShareExam(exam);
                 }}
                 title="Chia sẻ link & Mã QR phòng thi"
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200/80 bg-white hover:bg-teal-50 hover:border-teal-200 text-slate-600 hover:text-teal-700 text-xs font-semibold transition-colors whitespace-nowrap"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border border-slate-200 bg-white hover:bg-sky-50 hover:border-sky-200 text-slate-600 hover:text-sky-700 text-xs font-semibold transition-colors whitespace-nowrap"
               >
                 <QrCode className="w-3.5 h-3.5" />
                 <span className="hidden sm:inline">Chia sẻ</span>
@@ -830,17 +830,17 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 className={`p-1.5 rounded-xl border transition-colors ${
                   isMenuOpen
                     ? 'bg-slate-100 border-slate-300 text-slate-900'
-                    : 'bg-white border-slate-200/80 text-slate-500 hover:text-slate-900 hover:bg-slate-50'
+                    : 'bg-white border-slate-200 text-slate-500 hover:text-slate-900 hover:bg-slate-50'
                 }`}
               >
                 <MoreHorizontal className="w-4 h-4" />
               </button>
 
-              {/* Menu Dropdown chứa các tác vụ phụ: Bảo mật, Đề xuất Kho TP, Xóa */}
+              {/* Menu Dropdown chứa các tác vụ phụ: Cài bảo mật, Đề xuất Kho TP, Xóa */}
               {isMenuOpen && (
                 <div
                   role="menu"
-                  className="absolute right-0 top-full mt-2 w-60 bg-white rounded-2xl border border-slate-200/90 shadow-lg py-1.5 z-30 text-xs"
+                  className="absolute right-0 top-full mt-2 w-60 bg-white rounded-2xl border border-slate-200 shadow-lg py-1.5 z-30 text-xs"
                 >
                   <button
                     type="button"
@@ -851,9 +851,9 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                     }}
                     className="w-full px-3.5 py-2.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 font-medium transition-colors"
                   >
-                    <ShieldCheck className="w-4 h-4 text-amber-600 shrink-0" />
+                    <ShieldCheck className="w-4 h-4 text-amber-500 shrink-0" />
                     <div className="min-w-0 flex-1">
-                      <div className="font-semibold text-slate-800">Cài đặt bảo mật</div>
+                      <div className="font-semibold text-slate-800">Cài bảo mật</div>
                       <div className="text-[11px] text-slate-500 truncate">
                         {exam.requiresPassword ? 'Đang bật mật khẩu' : 'Chưa đặt mật khẩu'} ·{' '}
                         {policy.allowAnswerReview
@@ -872,10 +872,10 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                         setOpenMenuExamId(null);
                         void handleToggleCityShareProposal();
                       }}
-                      className="w-full px-3.5 py-2.5 text-left text-slate-700 hover:bg-teal-50/70 hover:text-teal-800 disabled:opacity-50 flex items-center gap-2.5 font-medium transition-colors"
+                      className="w-full px-3.5 py-2.5 text-left text-slate-700 hover:bg-emerald-50/70 hover:text-emerald-800 disabled:opacity-50 flex items-center gap-2.5 font-medium transition-colors"
                     >
-                      <Send className="w-4 h-4 text-teal-600 shrink-0" />
-                      <span>{isUpdatingThisShare ? 'Đang gửi...' : 'Đề xuất lên Kho Thành phố'}</span>
+                      <Send className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{isUpdatingThisShare ? 'Đang gửi...' : 'Đề xuất Kho TP'}</span>
                     </button>
                   )}
 
@@ -902,9 +902,9 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                       setOpenMenuExamId(null);
                       handleCopyShortLink(exam);
                     }}
-                    className="w-full px-3.5 py-2.5 text-left text-slate-700 hover:bg-slate-50 flex items-center gap-2.5 font-medium transition-colors"
+                    className="w-full px-3.5 py-2.5 text-left text-slate-700 hover:bg-sky-50/70 hover:text-sky-700 flex items-center gap-2.5 font-medium transition-colors"
                   >
-                    <LinkIcon className="w-4 h-4 text-slate-500 shrink-0" />
+                    <LinkIcon className="w-4 h-4 text-sky-600 shrink-0" />
                     <span>Sao chép liên kết phòng thi</span>
                   </button>
 
@@ -927,7 +927,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             </div>
           </div>
 
-          {/* Tiêu đề đề thi + Mô tả + Badge link chia sẻ nhỏ gọn kèm icon copy nhanh */}
+          {/* Tên đề thi đậm nét + Link chia sẻ dạng badge bo tròn nhỏ gọn có nút copy nhanh */}
           <div className="space-y-2">
             <h3 className="text-base sm:text-[17px] font-bold text-slate-900 tracking-tight leading-snug break-words">
               {exam.title}
@@ -940,32 +940,32 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             )}
 
             {exam.cityReviewNote && shareStatus === 'private' && (
-              <div className="text-xs text-amber-800 bg-amber-50/90 border border-amber-200/80 rounded-xl px-3 py-2">
+              <div className="text-xs text-amber-800 bg-amber-50/90 border border-amber-200 rounded-xl px-3 py-2">
                 <strong className="font-semibold">Ghi chú duyệt Kho TP:</strong> {exam.cityReviewNote}
               </div>
             )}
 
-            {/* Link chia sẻ bọc trong badge nhỏ gọn kèm nút icon copy nhanh & mở tab mới */}
+            {/* Link chia sẻ dạng badge bo tròn nhỏ gọn (Sky-600) kèm nút copy nhanh */}
             {normalizedPublicCode && (
               <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                <div className="inline-flex items-center gap-1.5 max-w-full pl-2.5 pr-1 py-1 rounded-xl bg-slate-50 border border-slate-200/80 text-xs">
-                  <LinkIcon className="w-3.5 h-3.5 text-teal-600 shrink-0" />
-                  <span className="font-mono text-slate-700 font-medium truncate max-w-[260px] sm:max-w-[380px]">
+                <div className="inline-flex items-center gap-1.5 max-w-full pl-3 pr-1 py-1 rounded-full bg-sky-50/70 border border-sky-200/80 text-xs">
+                  <LinkIcon className="w-3.5 h-3.5 text-sky-600 shrink-0" />
+                  <span className="font-mono text-sky-700 font-medium truncate max-w-[240px] sm:max-w-[360px]">
                     {shortUrl}
                   </span>
                   <button
                     type="button"
                     onClick={() => handleCopyShortLink(exam)}
                     title="Sao chép link rút gọn 6 ký tự"
-                    className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-[11px] font-semibold transition-colors shrink-0 ${
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[11px] font-semibold transition-colors shrink-0 ${
                       copiedLinkId === exam.id
-                        ? 'bg-emerald-50 text-emerald-700'
-                        : 'bg-white text-teal-700 hover:bg-teal-50 border border-slate-200/80'
+                        ? 'bg-emerald-600 text-white'
+                        : 'bg-white text-sky-700 hover:bg-sky-100/80 border border-sky-200/80'
                     }`}
                   >
                     {copiedLinkId === exam.id ? (
                       <>
-                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        <CheckCircle2 className="w-3 h-3" />
                         <span>Đã chép</span>
                       </>
                     ) : (
@@ -980,7 +980,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                     target="_blank"
                     rel="noreferrer"
                     title="Mở link đề thi ở tab mới"
-                    className="p-1 rounded-lg text-slate-400 hover:text-teal-700 hover:bg-white transition-colors shrink-0"
+                    className="p-1 rounded-full text-sky-600 hover:text-sky-800 hover:bg-white transition-colors shrink-0"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
                   </a>
@@ -989,7 +989,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             )}
           </div>
 
-          {/* Cụm thông số chính: gom thành hàng ngang ngăn cách tinh tế, dễ đọc lướt */}
+          {/* Cụm thông số: Thời gian, Số câu hỏi, Thang điểm, Số lượt nộp xếp thành hàng ngang gọn gàng */}
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs text-slate-600 tabular-nums pt-0.5">
             <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
               <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -1006,15 +1006,15 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               ·
             </span>
             <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
-              <Users className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <span>{examSubs.length} lượt nộp</span>
+              <Award className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>Thang {exam.totalScore || 10.0}đ</span>
             </span>
             <span aria-hidden="true" className="text-slate-300">
               ·
             </span>
             <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
-              <Award className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-              <span>Thang {exam.totalScore || 10.0}đ</span>
+              <Users className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span>{examSubs.length} lượt nộp</span>
             </span>
 
             <span aria-hidden="true" className="text-slate-300 hidden sm:inline">
@@ -1048,7 +1048,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <span aria-hidden="true" className="text-slate-300">
                   ·
                 </span>
-                <span className="text-teal-700 font-semibold">
+                <span className="text-emerald-700 font-semibold">
                   Đạt sàn: {qualifiedCount} / Chưa đạt: {belowFloorCount}
                 </span>
               </>
@@ -1067,19 +1067,19 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
           </div>
         </div>
 
-        {/* Hàng nút hành động dưới đáy Card: Trái = Nút phụ (Sửa đề, Xuất Word); Phải = CTA chính (Điểm số, Thi thử) */}
+        {/* Hàng nút hành động dưới đáy Card: Trái = Nút phụ (Chỉnh sửa, Xuất Word); Phải = CTA chính (Điểm số, Thi thử) */}
         <div className="w-full pt-4 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
-          {/* Nút phụ dạng secondary button thanh lịch */}
+          {/* Nút phụ tinh tế */}
           <div className="flex flex-wrap items-center gap-2">
             {mode === 'all' && (
               <button
                 type="button"
                 onClick={() => openEditExamMetaModal(exam)}
-                title="Sửa tiêu đề, mô tả hoặc di chuyển sang thư mục khác"
-                className="min-h-[38px] px-3.5 py-2 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                title="Chỉnh sửa tiêu đề, mô tả hoặc di chuyển sang thư mục khác"
+                className="min-h-[38px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
               >
                 <Edit3 className="w-3.5 h-3.5 text-slate-500" />
-                <span>Sửa đề</span>
+                <span>Chỉnh sửa</span>
               </button>
             )}
 
@@ -1088,14 +1088,14 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
               disabled={isExportingThisWord}
               onClick={() => void handleExportExamWord()}
               title="Xuất đề thi chuẩn in A4 kèm bảng đáp án (.docx)"
-              className="min-h-[38px] px-3.5 py-2 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 hover:border-slate-300 disabled:opacity-60 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              className="min-h-[38px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 hover:border-slate-300 disabled:opacity-60 text-slate-700 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
             >
               <Download className="w-3.5 h-3.5 text-slate-500" />
               <span>{isExportingThisWord ? 'Đang xuất...' : 'Xuất Word'}</span>
             </button>
           </div>
 
-          {/* Nút hành động chính (Primary CTAs): Điểm số (slate nhẹ) + Thi thử (Teal nổi bật) */}
+          {/* Nút chính (CTA): Điểm số (Slate-100 chữ xám đậm) và Thi thử (Emerald-600 chữ trắng) */}
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -1109,7 +1109,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             <button
               type="button"
               onClick={() => onTakeExamAsPreview(exam)}
-              className="min-h-[38px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+              className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
             >
               <Play className="w-3.5 h-3.5 fill-current" />
               <span>Thi thử</span>
@@ -1121,27 +1121,27 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
   };
 
   return (
-    /* === TÁI CẤU TRÚC LAYOUT: Nền tổng thể Soft Gray (#F8FAFC - bg-slate-50) chuẩn lưới 8px === */
+    /* === TÁI CẤU TRÚC LAYOUT: Nền không gian làm việc Slate-50 (#F8FAFC) chuẩn lưới 8px === */
     <div className="bg-slate-50 rounded-2xl p-4 sm:p-6 space-y-6">
       {toastState && (
         <div
-          className={`fixed bottom-6 right-6 z-50 px-4 py-3 rounded-xl shadow-lg flex items-center gap-2 text-xs font-semibold ${
-            toastState.type === 'error' ? 'bg-rose-600 text-white' : 'bg-slate-900 text-white'
+          className={`fixed bottom-12 right-6 z-[60] px-4 py-3 rounded-xl shadow-lg flex items-center gap-2 text-xs font-semibold ${
+            toastState.type === 'error' ? 'bg-rose-600 text-white' : 'bg-[#0F172A] text-white'
           }`}
         >
           <CheckCircle2
             className={`w-4 h-4 shrink-0 ${
-              toastState.type === 'error' ? 'text-rose-200' : 'text-teal-400'
+              toastState.type === 'error' ? 'text-rose-200' : 'text-emerald-400'
             }`}
           />
           <span>{toastState.message}</span>
         </div>
       )}
 
-      {/* === TÁI CẤU TRÚC LAYOUT: Top Header tối giản chuẩn SaaS === */}
-      <header className="bg-white border border-slate-200/80 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+      {/* === TÁI CẤU TRÚC LAYOUT: Header khu vực Quản lý đề thi === */}
+      <header className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-sm flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div className="space-y-1 min-w-0">
-          <div className="flex items-center gap-2 text-teal-700 font-semibold text-xs">
+          <div className="flex items-center gap-2 text-emerald-700 font-semibold text-xs">
             <FileCheck className="w-4 h-4 shrink-0" />
             <span>
               {mode === 'online'
@@ -1168,16 +1168,16 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             <button
               type="button"
               onClick={() => openCreateFolderModal(currentFolderId)}
-              className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 hover:border-slate-300 text-slate-700 text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap"
+              className="min-h-[40px] px-4 py-2 rounded-xl border border-slate-200 bg-white hover:bg-amber-50/60 hover:border-amber-300 text-slate-700 text-xs font-semibold inline-flex items-center gap-2 transition-colors whitespace-nowrap"
             >
-              <FolderPlus className="w-4 h-4 text-teal-600" />
+              <FolderPlus className="w-4 h-4 text-amber-500" />
               <span>{currentFolderId ? 'Thư mục con' : 'Tạo thư mục'}</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => onCreateNew(mode === 'all' ? currentFolderId : null)}
-            className="min-h-[40px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-sm inline-flex items-center gap-2 transition-colors whitespace-nowrap"
+            className="min-h-[40px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm inline-flex items-center gap-2 transition-colors whitespace-nowrap"
           >
             <Plus className="w-4 h-4" />
             <span>Tạo đề thi mới</span>
@@ -1191,23 +1191,23 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
           mode === 'all' ? 'grid grid-cols-1 lg:grid-cols-12 gap-6 items-start' : 'space-y-5'
         }
       >
-        {/* === TÁI CẤU TRÚC LAYOUT: Cột Thư mục bên trái viền mỏng, padding chuẩn lưới 8px === */}
+        {/* === TÁI CẤU TRÚC LAYOUT: Cột Thư mục bên trái với icon Folder Vàng Hổ Phách === */}
         {mode === 'all' && (
-          <aside className="lg:col-span-4 xl:col-span-3 bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm space-y-3">
+          <aside className="lg:col-span-4 xl:col-span-3 bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <button
                 type="button"
                 onClick={() => setShowMobileTree((v) => !v)}
                 className="flex items-center gap-2 text-xs font-semibold text-slate-700 lg:pointer-events-none"
               >
-                <PanelLeft className="w-4 h-4 text-teal-600" />
+                <PanelLeft className="w-4 h-4 text-emerald-600" />
                 <span>Thư mục đề thi</span>
               </button>
               {canManageFolders && (
                 <button
                   type="button"
                   onClick={() => openCreateFolderModal(null)}
-                  className="px-2 py-1 rounded-lg text-xs font-semibold text-teal-700 hover:bg-teal-50 inline-flex items-center gap-1 transition-colors"
+                  className="px-2 py-1 rounded-lg text-xs font-semibold text-emerald-700 hover:bg-emerald-50 inline-flex items-center gap-1 transition-colors"
                   title="Tạo thư mục ở cấp gốc"
                 >
                   <Plus className="w-3.5 h-3.5" />
@@ -1222,14 +1222,14 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 onClick={() => navigateToFolder(null)}
                 className={`flex items-center justify-between px-3 py-2.5 rounded-xl cursor-pointer text-[13px] transition-colors ${
                   currentFolderId === null
-                    ? 'bg-teal-600 text-white font-semibold shadow-xs'
+                    ? 'bg-emerald-600 text-white font-semibold shadow-xs'
                     : 'text-slate-700 hover:bg-slate-50 font-semibold'
                 }`}
               >
                 <div className="flex items-center gap-2 min-w-0">
                   <FolderOpen
                     className={`w-4 h-4 shrink-0 ${
-                      currentFolderId === null ? 'text-white' : 'text-teal-600'
+                      currentFolderId === null ? 'text-amber-300' : 'text-amber-500'
                     }`}
                   />
                   <span className="truncate">Tất cả đề (Gốc)</span>
@@ -1237,7 +1237,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <span
                   className={`text-[11px] font-semibold tabular-nums px-2 py-0.5 rounded-lg ${
                     currentFolderId === null
-                      ? 'bg-teal-700/90 text-white'
+                      ? 'bg-emerald-700/90 text-white'
                       : 'bg-slate-100 text-slate-600'
                   }`}
                   title="Số đề thi nằm trực tiếp ở Thư mục gốc"
@@ -1267,7 +1267,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
           }
         >
           {/* === TÁI CẤU TRÚC LAYOUT: Thanh tìm kiếm + Bộ lọc trạng thái + Sắp xếp gộp chung hàng ngang === */}
-          <div className="bg-white border border-slate-200/80 rounded-2xl p-4 shadow-sm space-y-3.5">
+          <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm space-y-3.5">
             {/* Breadcrumb (mode === 'all') */}
             {mode === 'all' && (
               <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
@@ -1280,7 +1280,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                     onClick={() => navigateToFolder(null)}
                     className={`px-2.5 py-1 rounded-lg font-semibold transition-colors ${
                       currentFolderId === null
-                        ? 'bg-teal-50 text-teal-800'
+                        ? 'bg-emerald-50 text-emerald-800'
                         : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                     }`}
                   >
@@ -1296,7 +1296,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                           onClick={() => navigateToFolder(bc.id)}
                           className={`px-2.5 py-1 rounded-lg font-semibold transition-colors max-w-[200px] truncate ${
                             isLast
-                              ? 'bg-teal-50 text-teal-800'
+                              ? 'bg-emerald-50 text-emerald-800'
                               : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
                           }`}
                         >
@@ -1322,7 +1322,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
                   placeholder="Tìm kiếm tên đề, mã phòng, thư mục hoặc mã link..."
-                  className="w-full min-h-[40px] pl-10 pr-8 py-2 rounded-xl border border-slate-200/90 bg-slate-50/70 text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
+                  className="w-full min-h-[40px] pl-10 pr-8 py-2 rounded-xl border border-slate-200 bg-slate-50/70 text-slate-800 placeholder:text-slate-400 focus:bg-white focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
                 />
                 {searchTerm && (
                   <button
@@ -1384,7 +1384,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   value={sortField}
                   onChange={(e) => setSortField(e.target.value as SortField)}
                   aria-label="Tiêu chí sắp xếp"
-                  className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200/90 bg-white text-slate-700 font-medium focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20 transition-all"
+                  className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white text-slate-700 font-medium focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 transition-all"
                 >
                   <option value="updatedAt">Cập nhật mới</option>
                   <option value="createdAt">Ngày tạo</option>
@@ -1396,7 +1396,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   onClick={() =>
                     setSortDirection((d) => (d === 'asc' ? 'desc' : 'asc'))
                   }
-                  className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200/90 bg-white hover:bg-slate-50 font-semibold text-slate-700 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
+                  className="min-h-[40px] px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 font-semibold text-slate-700 inline-flex items-center gap-1.5 transition-colors whitespace-nowrap"
                   title="Đổi chiều sắp xếp"
                 >
                   <ArrowUpDown className="w-3.5 h-3.5 text-slate-500" />
@@ -1408,7 +1408,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             </div>
           </div>
 
-          {/* Subfolders Grid (mode === 'all') */}
+          {/* Subfolders Grid (mode === 'all') — Icon Folder Vàng Hổ Phách sang trọng */}
           {mode === 'all' && visibleFolders.length > 0 && (
             <div className="space-y-3">
               <h2 className="text-xs font-semibold text-slate-500 px-1 tabular-nums">
@@ -1428,14 +1428,14 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                     <div
                       key={f.id}
                       onClick={() => navigateToFolder(f.id)}
-                      className="group bg-white border border-slate-200/80 hover:border-teal-300/90 rounded-2xl p-4 shadow-sm hover:shadow-md cursor-pointer transition-all duration-200 flex items-start justify-between gap-3"
+                      className="group bg-white border border-slate-200 hover:border-amber-300 rounded-2xl p-4 shadow-sm hover:shadow-md cursor-pointer transition-all duration-200 flex items-start justify-between gap-3"
                     >
                       <div className="flex items-start gap-3 min-w-0">
-                        <div className="w-10 h-10 rounded-xl bg-teal-50/80 border border-teal-100 flex items-center justify-center shrink-0">
-                          <FolderIcon className="w-5 h-5 text-teal-600" />
+                        <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200/80 flex items-center justify-center shrink-0">
+                          <FolderIcon className="w-5 h-5 text-amber-500" />
                         </div>
                         <div className="min-w-0">
-                          <h3 className="text-sm font-semibold text-slate-900 truncate group-hover:text-teal-700 transition-colors">
+                          <h3 className="text-sm font-semibold text-slate-900 truncate group-hover:text-emerald-700 transition-colors">
                             {f.name}
                           </h3>
                           {f.description && (
@@ -1458,7 +1458,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                             type="button"
                             onClick={() => openRenameFolderModal(f)}
                             title="Đổi tên thư mục"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-teal-700 hover:bg-teal-50 transition-colors"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-700 hover:bg-emerald-50 transition-colors"
                           >
                             <Edit3 className="w-3.5 h-3.5" />
                           </button>
@@ -1466,7 +1466,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                             type="button"
                             onClick={() => openMoveFolderModal(f)}
                             title="Di chuyển thư mục"
-                            className="p-1.5 rounded-lg text-slate-400 hover:text-teal-700 hover:bg-teal-50 transition-colors"
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-amber-600 hover:bg-amber-50 transition-colors"
                           >
                             <FolderInput className="w-3.5 h-3.5" />
                           </button>
@@ -1500,7 +1500,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
             </div>
 
             {visibleExams.length === 0 ? (
-              <div className="bg-white border border-slate-200/80 rounded-2xl p-12 text-center shadow-sm space-y-3">
+              <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center shadow-sm space-y-3">
                 <div className="w-12 h-12 rounded-2xl bg-slate-100 flex items-center justify-center mx-auto">
                   <FileCheck className="w-6 h-6 text-slate-400" />
                 </div>
@@ -1513,7 +1513,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   <button
                     type="button"
                     onClick={() => onCreateNew(mode === 'all' ? currentFolderId : null)}
-                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-xs font-semibold shadow-xs transition-colors"
+                    className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-xs transition-colors"
                   >
                     <Plus className="w-4 h-4" />
                     <span>Tạo đề thi trong thư mục này</span>
@@ -1532,11 +1532,11 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
       {/* Create / Rename Folder Modal */}
       {folderModal && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-xs flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
         >
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-sm text-slate-900">
                 {folderModal.mode === 'create'
@@ -1577,7 +1577,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   value={folderNameInput}
                   onChange={(e) => setFolderNameInput(e.target.value)}
                   placeholder="VD: Lớp 12, Kiểm tra Giữa kì 1, Chuyên đề Ester..."
-                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 />
               </div>
               <div>
@@ -1587,7 +1587,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   value={folderDescInput}
                   onChange={(e) => setFolderDescInput(e.target.value)}
                   placeholder="Ghi chú ngắn cho thư mục..."
-                  className="w-full p-3 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                  className="w-full p-3 rounded-xl border border-slate-200 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 />
               </div>
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
@@ -1602,7 +1602,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <button
                   type="submit"
                   disabled={isSavingFolder}
-                  className="min-h-[38px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-semibold transition-colors"
+                  className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold transition-colors"
                 >
                   {isSavingFolder
                     ? 'Đang lưu...'
@@ -1619,11 +1619,11 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
       {/* Move Folder Modal */}
       {movingFolder && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-xs flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
         >
-          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden">
+          <div className="bg-white w-full max-w-md rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-sm text-slate-900">
                 Di chuyển thư mục &quot;{movingFolder.name}&quot;
@@ -1650,7 +1650,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <select
                   value={moveFolderTargetId}
                   onChange={(e) => setMoveFolderTargetId(e.target.value)}
-                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white font-medium focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white font-medium focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 >
                   <option value="">Đề thi (Thư mục gốc)</option>
                   {flatFolders
@@ -1679,7 +1679,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <button
                   type="submit"
                   disabled={isMovingFolder}
-                  className="min-h-[38px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-semibold transition-colors"
+                  className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold transition-colors"
                 >
                   {isMovingFolder ? 'Đang chuyển...' : 'Di chuyển'}
                 </button>
@@ -1692,11 +1692,11 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
       {/* Edit Exam Metadata & Move Exam Folder Modal */}
       {editingExamMeta && (
         <div
-          className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-[60] bg-slate-950/55 backdrop-blur-xs flex items-center justify-center p-4"
           role="dialog"
           aria-modal="true"
         >
-          <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl border border-slate-200/80 overflow-hidden">
+          <div className="bg-white w-full max-w-lg rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
             <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
               <h3 className="font-bold text-sm text-slate-900">
                 Cập nhật thông tin &amp; Vị trí đề thi ({editingExamMeta.code})
@@ -1723,7 +1723,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   required
                   value={examTitleInput}
                   onChange={(e) => setExamTitleInput(e.target.value)}
-                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 font-semibold focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 font-semibold focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 />
               </div>
 
@@ -1734,7 +1734,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                   value={examDescInput}
                   onChange={(e) => setExamDescInput(e.target.value)}
                   placeholder="Ghi chú phạm vi kiến thức..."
-                  className="w-full p-3 rounded-xl border border-slate-200 focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                  className="w-full p-3 rounded-xl border border-slate-200 focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 />
               </div>
 
@@ -1743,7 +1743,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <select
                   value={examFolderTargetId}
                   onChange={(e) => setExamFolderTargetId(e.target.value)}
-                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white font-medium focus:border-teal-500 focus:outline-none focus:ring-2 focus:ring-teal-500/20"
+                  className="w-full min-h-[40px] px-3.5 py-2 rounded-xl border border-slate-200 bg-white font-medium focus:border-emerald-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/20"
                 >
                   <option value="">Đề thi (Thư mục gốc)</option>
                   {flatFolders.map((item) => (
@@ -1775,7 +1775,7 @@ export const ExamFolderExplorer: React.FC<ExamFolderExplorerProps> = ({
                 <button
                   type="submit"
                   disabled={isSavingMeta}
-                  className="min-h-[38px] px-4 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-60 text-white font-semibold transition-colors"
+                  className="min-h-[38px] px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white font-semibold transition-colors"
                 >
                   {isSavingMeta ? 'Đang lưu...' : 'Lưu cập nhật'}
                 </button>
